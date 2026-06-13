@@ -1,0 +1,103 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "desktop-record-pet",
+  "version": "0.1.0",
+  "identifier": "com.tauri-app.desktop-record-pet",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "pet",
+        "title": "Desktop Record Pet",
+        "url": "/?window=pet",
+        "width": 140,
+        "height": 160,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "resizable": false,
+        "visible": true,
+        "skipTaskbar": true
+      },
+      {
+        "label": "quick-input",
+        "title": "Quick Input",
+        "url": "/?window=quick-input",
+        "width": 420,
+        "height": 180,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "resizable": false,
+        "visible": false,
+        "skipTaskbar": true
+      },
+      {
+        "label": "screenshot-overlay",
+        "title": "Screenshot Overlay",
+        "url": "/?window=screenshot-overlay",
+        "fullscreen": true,
+        "transparent": true,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "visible": false,
+        "skipTaskbar": true
+      },
+      {
+        "label": "supplement-box",
+        "title": "Supplement Box",
+        "url": "/?window=supplement-box",
+        "width": 480,
+        "height": 320,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "resizable": false,
+        "visible": false,
+        "skipTaskbar": true
+      },
+      {
+        "label": "main-panel",
+        "title": "Desktop Record Pet",
+        "url": "/?window=main-panel",
+        "width": 1280,
+        "height": 860,
+        "minWidth": 960,
+        "minHeight": 640,
+        "visible": false
+      },
+      {
+        "label": "todo-overlay",
+        "title": "Todo Overlay",
+        "url": "/?window=todo-overlay",
+        "width": 360,
+        "height": 500,
+        "minWidth": 280,
+        "minHeight": 300,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "resizable": true,
+        "visible": false,
+        "skipTaskbar": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  }
+}
