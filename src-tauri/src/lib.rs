@@ -10,6 +10,8 @@ use std::sync::Mutex;
 use tauri::menu::{IsMenuItem, Menu, MenuItem};
 use tauri::Manager;
 use tauri::WindowEvent;
+// 引入 Image 类型
+use tauri::image::Image;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
 
 /// Tracks the currently-active shortcut accelerators so `set_shortcut`
@@ -160,8 +162,13 @@ pub fn run() {
                 ],
             )
             .map_err(|error| error.to_string())?;
+            // 编译时将 icon.png 嵌入二进制，解出 RGBA 像素
+            let icon = Image::from_bytes(include_bytes!("../icons/icon.png"))
+                .map_err(|e| e.to_string())?;
 
             let _tray = tauri::tray::TrayIconBuilder::new()
+                // 加入托盘图标
+                .icon(icon)
                 .menu(&menu)
                 .tooltip("Desktop Record Pet")
                 .on_menu_event(|app_handle, event| match event.id().as_ref() {
