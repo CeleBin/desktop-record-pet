@@ -62,25 +62,21 @@ function formatDateTime(iso: string): string {
   }
 }
 
-function AttachmentThumbnail({ attachment }: { attachment: AttachmentItem }) {
-  const [error, setError] = useState(false);
-
-  if (error || (attachment.file_type !== "image" && attachment.file_type !== "screenshot")) {
-    return (
-      <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-slate-800/50">
-        <svg className="h-5 w-5 text-slate-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
-        </svg>
-      </div>
-    );
-  }
-
+function InlineImage({
+  attachment,
+  onClick,
+}: {
+  attachment: AttachmentItem;
+  onClick: (src: string) => void;
+}) {
+  const src = convertFileSrc(attachment.local_path);
   return (
     <img
-      src={convertFileSrc(attachment.local_path)}
+      src={src}
       alt="attachment"
-      className="h-12 w-12 rounded-lg object-cover"
-      onError={() => setError(true)}
+      className="max-h-96 w-full rounded-xl border border-white/5 object-contain
+        cursor-pointer transition hover:brightness-110"
+      onClick={() => onClick(src)}
     />
   );
 }
@@ -101,6 +97,8 @@ export function RecordDetail({
   const [updatingStatus, setUpdatingStatus] = useState(false);
   const [aiAnalyzing, setAiAnalyzing] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
+  //全屏预览窗口
+  const [previewSrc, setPreviewSrc] = useState<string | null>(null);
 
   const { selectRecord } = useRecordsStore();
 
@@ -425,35 +423,49 @@ export function RecordDetail({
             </section>
           )}
 
-          {/* Attachments */}
-          {record.attachments && record.attachments.length > 0 && (
-            <section>
-              <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.2em] text-slate-500">
-                附件（{record.attachments.length}）
-              </p>
-              <div className="flex flex-wrap gap-2">
-                {record.attachments.map((att) => (
-                  <div
-                    key={att.id}
-                    className="group relative flex items-center gap-2.5 rounded-xl border border-white/8 bg-slate-900/50 px-3 py-2"
-                  >
-                    <AttachmentThumbnail attachment={att} />
-                    <div className="min-w-0">
-                      <p className="truncate text-xs text-slate-300 max-w-[160px]">
+          {/* 图片嵌入内容 */}
+          {record.attachments
+            .filter((a) => a.file_type === "image" || a.file_type === "screenshot")
+            .length > 0 && (
+              <section>
+                <div className="space-y-3">
+                  {record.attachments
+                    .filter((a) => a.file_type === "image" || a.file_type === "screenshot")
+                    .map((att) => (
+                      <InlineImage
+                        key={att.id}
+                        attachment={att}
+                        onClick={(src) => setPreviewSrc(src)}
+                      />
+                    ))}
+                </div>
+              </section>
+          )}
+
+          {/* 非图片附件 */}
+          {record.attachments
+            .filter((a) => a.file_type !== "image" && a.file_type !== "screenshot")
+            .length > 0 && (
+              <section>
+                <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.2em] text-slate-500">
+                  附件
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {record.attachments
+                    .filter((a) => a.file_type !== "image" && a.file_type !== "screenshot")
+                    .map((att) => (
+                      <span
+                        key={att.id}
+                        className="inline-flex items-center gap-1.5 rounded-full border border-white/8 bg-slate-900/50 px-2.5 py-1 text-[11px] text-slate-400"
+                      >
+                        <svg className="h-3 w-3 text-slate-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                        </svg>
                         {att.local_path.split(/[\\/]/).pop()}
-                      </p>
-                      <p className="text-[10px] text-slate-500">
-                        {att.file_type === "image"
-                          ? "图片"
-                          : att.file_type === "screenshot"
-                            ? "截图"
-                            : "文件"}
-                      </p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </section>
+                      </span>
+                    ))}
+                </div>
+              </section>
           )}
 
           {/* AI Results */}
@@ -649,6 +661,29 @@ export function RecordDetail({
           </button>
         </div>
       </div>
+
+      {/* 全屏图片预览 */}
+      {previewSrc && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm"
+          onClick={() => setPreviewSrc(null)}
+        >
+          <button
+            type="button"
+            className="absolute right-4 top-4 rounded-full bg-white/10 p-2 text-white transition hover:bg-white/20"
+            onClick={() => setPreviewSrc(null)}
+          >
+            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+          <img
+            src={previewSrc}
+            alt="preview"
+            className="max-h-[90vh] max-w-[90vw] rounded-xl object-contain"
+          />
+        </div>
+      )}
     </div>
   );
 }

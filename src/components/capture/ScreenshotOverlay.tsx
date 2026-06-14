@@ -4,6 +4,8 @@ import { emit } from "@tauri-apps/api/event";
 
 import { captureScreenshot, hideWindow, showWindow } from "../../lib/tauri";
 
+import { getCurrentWindow } from "@tauri-apps/api/window";
+
 const OVERLAY_LABEL = "screenshot-overlay";
 
 interface Selection {
@@ -21,6 +23,29 @@ export function ScreenshotOverlay() {
   const [start, setStart] = useState<{ x: number; y: number } | null>(null);
   const [capturing, setCapturing] = useState(false);
   const overlayRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const unlisten = getCurrentWindow().onFocusChanged(({ payload: focused }) => {
+      if (focused) {
+        setSelection(null);
+        setStart(null);
+        setIsDragging(false);
+        setCapturing(false);
+      }
+    });
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, []);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    const saved = root.style.background;
+    root.style.background = "transparent";
+    return () => {
+      root.style.background = saved;
+    };
+  }, []);
 
   // Focus the overlay so keyboard events work immediately
   useEffect(() => {
@@ -60,13 +85,15 @@ export function ScreenshotOverlay() {
       const w = Math.max(sel.width, MIN_SELECTION);
       const h = Math.max(sel.height, MIN_SELECTION);
 
+      await hideWindow(OVERLAY_LABEL);
+      await new Promise(r => setTimeout(r, 150)); 
+
       const path = await captureScreenshot(sel.x, sel.y, w, h);
 
       // Notify the supplement box which screenshot to attach
       await emit("screenshot:captured", { path });
 
       // Hide overlay, show supplement box
-      await hideWindow(OVERLAY_LABEL);
       await showWindow("supplement-box");
     } catch (err) {
       console.error("capture failed", err);
@@ -122,12 +149,19 @@ export function ScreenshotOverlay() {
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
     >
+      {/* 1. 全局蒙版：刚进入时显示，开始选区域后消失 */}
+      {(!selection || selection.width === 0) && (
+        <div
+          className="pointer-events-none fixed inset-0"
+          style={{ background: "rgba(2, 6, 23, 0.45)" }}
+        />
+      )}
       {/* Dimmed overlay -- the box-shadow creates a "cutout" effect */}
       {selection && selection.width > 0 && selection.height > 0 && (
         <>
           {/* Selection highlight */}
           <div
-            className="absolute border-2 border-sky-400 bg-white/5"
+            className="absolute z-10 border-2 border-sky-400 bg-white/10"
             style={{
               left: selection.x,
               top: selection.y,
