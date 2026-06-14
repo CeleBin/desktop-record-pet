@@ -1,24 +1,38 @@
-import { useCallback, useState } from "react";
+import { useCallback } from "react";
 
 import type { UnfinishedTaskItem } from "../../types";
 
+/**
+ * TodoItem 组件的属性接口
+ *
+ * @param item        - 待办任务数据对象（包含标题、状态、附件数、更新时间等）
+ * @param isFading    - 是否正在播放"完成淡出"动画
+ * @param onToggleComplete - 切换任务完成状态的回调（复选框勾选后触发）
+ * @param onOpen      - 打开任务详情抽屉的回调
+ * @param onRemoveTask - 从待办列表中移除任务的回调（不删除记录）
+ */
 interface TodoItemProps {
   item: UnfinishedTaskItem;
   isFading: boolean;
   onToggleComplete: (taskId: string) => void;
   onOpen: (recordId: string) => void;
   onRemoveTask: (taskId: string) => void;
-  onDeleteRecord: (recordId: string) => void;
-  onOpenInMainPanel: (recordId: string) => void;
 }
 
-/** Fallback display text: title → content preview → null (caller shows placeholder). */
+/**
+ * 获取待办项目的显示标题。
+ * 优先级：record_title（用户设置的标题） > record_content（去空白后的内容预览） > null（由调用方显示占位符）。
+ */
 function displayTitle(item: UnfinishedTaskItem): string | null {
   if (item.record_title) return item.record_title;
   const content = item.record_content?.replace(/\s+/g, " ").trim();
   return content || null;
 }
 
+/**
+ * 将 ISO 时间字符串格式化为中文可读的简写形式，例如 "06/14 15:30"。
+ * 若解析失败则直接返回原始字符串作为降级方案。
+ */
 function formatTime(iso: string): string {
   try {
     const d = new Date(iso);
@@ -39,11 +53,11 @@ export function TodoItem({
   onToggleComplete,
   onOpen,
   onRemoveTask,
-  onDeleteRecord,
-  onOpenInMainPanel,
 }: TodoItemProps) {
-  const [menuOpen, setMenuOpen] = useState(false);
-
+  /**
+   * 点击复选框时触发，停止冒泡防止意外打开记录，然后调用父组件的完成回调。
+   * 父组件会设置 isFading = true，触发淡出动画。
+   */
   const handleToggle = useCallback(
     (e: React.MouseEvent) => {
       e.stopPropagation();
@@ -52,34 +66,23 @@ export function TodoItem({
     [item.task_id, onToggleComplete],
   );
 
+  /** 点击标题/正文区域 → 在抽屉中打开记录详情。 */
   const handleOpen = useCallback(() => {
     onOpen(item.record_id);
   }, [item.record_id, onOpen]);
 
+  /** 从待办列表中移除该任务（不删除底层记录，仅移除任务项）。 */
   const handleRemove = useCallback(() => {
     onRemoveTask(item.task_id);
   }, [item.task_id, onRemoveTask]);
 
-  const handleDelete = useCallback(() => {
-    setMenuOpen(false);
-    onDeleteRecord(item.record_id);
-  }, [item.record_id, onDeleteRecord]);
-
-  const handleOpenInMain = useCallback(() => {
-    setMenuOpen(false);
-    onOpenInMainPanel(item.record_id);
-  }, [item.record_id, onOpenInMainPanel]);
-
-  const toggleMenu = useCallback((e: React.MouseEvent) => {
-    e.stopPropagation();
-    setMenuOpen((prev) => !prev);
-  }, []);
-
-  const closeMenu = useCallback(() => {
-    setMenuOpen(false);
-  }, []);
-
   return (
+    /**
+     * 最外层容器：
+     * - `group` 使子元素的 group-hover 样式在容器悬停时生效
+     * - `isFading=true` 时：禁用指针事件、向右偏移 + 缩小 + 完全透明 → 模拟"淡出消失"动画（2 秒 duration-500 × 4 个过渡属性）
+     * - `isFading=false` 时：仅显示 hover 背景微亮效果
+     */
     <div
       className={`
         group relative flex items-start gap-2.5 rounded-xl px-3 py-2.5
@@ -91,7 +94,11 @@ export function TodoItem({
         }
       `}
     >
-      {/* ── Checkbox ── */}
+      {/* ── 复选框：点击后触发完成流程 ── */}
+      {/**
+       * 空心方框复选框，hover 时变为绿色边框 + 浅绿背景以提供视觉反馈。
+       * 点击后调用 handleToggle → onToggleComplete → 父组件设置 isFading=true → 2s 渐变 → 删除。
+       */}
       <button
         type="button"
         onClick={handleToggle}
@@ -102,16 +109,25 @@ export function TodoItem({
         aria-label="标记完成"
       />
 
-      {/* ── Body ── */}
+      {/* ── 正文区域：点击打开记录详情 ── */}
       <div className="min-w-0 flex-1 cursor-pointer" onClick={handleOpen}>
         <div className="flex items-center gap-2">
+          {/**
+           * 标题行：优先显示用户设置的标题，无标题则回退到内容预览，均无则显示"无标题"占位符。
+           * truncate 保证超长文本单行省略。
+           */}
           <p className="truncate text-sm font-medium text-slate-200">
             {displayTitle(item) || (
               <span className="italic text-slate-500">无标题</span>
             )}
           </p>
 
-          {/* Status badge */}
+          {/**
+           * 状态标签（徽章）：
+           * - doing（进行中）：天蓝色文字 + 天蓝色圆点
+           * - todo（待办）：琥珀色文字 + 琥珀色圆点
+           * 圆点使用 inline-block 模拟，与文字通过 gap-1 间距对齐。
+           */}
           <span
             className={`inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ${
               item.task_status === "doing"
@@ -128,7 +144,10 @@ export function TodoItem({
           </span>
         </div>
 
-        {/* Meta row */}
+        {/**
+         * 元信息行：附件数量（> 0 时显示回形针图标 + 数量） + 更新时间。
+         * 附件图标使用 SVG 回形针路径。
+         */}
         <div className="mt-0.5 flex items-center gap-2">
           {item.attachment_count > 0 && (
             <span className="inline-flex items-center gap-0.5 text-[10px] text-slate-500">
@@ -155,31 +174,13 @@ export function TodoItem({
         </div>
       </div>
 
-      {/* ── Hover actions ── */}
+      {/**
+       * ── Hover 操作按钮 ──
+       * 默认 opacity-0 隐藏，鼠标悬停到整个 group 上时通过 group-hover:opacity-100 显示。
+       * 包含三个按钮：打开（抽屉）、移除待办、更多菜单（⋯）。
+       */}
       <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
-        {/* Open (opens drawer) */}
-        <button
-          type="button"
-          onClick={handleOpen}
-          className="rounded-lg p-1.5 text-slate-500 transition hover:bg-white/10 hover:text-slate-200"
-          title="打开"
-        >
-          <svg
-            className="h-3.5 w-3.5"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-            strokeWidth={2}
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              d="M4.5 12h15m0 0l-6.75-6.75M19.5 12l-6.75 6.75"
-            />
-          </svg>
-        </button>
-
-        {/* Remove task */}
+        {/** 移除待办按钮：从列表中移除当前任务项（不影响底层记录）。hover 时变为红色主题以表示"移除"的破坏性。 */}
         <button
           type="button"
           onClick={handleRemove}
@@ -200,55 +201,6 @@ export function TodoItem({
             />
           </svg>
         </button>
-
-        {/* More menu */}
-        <div className="relative">
-          <button
-            type="button"
-            onClick={toggleMenu}
-            className="rounded-lg p-1.5 text-slate-500 transition hover:bg-white/10 hover:text-slate-200"
-            title="更多"
-          >
-            <svg
-              className="h-3.5 w-3.5"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-              strokeWidth={2}
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z"
-              />
-            </svg>
-          </button>
-
-          {menuOpen && (
-            <>
-              {/* Backdrop */}
-              <div className="fixed inset-0 z-40" onClick={closeMenu} />
-              {/* Dropdown */}
-              <div className="absolute right-0 top-full z-50 mt-1 min-w-[160px] overflow-hidden rounded-xl border border-white/[8%] bg-slate-900/95 shadow-xl shadow-black/60 backdrop-blur-xl">
-                <button
-                  type="button"
-                  onClick={handleOpenInMain}
-                  className="flex w-full items-center gap-2 px-3.5 py-2.5 text-xs text-slate-300 transition hover:bg-white/[6%]"
-                >
-                  在主面板中打开
-                </button>
-                <div className="mx-3 h-px bg-white/[6%]" />
-                <button
-                  type="button"
-                  onClick={handleDelete}
-                  className="flex w-full items-center gap-2 px-3.5 py-2.5 text-xs text-rose-400 transition hover:bg-rose-400/10"
-                >
-                  删除记录
-                </button>
-              </div>
-            </>
-          )}
-        </div>
       </div>
     </div>
   );

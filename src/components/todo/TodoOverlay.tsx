@@ -1,24 +1,64 @@
+/*
+ * TodoOverlay.tsx — 待办事项浮窗组件
+ *
+ * 功能概述：
+ * 这是应用在桌面上独立显示的「待办列表浮窗」。它作为一个独立
+ * 的 WebView 窗口运行，通过 Zustand store 与主应用共享状态。
+ * 窗口支持拖拽移动（顶部栏区域）和缩放（右下角拖拽手柄），
+ * 并从 Tauri 后端监听 "data-changed" 事件以实现数据实时同步。
+ *
+ * 交互状态机：
+ *   collapsed（折叠/展开 toggle）、loading（首次加载 loading
+ *   动画）、empty（空列表提示）、列表（正常条目渲染）、Drawer
+ *   （侧边详情面板）、fading（完成任务后的淡出动画）。
+ */
+
 import { useCallback, useEffect } from "react";
+// Tauri 的全局事件监听 API，用于接收后端 Rust 发来的数据变更通知
 import { listen } from "@tauri-apps/api/event";
+// 获取当前 WebView 窗口实例（用于拖拽、设置尺寸等原生窗口操作）
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+// 逻辑像素单位包装类型，用于设置窗口大小时无需关心系统缩放比
 import { LogicalSize } from "@tauri-apps/api/dpi";
 
+// Tauri 后端命令封装：删除记录、打开主面板、更新记录、更新任务状态
 import {
-  deleteRecord as deleteRecordCommand,
   showMainPanel,
   updateRecord,
   updateTaskStatus,
 } from "../../lib/tauri";
+// Zustand 状态管理：todoOverlay store 持有浮窗的条目、折叠态、Drawer 等
 import { useTodoOverlayStore } from "../../store/todoOverlay";
+// Zustand 状态管理：settings store 用于读取背景透明度、字号等配置
 import { useSettingsStore } from "../../store/settings";
 import type { TaskStatus } from "../../types";
+// 子组件：详情 Drawer 和单条待办条目
 import { TodoDrawer } from "./TodoDrawer";
 import { TodoItem } from "./TodoItem";
 
+// 当前 WebView 窗口的单例缓存（模块级），避免每次调用都重新获取
 const appWindow = getCurrentWebviewWindow();
+// 数据变更事件名常量，与 Rust 后端约定一致
 const DATA_CHANGED_EVENT = "data-changed";
 
 export function TodoOverlay() {
+  /*
+   * 从 Zustand store 解构出所有状态和动作。
+   *
+   * items          – 当前待办任务数组（每条包含 record_id、task_id、title、content、status 等）
+   * collapsed      – 是否折叠（折叠后仅显示顶栏，隐藏列表）
+   * drawerRecordId – 当前打开的 Drawer 对应的 record_id，null 表示 Drawer 关闭
+   * fadingTaskIds  – 正在播放"完成淡出"动画的任务 ID 集合（2 秒后自动移除）
+   * loading        – 是否正在从后端拉取数据
+   * error          – 错误信息字符串，非空时渲染错误条
+   * fetchItems     – 异步拉取最新待办列表
+   * completeTask   – 标记任务完成（将任务加入 fadingTaskIds，2s 后再实际移除）
+   * removeTask     – 从 UI 列表中移除任务（配合后端删除或状态变更）
+   * openDrawer     – 打开指定记录的 Drawer 详情面板
+   * closeDrawer    – 关闭 Drawer
+   * toggleCollapse – 切换折叠/展开状态
+   * clearError     – 清空错误信息
+   */
   const {
     items,
     collapsed,
@@ -35,34 +75,41 @@ export function TodoOverlay() {
     clearError,
   } = useTodoOverlayStore();
 
-  // ── Overlay background opacity from settings (0.0–1.0, default 0.8) ──
+  // ── 从 settings 读取遮罩背景透明度 (0.0–1.0，默认 0.8) ──
+  // 从存设置中获取原始字符串值，做安全解析，若非法则回退到 0.8
   const opacityRaw = useSettingsStore((s) => s.settings["todo_overlay_opacity"]);
   const overlayBgOpacity = Math.min(1, Math.max(0, Number.parseFloat(opacityRaw ?? "0.8") || 0.8));
 
-  // ── Fetch items on mount ──
+  // ── 组件挂载时立即拉取一次待办列表 ──
   useEffect(() => {
     void fetchItems();
   }, [fetchItems]);
 
-  // ── Re-fetch when data changes elsewhere (Rust emits "data-changed") ──
+  // ── 监听后端 Rust 发出的 "data-changed" 事件，有变更时重新拉取 ──
+  // 这样在其他窗口（如主面板）修改了数据后浮窗能自动刷新
   useEffect(() => {
     const unlistenPromise = listen(DATA_CHANGED_EVENT, () => {
       void fetchItems();
     });
     return () => {
+      // 清理：解除事件监听，防止内存泄漏
       void unlistenPromise.then((unlisten) => unlisten());
     };
   }, [fetchItems]);
 
-  // ── Auto-dismiss error after 4 s ──
+  // ── 错误信息 4 秒后自动消失 ──
+  // 当 error 非空时设置定时器，超时后调用 clearError 清空
   useEffect(() => {
     if (!error) return;
     const timer = setTimeout(() => clearError(), 4000);
     return () => clearTimeout(timer);
   }, [error, clearError]);
 
-  // ── Async callback helpers ──
+  // ── 异步回调帮助函数 ──
+  // 这些回调经由 useCallback 记忆化后传递给 TodoItem 和 TodoDrawer 子组件，
+  // 避免子组件因回调引用变化而无效重渲染。
 
+  // 更新记录标题：调用 Tauri 的 updateRecord 后端命令，再刷新列表
   const handleUpdateTitle = useCallback(
     async (recordId: string, title: string) => {
       await updateRecord(recordId, { title: title || null });
@@ -71,6 +118,7 @@ export function TodoOverlay() {
     [fetchItems],
   );
 
+  // 更新记录内容：与 handleUpdateTitle 类似，但操作的是 content 字段
   const handleUpdateContent = useCallback(
     async (recordId: string, content: string) => {
       await updateRecord(recordId, { content: content || null });
@@ -79,6 +127,7 @@ export function TodoOverlay() {
     [fetchItems],
   );
 
+  // 更新任务状态（如 pending / completed）并刷新列表
   const handleUpdateTaskStatus = useCallback(
     async (taskId: string, status: TaskStatus) => {
       await updateTaskStatus(taskId, status);
@@ -87,29 +136,16 @@ export function TodoOverlay() {
     [fetchItems],
   );
 
-  const handleDeleteRecord = useCallback(
-    async (recordId: string) => {
-      await deleteRecordCommand(recordId);
-      await fetchItems();
-    },
-    [fetchItems],
-  );
-
-  const handleOpenInMainPanel = useCallback(
-    async (_recordId: string) => {
-      await showMainPanel();
-    },
-    [],
-  );
-
-  // ── Derived ──
-
+  // ── 派生数据 ──
+  // 根据 drawerRecordId 从 items 中找到对应的记录对象，
+  // 找不到或 drawerRecordId 为 null 时 drawerItem 为 null
   const drawerItem = drawerRecordId
     ? items.find((i) => i.record_id === drawerRecordId) ?? null
     : null;
 
-  // ── Drag region handler ──
-
+  // ── 顶部拖拽区域鼠标按下处理 ──
+  // 调用 Tauri 的 startDragging() 让操作系统接管窗口拖拽，
+  // 从而实现原生拖拽体验。仅响应左键（button === 0）。
   const handleDragMouseDown = useCallback(
     async (e: React.MouseEvent) => {
       if (e.button !== 0) return;
@@ -119,8 +155,13 @@ export function TodoOverlay() {
     [],
   );
 
-  // ── Resize handle handler ──
-
+  // ── 右下角缩放手柄鼠标按下处理 ──
+  //
+  // 实现原理：
+  // 1. mousedown 时记录鼠标起始位置和窗口起始尺寸
+  // 2. 监听全局 mousemove 计算宽高增量，调用 appWindow.setSize() 实时调整
+  // 3. mouseup 时解除监听完成缩放
+  // 4. 最小值限制 MIN_W=280 / MIN_H=300 防止窗口过小
   const handleResizeMouseDown = useCallback(
     (e: React.MouseEvent) => {
       if (e.button !== 0) return;
@@ -154,16 +195,36 @@ export function TodoOverlay() {
   // ── Render ──
 
   return (
+    /*
+     * 渲染结构（从上到下）：
+     *   1. 遮罩背景（半透明毛玻璃效果，点击穿透）
+     *   2. 内容容器（z-10 确保在遮罩之上）
+     *      a. 错误提示条（条件渲染）
+     *      b. 顶栏 / 拖拽区域（含折叠 toggle、标题、主面板按钮）
+     *      c. 列表区域（loading / empty / task list 三态条件渲染）
+     *      d. Drawer 侧边面板（条件渲染）
+     *   3. 原生缩放拖拽手柄（右下角，z-50 保证在最上层）
+     */
     <div className="relative flex h-screen flex-col overflow-hidden">
-      {/* ── Scrim background (opacity from settings, pointer-events-none so clicks pass through) ── */}
+      {/* ── 半透明遮罩背景 ── */}
+      {/*
+        使用 backdrop-blur-xl 毛玻璃效果模糊背后内容；
+        pointer-events-none 使点击穿透到下方，只有内部控件才能响应交互。
+        颜色使用 settings 中 todo_overlay_opacity 控制透明度。
+      */}
       <div
         className="pointer-events-none absolute inset-0 backdrop-blur-xl"
         style={{ backgroundColor: `rgba(2, 6, 23, ${overlayBgOpacity})` }}
       />
 
-      {/* ── Content – full opacity so text/controls stay readable ── */}
+      {/* ── 内容层（完全不透明，文字和控件保持清晰可读） ── */}
       <div className="relative z-10 flex h-screen flex-col overflow-hidden">
-        {/* ── Error bar ── */}
+        {/* ── 错误提示条 ── */}
+        {/*
+          当 store 中 error 不为空时渲染：
+          左侧为感叹号图标，中间显示错误文本，右侧为关闭按钮。
+          4 秒后自动消失（见上方 useEffect 自动定时器）。
+        */}
       {error && (
         <div className="flex shrink-0 items-center gap-2 border-b border-rose-400/10 bg-rose-400/10 px-3 py-1.5">
           <svg
@@ -203,12 +264,21 @@ export function TodoOverlay() {
         </div>
       )}
 
-      {/* ── Top bar / drag region ── */}
+      {/* ── 顶栏 / 拖拽区域 ── */}
+      {/*
+        cursor-grab / active:cursor-grabbing 提示用户可拖拽；
+        select-none 防止拖拽时选中文字；
+        onMouseDown 调用 Tauri startDragging() 实现原生窗口拖拽。
+      */}
       <div
         className="flex shrink-0 cursor-grab select-none items-center gap-2 px-3 py-2 active:cursor-grabbing"
         onMouseDown={handleDragMouseDown}
       >
-        {/* Collapse toggle */}
+        {/* ── 折叠/展开切换按钮 ── */}
+        {/*
+          点击触发 toggleCollapse；SVG 箭头在 collapsed 时旋转 -90°
+          指示"当前可以展开"；title 属性根据状态展示不同的中文提示。
+        */}
         <button
           type="button"
           onClick={toggleCollapse}
@@ -231,18 +301,29 @@ export function TodoOverlay() {
           </svg>
         </button>
 
+        {/*
+          "待办"标题文字：小号大写字母间距，保持与整体 UI 风格一致
+        */}
         <span className="text-[10px] font-medium uppercase tracking-[0.2em] text-slate-500">
           待办
         </span>
+        {/*
+          当列表展开且 item 数量 > 0 时，在标题旁显示条目计数
+        */}
         {!collapsed && items.length > 0 && (
           <span className="text-[10px] text-slate-600">
             {items.length} 项
           </span>
         )}
 
+        {/* flex-1 占位空间将后续按钮推到右侧 */}
         <div className="flex-1" />
 
-        {/* Open main panel */}
+        {/* ── "打开主面板"按钮 ── */}
+        {/*
+          点击后调用 Tauri 的 showMainPanel() 切换到应用主窗口；
+          SVG 图标为四向展开箭头，表示"最大化/跳出浮窗"。
+        */}
         <button
           type="button"
           onClick={() => void showMainPanel()}
@@ -267,16 +348,28 @@ export function TodoOverlay() {
         </button>
       </div>
 
-      {/* ── List area ── */}
+      {/* ── 待办列表区域（仅在 collapsed 为 false 时渲染） ── */}
+      {/*
+        overflow-y-auto 支持纵向滚动；
+        overscroll-contain 防止在浮窗中滚动时触发父窗口（如主面板）滚动。
+      */}
       {!collapsed && (
         <div className="flex-1 overflow-y-auto overscroll-contain">
+          {/*
+            三态条件渲染：
+              1. loading 且 items 为空 → 旋转加载动画（首次加载）
+              2. 列表为空 → 空状态提示
+              3. 有数据 → TodoItem 列表
+          */}
           {loading && items.length === 0 ? (
-            /* Loading state */
+            /* ── 加载中状态：旋转圆圈动画 ── */
+            /* 利用 border 模拟圆环，border-t-* 只给顶部着色实现旋转加载效果 */
             <div className="flex items-center justify-center py-12">
               <div className="h-4 w-4 animate-spin rounded-full border-2 border-emerald-400/30 border-t-emerald-400" />
             </div>
           ) : items.length === 0 ? (
-            /* Empty state */
+            /* ── 空状态 ── */
+            /* 居中显示文档图标和两行提示文字，告知用户当前没有待办事项 */
             <div className="flex flex-col items-center justify-center px-6 py-12 text-center">
               <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-2xl bg-slate-800/40">
                 <svg
@@ -291,15 +384,15 @@ export function TodoOverlay() {
                     strokeLinejoin="round"
                     d="M9 12h3.75M9 15h3.75M9 18h3.75m3
                       .75H18a2.25 2.25 0 002.25-2.25V6.108c0-1.135-.845-2.098-1.976-2.192a48.424
-                     48.424 0 00-1.123-.08m-5.801 0c-.065.21-.1.433-.1.664 0
-                     .414.336.75.75.75h4.5a.75.75 0 00.75-.75 2.25 2.25 0
-                     00-.1-.664m-5.8 0A2.251 2.251 0 0113.5 2.25H15c1.012 0
-                     1.867.668 2.15 1.586m-5.8 0c-.376.023-.75.05-1.124.08C9.095
-                     4.01 8.25 4.973 8.25 6.108V8.25m0 0H4.875c-.621
-                     0-1.125.504-1.125 1.125v11.25c0 .621.504 1.125 1.125
-                     1.125h9.75c.621 0 1.125-.504 1.125-1.125V9.375c0-.621-.504-1.125-1.125-1.125H8.25zM6.75
-                     12h.008v.008H6.75V12zm0 3h.008v.008H6.75V15zm0
-                     3h.008v.008H6.75V18z"
+                      48.424 0 00-1.123-.08m-5.801 0c-.065.21-.1.433-.1.664 0
+                      .414.336.75.75.75h4.5a.75.75 0 00.75-.75 2.25 2.25 0
+                      00-.1-.664m-5.8 0A2.251 2.251 0 0113.5 2.25H15c1.012 0
+                      1.867.668 2.15 1.586m-5.8 0c-.376.023-.75.05-1.124.08C9.095
+                      4.01 8.25 4.973 8.25 6.108V8.25m0 0H4.875c-.621
+                      0-1.125.504-1.125 1.125v11.25c0 .621.504 1.125 1.125
+                      1.125h9.75c.621 0 1.125-.504 1.125-1.125V9.375c0-.621-.504-1.125-1.125-1.125H8.25zM6.75
+                      12h.008v.008H6.75V12zm0 3h.008v.008H6.75V15zm0
+                      3h.008v.008H6.75V18z"
                   />
                 </svg>
               </div>
@@ -307,7 +400,8 @@ export function TodoOverlay() {
               <p className="mt-1 text-xs text-slate-600">所有任务已完成</p>
             </div>
           ) : (
-            /* Task list */
+            /* ── 任务列表 ── */
+            /* divide-y 在每个 TodoItem 之间添加分隔线；isFading 控制完成淡出动画 */
             <div className="divide-y divide-white/[3%]">
               {items.map((item) => (
                 <TodoItem
@@ -317,8 +411,6 @@ export function TodoOverlay() {
                   onToggleComplete={completeTask}
                   onOpen={openDrawer}
                   onRemoveTask={removeTaskAction}
-                  onDeleteRecord={handleDeleteRecord}
-                  onOpenInMainPanel={handleOpenInMainPanel}
                 />
               ))}
             </div>
@@ -326,7 +418,13 @@ export function TodoOverlay() {
         </div>
       )}
 
-      {/* ── Drawer ── */}
+      {/* ── Drawer 侧边面板 ── */}
+      {/*
+        当 drawerRecordId 不为 null 时渲染 TodoDrawer 组件。
+        该组件在浮窗右侧弹出一个详情面板，用于查看和编辑单条记录的
+        标题、内容、任务状态等。
+        drawerItem 可能为 null（记录未找到），TodoDrawer 内部需做空处理。
+      */}
       {drawerRecordId && (
         <TodoDrawer
           item={drawerItem}
@@ -334,13 +432,17 @@ export function TodoOverlay() {
           onUpdateTitle={handleUpdateTitle}
           onUpdateContent={handleUpdateContent}
           onUpdateTaskStatus={handleUpdateTaskStatus}
-          onRemoveTask={removeTaskAction}
-          onDeleteRecord={handleDeleteRecord}
-          onOpenInMainPanel={handleOpenInMainPanel}
         />
       )}
 
-      {/* ── Native resize handle ── */}
+      {/* ── 原生缩放拖拽手柄（右下角） ── */}
+      {/*
+        absolute bottom-0 right-0 固定定位到容器右下角；
+        z-50 确保手柄在所有内容之上；
+        cursor-se-resize 指示 southeast 方向缩放；
+        onMouseDown 触发 handleResizeMouseDown 开始缩放逻辑。
+        SVG 为两条斜线组成的"缩放"图标，和 macOS 窗口缩放手势一致。
+      */}
       <div
         className="absolute bottom-0 right-0 z-50 cursor-se-resize select-none p-1.5 text-slate-600/40 hover:text-slate-400/70 transition-colors"
         onMouseDown={handleResizeMouseDown}

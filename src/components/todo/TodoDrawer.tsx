@@ -2,17 +2,30 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { TaskStatus, UnfinishedTaskItem } from "../../types";
 
+/**
+ * TodoDrawer 组件的属性接口。
+ *
+ * 从右侧滑入的半屏抽屉面板，展示单项任务的完整详情与编辑操作。
+ *
+ * @param item         当前选中的任务项，为 null 时抽屉关闭
+ * @param onClose      关闭抽屉的回调
+ * @param onUpdateTitle   保存标题（record_title）
+ * @param onUpdateContent 保存内容（record_content）
+ * @param onUpdateTaskStatus 更新任务状态（todo / doing / done / cancelled）
+ */
 interface TodoDrawerProps {
   item: UnfinishedTaskItem | null;
   onClose: () => void;
   onUpdateTitle: (recordId: string, title: string) => Promise<void>;
   onUpdateContent: (recordId: string, content: string) => Promise<void>;
   onUpdateTaskStatus: (taskId: string, status: TaskStatus) => Promise<void>;
-  onRemoveTask: (taskId: string) => void;
-  onDeleteRecord: (recordId: string) => void;
-  onOpenInMainPanel: (recordId: string) => void;
 }
 
+/**
+ * 四种任务状态的 UI 配置。
+ * 每种状态包含中文标签、对应的枚举值、小圆点颜色类和激活态样式。
+ * 用于底部的状态切换按钮组渲染。
+ */
 const STATUS_OPTIONS: {
   label: string;
   value: TaskStatus;
@@ -48,38 +61,52 @@ const STATUS_OPTIONS: {
   },
 ];
 
-/** Fallback display text: title → content preview → null (caller shows placeholder). */
+/**
+ * 获取任务行的显示标题。
+ * 优先使用 record_title；如果标题为空则取 record_content 的前几个字（压缩空白后）；
+ * 都为空时返回 null，由调用方展示占位符。
+ */
 function displayTitle(item: UnfinishedTaskItem): string | null {
   if (item.record_title) return item.record_title;
   const content = item.record_content?.replace(/\s+/g, " ").trim();
   return content || null;
 }
 
+/**
+ * TodoDrawer 组件：从右侧滑入的半屏详情抽屉。
+ *
+ * 当用户在 TodoOverlay 的任务列表中点击某一行时，该组件被渲染。
+ * 它提供标题/内容的行内编辑、任务状态切换、删除确认以及跳转到主面板等功能。
+ */
 export function TodoDrawer({
   item,
   onClose,
   onUpdateTitle,
   onUpdateContent,
   onUpdateTaskStatus,
-  onRemoveTask,
-  onDeleteRecord,
-  onOpenInMainPanel,
 }: TodoDrawerProps) {
+  // item 不为 null 时抽屉打开，否则不渲染
   const isOpen = item !== null;
 
-  // ── Editing state ──
-  const [editingTitle, setEditingTitle] = useState(false);
-  const [editingContent, setEditingContent] = useState(false);
-  const [titleDraft, setTitleDraft] = useState("");
-  const [contentDraft, setContentDraft] = useState("");
-  const [confirmDelete, setConfirmDelete] = useState(false);
-  const [updatingStatus, setUpdatingStatus] = useState(false);
+  // ── 编辑状态 ──
+  const [editingTitle, setEditingTitle] = useState(false);   // 标题是否处于编辑模式
+  const [editingContent, setEditingContent] = useState(false); // 内容是否处于编辑模式
+  const [titleDraft, setTitleDraft] = useState("");           // 标题编辑中的草稿值
+  const [contentDraft, setContentDraft] = useState("");       // 内容编辑中的草稿值
 
+  const [updatingStatus, setUpdatingStatus] = useState(false); // 状态切换请求进行中
+
+  // 标题 input 的 ref，用于自动聚焦
   const titleRef = useRef<HTMLInputElement>(null);
+  // 内容 textarea 的 ref，用于自动聚焦
   const contentRef = useRef<HTMLTextAreaElement>(null);
+  // 抽屉面板本身的 ref（当前预留，可用于 future 的点击外部判断等逻辑）
   const drawerRef = useRef<HTMLDivElement>(null);
 
-  // ── Close on Escape ──
+  /**
+   * Escape 键关闭抽屉。
+   * 仅在抽屉打开时注册键盘监听；用 capture phase 以防被其它处理抢先。
+   */
   useEffect(() => {
     if (!isOpen) return;
     const handler = (e: KeyboardEvent) => {
@@ -92,14 +119,19 @@ export function TodoDrawer({
     return () => document.removeEventListener("keydown", handler);
   }, [isOpen, onClose]);
 
-  // ── Reset editing state when item changes ──
+  /**
+   * 当用户点击不同任务时（item 变化），重置所有本地编辑状态，
+   * 避免上一个任务的编辑框残留在新任务上。
+   */
   useEffect(() => {
     setEditingTitle(false);
     setEditingContent(false);
-    setConfirmDelete(false);
   }, [item?.record_id]);
 
-  // ── Focus helpers ──
+  /**
+   * 标题编辑模式激活时自动聚焦 input 并全选文字，
+   * 方便用户直接覆盖输入。
+   */
   useEffect(() => {
     if (editingTitle && titleRef.current) {
       titleRef.current.focus();
@@ -107,24 +139,38 @@ export function TodoDrawer({
     }
   }, [editingTitle]);
 
+  /**
+   * 内容编辑模式激活时自动聚焦 textarea，
+   * 并将光标置于末尾（不 select，适合较长的正文）。
+   */
   useEffect(() => {
     if (editingContent && contentRef.current) {
       contentRef.current.focus();
     }
   }, [editingContent]);
 
-  // ── Handlers ──
+  // ── 事件处理函数 ──
 
+  /**
+   * 进入标题编辑模式：将当前标题填入草稿，然后显示 input。
+   */
   const startEditTitle = useCallback(() => {
     setTitleDraft(item?.record_title ?? "");
     setEditingTitle(true);
   }, [item]);
 
+  /**
+   * 进入内容编辑模式：将当前内容填入草稿，然后显示 textarea。
+   */
   const startEditContent = useCallback(() => {
     setContentDraft(item?.record_content ?? "");
     setEditingContent(true);
   }, [item]);
 
+  /**
+   * 保存标题：退出编辑模式，去除首尾空格后如果变化则调用 onUpdateTitle。
+   * 触发时机：blur / Enter 键。
+   */
   const saveTitle = useCallback(async () => {
     if (!item) return;
     setEditingTitle(false);
@@ -133,6 +179,10 @@ export function TodoDrawer({
     await onUpdateTitle(item.record_id, trimmed);
   }, [item, titleDraft, onUpdateTitle]);
 
+  /**
+   * 保存内容：退出编辑模式，去除首尾空格后如果变化则调用 onUpdateContent。
+   * 触发时机：blur（textarea 失去焦点）。
+   */
   const saveContent = useCallback(async () => {
     if (!item) return;
     setEditingContent(false);
@@ -141,6 +191,11 @@ export function TodoDrawer({
     await onUpdateContent(item.record_id, trimmed);
   }, [item, contentDraft, onUpdateContent]);
 
+  /**
+   * 切换任务状态。
+   * 如果与当前状态相同或已有请求进行中则直接忽略；
+   * 请求期间显示 loading 动画（小旋转圆圈），同时禁用按钮以防重复提交。
+   */
   const handleStatusChange = useCallback(
     async (status: TaskStatus) => {
       if (!item || updatingStatus) return;
@@ -155,37 +210,20 @@ export function TodoDrawer({
     [item, updatingStatus, onUpdateTaskStatus],
   );
 
-  const handleRemove = useCallback(() => {
-    if (!item) return;
-    onClose();
-    onRemoveTask(item.task_id);
-  }, [item, onClose, onRemoveTask]);
-
-  const handleDelete = useCallback(() => {
-    if (!item) return;
-    onClose();
-    onDeleteRecord(item.record_id);
-  }, [item, onClose, onDeleteRecord]);
-
-  const handleOpenInMain = useCallback(() => {
-    if (!item) return;
-    onClose();
-    onOpenInMainPanel(item.record_id);
-  }, [item, onClose, onOpenInMainPanel]);
-
+  // item 为空时直接返回 null，不渲染任何内容
   if (!isOpen) return null;
 
   return (
     <>
-      {/* Mount animation */}
+      {/*
+        CSS 关键帧动画：抽屉从右侧滑入（translateX(100%) → 0），
+        背景遮罩从透明渐变为半透明。
+        使用 cubic-bezier(0.16, 1, 0.3, 1) 营造略带弹性的自然感。
+      */}
       <style>{`
         @keyframes drawer-slide-in {
           from { transform: translateX(100%); }
           to   { transform: translateX(0); }
-        }
-        @keyframes drawer-backdrop-in {
-          from { opacity: 0; }
-          to   { opacity: 1; }
         }
         .drawer-panel {
           animation: drawer-slide-in 220ms cubic-bezier(0.16, 1, 0.3, 1);
@@ -195,25 +233,40 @@ export function TodoDrawer({
         }
       `}</style>
 
+      {/*
+        外层容器：绝对定位铺满整个 Overlay 区域，z-30 使其位于任务列表之上。
+        flex 布局让左边的遮罩与右边的面板并排。
+      */}
       <div className="absolute inset-0 z-30 flex">
-        {/* Backdrop */}
+        {/*
+          左侧半透明遮罩层。
+          点击遮罩区域等同于按 Escape 键——关闭抽屉。
+          backdrop-blur-sm 为背景毛玻璃效果。
+        */}
         <div
           className="drawer-backdrop flex-1 cursor-pointer bg-black/40 backdrop-blur-sm"
           onClick={onClose}
         />
 
-        {/* Drawer panel */}
+        {/*
+          右侧抽屉面板：固定宽度 340px，不可收缩（shrink-0）。
+          半透明深色背景（bg-slate-950/90）加上 backdrop-blur-2xl 毛玻璃。
+          左侧细边框用于与遮罩区分。
+        */}
         <div
           ref={drawerRef}
           className="drawer-panel flex w-[340px] shrink-0 flex-col overflow-hidden
             border-l border-white/[6%] bg-slate-950/90 backdrop-blur-2xl"
         >
-          {/* ── Header ── */}
+          {/* ── 顶部栏 ── */}
           <div className="flex shrink-0 items-center gap-2 border-b border-white/5 px-4 py-3">
             <span className="text-[10px] font-medium uppercase tracking-[0.2em] text-slate-500">
               编辑
             </span>
             <div className="flex-1" />
+            {/*
+              手动关闭按钮（X 图标），与 Escape 快捷键效果相同。
+            */}
             <button
               type="button"
               onClick={onClose}
@@ -235,9 +288,9 @@ export function TodoDrawer({
             </button>
           </div>
 
-          {/* ── Scrollable body ── */}
+          {/* ── 可滚动内容区域 ── */}
           <div className="flex-1 space-y-5 overflow-y-auto overscroll-contain p-4">
-            {/* Title */}
+            {/* 标题行（行内编辑） */}
             <section>
               {editingTitle ? (
                 <input
@@ -279,7 +332,7 @@ export function TodoDrawer({
               )}
             </section>
 
-            {/* Status */}
+            {/* 任务状态切换 */}
             <section>
               <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.2em] text-slate-500">
                 任务状态
@@ -304,10 +357,16 @@ export function TodoDrawer({
                         disabled:cursor-not-allowed disabled:opacity-60
                       `}
                     >
+                      {/*
+                        状态指示圆点：激活时全不透明，非激活时半透明。
+                      */}
                       <span
                         className={`inline-block h-1.5 w-1.5 rounded-full ${isActive ? opt.dot : `${opt.dot} opacity-40`}`}
                       />
                       {opt.label}
+                      {/*
+                        状态切换进行中：在当前激活的按钮内显示一个旋转圆圈。
+                      */}
                       {updatingStatus && isActive && (
                         <span className="inline-block h-2.5 w-2.5 animate-spin rounded-full border border-current border-t-transparent" />
                       )}
@@ -317,7 +376,7 @@ export function TodoDrawer({
               </div>
             </section>
 
-            {/* Content */}
+            {/* 内容编辑区 */}
             <section>
               <p className="mb-1.5 text-[10px] font-medium uppercase tracking-[0.2em] text-slate-500">
                 内容
@@ -362,7 +421,7 @@ export function TodoDrawer({
               )}
             </section>
 
-            {/* Attachments */}
+            {/* 附件区域（占位实现） */}
             <section>
               <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.2em] text-slate-500">
                 附件
@@ -378,6 +437,10 @@ export function TodoDrawer({
                 ) : (
                   <p className="text-xs text-slate-500">暂无附件</p>
                 )}
+                {/*
+                  添加附件按钮——当前为占位，文件选择器将在后续任务中接入。
+                  计划通过 lib/tauri 的 addAttachmentsToRecord 实现。
+                */}
                 <button
                   type="button"
                   className="mt-2 inline-flex items-center gap-1 rounded-lg
@@ -405,109 +468,6 @@ export function TodoDrawer({
                 </button>
               </div>
             </section>
-          </div>
-
-          {/* ── Footer actions ── */}
-          <div className="shrink-0 space-y-1.5 border-t border-white/5 px-4 py-3">
-            {/* 移除待办 */}
-            <button
-              type="button"
-              onClick={handleRemove}
-              className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs
-                text-slate-300 transition hover:bg-amber-400/10 hover:text-amber-300"
-            >
-              <svg
-                className="h-3.5 w-3.5"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-                strokeWidth={2}
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M6 18L18 6M6 6l12 12"
-                />
-              </svg>
-              移除待办（保留记录）
-            </button>
-
-            {/* 删除记录 with confirmation */}
-            {confirmDelete ? (
-              <div className="flex items-center gap-2 rounded-lg bg-rose-400/10 px-3 py-2">
-                <span className="flex-1 text-[11px] text-rose-300">
-                  确认删除记录及附件？
-                </span>
-                <button
-                  type="button"
-                  onClick={handleDelete}
-                  className="rounded-md bg-rose-400/20 px-2.5 py-1 text-[11px]
-                    font-medium text-rose-300 transition hover:bg-rose-400/30"
-                >
-                  确认
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setConfirmDelete(false)}
-                  className="rounded-md px-2.5 py-1 text-[11px] text-slate-400
-                    transition hover:bg-white/10"
-                >
-                  取消
-                </button>
-              </div>
-            ) : (
-              <button
-                type="button"
-                onClick={() => setConfirmDelete(true)}
-                className="flex w-full items-center gap-2 rounded-lg px-3 py-2
-                  text-xs text-rose-400/80 transition hover:bg-rose-400/10
-                  hover:text-rose-300"
-              >
-                <svg
-                  className="h-3.5 w-3.5"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                  strokeWidth={2}
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0
-                      01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0
-                      00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-                  />
-                </svg>
-                删除记录
-              </button>
-            )}
-
-            {/* 在主面板中打开 */}
-            <button
-              type="button"
-              onClick={handleOpenInMain}
-              className="flex w-full items-center gap-2 rounded-lg px-3 py-2
-                text-xs text-slate-400 transition hover:bg-white/[6%]
-                hover:text-slate-200"
-            >
-              <svg
-                className="h-3.5 w-3.5"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-                strokeWidth={2}
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M3.75 3.75v4.5m0-4.5h4.5m-4.5 0L9 9M3.75
-                    20.25v-4.5m0 4.5h4.5m-4.5 0L9 15M20.25 3.75h-4.5m4.5
-                    0v4.5m0-4.5L15 9m5.25 11.25h-4.5m4.5
-                    0v-4.5m0 4.5L15 15"
-                />
-              </svg>
-              在主面板中打开
-            </button>
           </div>
         </div>
       </div>
