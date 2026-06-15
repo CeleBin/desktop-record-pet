@@ -376,6 +376,25 @@ pub fn update_task_status(conn: &Connection, id: &str, task_status: TaskStatus) 
     Ok(task)
 }
 
+/// 更新任务的截止日期。
+///
+/// `due_at` 为 `None` 时清除截止日期（不设期限）。
+/// 返回更新后的 Task 结构体，供前端乐观更新使用。
+pub fn update_task_due_at(conn: &Connection, id: &str, due_at: Option<DateTime<Utc>>) -> AppResult<Task> {
+    let mut task = get_task(conn, id)?;
+    task.due_at = due_at;
+
+    conn.execute(
+        "UPDATE tasks SET due_at = ?2 WHERE id = ?1",
+        params![
+            task.id,
+            task.due_at.map(|value| value.to_rfc3339()),
+        ],
+    )?;
+
+    Ok(task)
+}
+
 pub fn insert_attachment(conn: &Connection, request: CreateAttachmentRequest) -> AppResult<Attachment> {
     let attachment = Attachment {
         id: Uuid::new_v4().to_string(),

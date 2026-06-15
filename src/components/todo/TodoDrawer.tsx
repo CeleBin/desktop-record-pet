@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { TaskStatus, UnfinishedTaskItem } from "../../types";
+import { DatePicker } from "./DatePicker";
 
 /**
  * TodoDrawer 组件的属性接口。
@@ -19,6 +20,7 @@ interface TodoDrawerProps {
   onUpdateTitle: (recordId: string, title: string) => Promise<void>;
   onUpdateContent: (recordId: string, content: string) => Promise<void>;
   onUpdateTaskStatus: (taskId: string, status: TaskStatus) => Promise<void>;
+  onUpdateDueAt: (recordId: string, taskId: string, dueAt: string | null) => Promise<void>;
 }
 
 /**
@@ -84,6 +86,7 @@ export function TodoDrawer({
   onUpdateTitle,
   onUpdateContent,
   onUpdateTaskStatus,
+  onUpdateDueAt,
 }: TodoDrawerProps) {
   // item 不为 null 时抽屉打开，否则不渲染
   const isOpen = item !== null;
@@ -95,6 +98,7 @@ export function TodoDrawer({
   const [contentDraft, setContentDraft] = useState("");       // 内容编辑中的草稿值
 
   const [updatingStatus, setUpdatingStatus] = useState(false); // 状态切换请求进行中
+  const [showDatePicker, setShowDatePicker] = useState(false); // 日期选择器可见性
 
   // 标题 input 的 ref，用于自动聚焦
   const titleRef = useRef<HTMLInputElement>(null);
@@ -374,6 +378,123 @@ export function TodoDrawer({
                   );
                 })}
               </div>
+            </section>
+
+            {/**
+              * ── 截止日期 ──
+              * 点击日期按钮展开/收起 DatePicker 日历组件。
+              * 选择日期后调用 onUpdateDueAt 保存，传 null 清除。
+              * 显示文字根据到期情况自动变色：过期=红，3天内=橙，未来=灰。
+              */}
+            <section>
+              <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.2em] text-slate-500">
+                截止日期
+              </p>
+              {(() => {
+                /**
+                 * 将 "YYYY-MM-DD" 字符串解析为中文本地化显示，附带颜色编码。
+                 * - 已过期：玫瑰色（text-rose-400）
+                 * - 今天/3天内：琥珀色（text-amber-400）
+                 * - 未来：默认灰色（text-slate-500）
+                 */
+                function getDueDisplay(dueAt: string | null): {
+                  display: string;
+                  className: string;
+                } | null {
+                  if (!dueAt) return null;
+                  const dueDate = new Date(dueAt);
+                  if (isNaN(dueDate.getTime())) return null;
+                  const m = dueDate.getMonth() + 1;
+                  const d = dueDate.getDate();
+                  const today = new Date();
+                  today.setHours(0, 0, 0, 0);
+                  const diffTime = dueDate.getTime() - today.getTime();
+                  const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24));
+                  const dateStr = `${m}月${d}日`;
+
+                  if (diffDays < 0) return { display: `${dateStr} · 已过期`, className: "text-rose-400" };
+                  if (diffDays === 0) return { display: `${dateStr} · 今天到期`, className: "text-amber-400" };
+                  if (diffDays <= 3) return { display: `${dateStr} · ${diffDays}天后`, className: "text-amber-400" };
+                  return { display: `${dateStr} · ${diffDays}天后`, className: "text-slate-500" };
+                }
+
+                const dueInfo = item.due_at ? getDueDisplay(item.due_at) : null;
+
+                return (
+                  <div>
+                    <button
+                      type="button"
+                      onClick={() => setShowDatePicker((v) => !v)}
+                      className="flex w-full items-center gap-2 rounded-lg border border-white/10
+                        bg-slate-900/80 px-3 py-2 text-sm transition
+                        hover:border-white/20"
+                    >
+                      {/* 日历图标 */}
+                      <svg
+                        className="h-4 w-4 shrink-0 text-slate-500"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                        strokeWidth={1.5}
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25
+                            2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021
+                            18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5"
+                        />
+                      </svg>
+
+                      {dueInfo ? (
+                        <span className={`${dueInfo.className}`}>{dueInfo.display}</span>
+                      ) : (
+                        <span className="italic text-slate-500">未设置</span>
+                      )}
+
+                      <div className="flex-1" />
+
+                      {/* 展开/收起箭头 */}
+                      <svg
+                        className={`h-3.5 w-3.5 text-slate-500 transition-transform duration-200 ${
+                          showDatePicker ? "rotate-180" : ""
+                        }`}
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                        strokeWidth={2}
+                      >
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+                      </svg>
+                    </button>
+
+                    {showDatePicker && (
+                      <div className="mt-2">
+                        <DatePicker
+                          value={item.due_at ? (() => {
+                            // new Date() 而非 split("-")：后端返回 RFC 3339 格式
+                            // ("2026-06-14T00:00:00Z")，split 会产出 NaN。
+                            const d = new Date(item.due_at);
+                            return isNaN(d.getTime()) ? null : d;
+                          })() : null}
+                          onChange={(date) => {
+                            const y = date.getFullYear();
+                            const m = String(date.getMonth() + 1).padStart(2, "0");
+                            const day = String(date.getDate()).padStart(2, "0");
+                            const dateStr = `${y}-${m}-${day}`;
+                            void onUpdateDueAt(item.record_id, item.task_id, dateStr);
+                            setShowDatePicker(false);
+                          }}
+                          onClear={() => {
+                            void onUpdateDueAt(item.record_id, item.task_id, null);
+                            setShowDatePicker(false);
+                          }}
+                        />
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
             </section>
 
             {/* 内容编辑区 */}

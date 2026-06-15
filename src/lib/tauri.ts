@@ -94,6 +94,23 @@ export async function listUnfinishedTasks(): Promise<UnfinishedTaskItem[]> {
   return invoke<UnfinishedTaskItem[]>("list_unfinished_tasks");
 }
 
+/**
+ * 更新待办任务的截止日期。
+ *
+ * 前端传纯日期字符串 "YYYY-MM-DD"，这里补上 `T00:00:00Z` 使其符合 RFC 3339
+ * 格式，否则 Rust 端的 `chrono::DateTime::parse_from_rfc3339` 会解析失败。
+ * 传 `null` 表示清除截止日期（不设期限）。
+ */
+export async function updateTaskDueAt(
+  taskId: string,
+  dueAt: string | null,
+): Promise<void> {
+  return invoke<void>("update_task_due_at", {
+    taskId,
+    dueAt: dueAt ? `${dueAt}T00:00:00Z` : null,
+  });
+}
+
 export async function removeTask(taskId: string): Promise<TaskItem> {
   return invoke<TaskItem>("remove_task", { taskId });
 }

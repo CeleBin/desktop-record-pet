@@ -210,6 +210,7 @@ pub fn run() {
             commands::convert_record_to_task,
             commands::list_tasks,
             commands::update_task_status,
+            commands::update_task_due_at,
             commands::remove_task,
             commands::list_unfinished_tasks,
             // Task 9: pet window & tray

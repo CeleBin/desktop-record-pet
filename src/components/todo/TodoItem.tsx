@@ -47,6 +47,37 @@ function formatTime(iso: string): string {
   }
 }
 
+/**
+ * 根据 "YYYY-MM-DD" 格式的截止日期字符串计算相对时间显示文字和颜色类名。
+ *
+ * 返回值为 null 表示无需显示（传入 null 时）。
+ * 颜色规则：
+ *   - 已过期（diffDays < 0）：text-rose-400（玫瑰红）
+ *   - 今天到期（diffDays === 0）：text-amber-400（琥珀色）
+ *   - 3 天内（diffDays <= 3）：text-amber-400（琥珀色）
+ *   - 未来（diffDays > 3）：text-slate-500（灰色）
+ */
+function getDueDateInfo(dueAt: string | null): {
+  display: string;
+  className: string;
+} | null {
+  if (!dueAt) return null;
+  const dueDate = new Date(dueAt);
+  if (isNaN(dueDate.getTime())) return null;
+  const m = dueDate.getMonth() + 1;
+  const d = dueDate.getDate();
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const diffTime = dueDate.getTime() - today.getTime();
+  const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24));
+  const dateStr = `${m}月${d}日`;
+
+  if (diffDays < 0) return { display: `${dateStr} · 已过期`, className: "text-rose-400" };
+  if (diffDays === 0) return { display: `${dateStr} · 今天到期`, className: "text-amber-400" };
+  if (diffDays <= 3) return { display: `${dateStr} · ${diffDays}天后`, className: "text-amber-400" };
+  return { display: `${dateStr} · ${diffDays}天后`, className: "text-slate-500" };
+}
+
 export function TodoItem({
   item,
   isFading,
@@ -171,6 +202,36 @@ export function TodoItem({
           <span className="text-[10px] text-slate-600">
             {formatTime(item.record_updated_at)}
           </span>
+
+          {/**
+            * 截止日期显示。
+            * 仅当 item.due_at 非空且能解析为有效日期时才渲染。
+            * 使用 getDueDateInfo 计算相对天数并决定颜色（过期红/临期橙/未来灰）。
+            */}
+          {item.due_at && (() => {
+            const dueInfo = getDueDateInfo(item.due_at);
+            if (!dueInfo) return null;
+            return (
+              <span className={`inline-flex items-center gap-0.5 text-[10px] ${dueInfo.className}`}>
+                <svg
+                  className="h-3 w-3"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={1.5}
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25
+                      2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021
+                      18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5"
+                  />
+                </svg>
+                {dueInfo.display}
+              </span>
+            );
+          })()}
         </div>
       </div>
 

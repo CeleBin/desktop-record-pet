@@ -14,6 +14,7 @@ import { create } from "zustand";
 import {
   listUnfinishedTasks,     // 列出所有未完成的任务
   removeTask as removeTaskCommand, // 删除指定任务（不删除关联的记录）
+  updateTaskDueAt,         // 更新任务截止日期
   updateTaskStatus,        // 更新任务状态（用于标记为完成）
 } from "../lib/tauri";
 import type { UnfinishedTaskItem } from "../types";
@@ -105,6 +106,14 @@ interface TodoOverlayState {
    * 内部将 `collapsed` 取反。配合 CSS 过渡实现平滑折叠动画。
    */
   toggleCollapse: () => void;
+
+  /**
+   * 更新指定任务的截止日期。
+   *
+   * 调用 `updateTaskDueAt()` API 更新后端，成功后原地更新本地 `items` 中
+   * 对应记录的 `due_at` 字段，无需重新拉取全量列表。
+   */
+  updateDueAt: (recordId: string, taskId: string, dueAt: string | null) => Promise<void>;
 
   /** 清除错误信息（仅在当前存在错误时执行）。 */
   clearError: () => void;
@@ -238,6 +247,33 @@ export const useTodoOverlayStore = create<TodoOverlayState>((set, get) => ({
    */
   toggleCollapse() {
     set((state) => ({ collapsed: !state.collapsed }));
+  },
+
+  // ─────────────────────── updateDueAt ───────────────────────
+
+  /**
+   * 更新指定任务的截止日期。
+   *
+   * 调用 `updateTaskDueAt(taskId, dueAt)` 后端命令更新日期，
+   * 成功后直接在本地 `items` 列表中更新对应记录的 `due_at` 字段，
+   * 避免全量重刷列表带来的闪烁。
+   */
+  async updateDueAt(recordId, taskId, dueAt) {
+    set({ loading: true, error: null });
+    try {
+      await updateTaskDueAt(taskId, dueAt);
+      set((state) => ({
+        items: state.items.map((item) =>
+          item.record_id === recordId ? { ...item, due_at: dueAt } : item
+        ),
+        loading: false,
+      }));
+    } catch (error) {
+      set({
+        loading: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   },
 
   // ─────────────────────── clearError ───────────────────────

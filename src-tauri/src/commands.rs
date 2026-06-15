@@ -399,6 +399,34 @@ pub fn update_task_status(
     Ok(task)
 }
 
+/// 前端 Tauri 命令：更新任务截止日期。
+///
+/// `due_at` 应为 RFC 3339 格式（如 `"2026-06-14T00:00:00Z"`），
+/// 前端在 `lib/tauri.ts` 中将纯日期补上 `T00:00:00Z` 后缀后再调用此命令。
+/// 传 `null` 表示清除截止日期。
+#[tauri::command]
+pub fn update_task_due_at(
+    app: AppHandle,
+    database: State<'_, Database>,
+    task_id: String,
+    due_at: Option<String>,
+) -> AppResult<Task> {
+    if task_id.trim().is_empty() {
+        return Err(AppError::Validation("task id is required".into()));
+    }
+    let due_at = due_at
+        .map(|s| {
+            chrono::DateTime::parse_from_rfc3339(&s)
+                .map_err(|e| AppError::Validation(format!("invalid due_at date: {e}")))
+                .map(|dt| dt.with_timezone(&chrono::Utc))
+        })
+        .transpose()?;
+    let conn = database.conn.lock()?;
+    let task = db::update_task_due_at(&conn, &task_id, due_at)?;
+    emit_data_changed(&app)?;
+    Ok(task)
+}
+
 #[tauri::command]
 pub fn remove_task(app: AppHandle, database: State<'_, Database>, task_id: String) -> AppResult<Task> {
     if task_id.trim().is_empty() {

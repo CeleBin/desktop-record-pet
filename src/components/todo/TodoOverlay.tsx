@@ -73,6 +73,7 @@ export function TodoOverlay() {
     closeDrawer,
     toggleCollapse,
     clearError,
+    updateDueAt,
   } = useTodoOverlayStore();
 
   // ── 从 settings 读取遮罩背景透明度 (0.0–1.0，默认 0.8) ──
@@ -432,6 +433,7 @@ export function TodoOverlay() {
           onUpdateTitle={handleUpdateTitle}
           onUpdateContent={handleUpdateContent}
           onUpdateTaskStatus={handleUpdateTaskStatus}
+          onUpdateDueAt={updateDueAt}
         />
       )}
 
