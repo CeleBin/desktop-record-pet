@@ -50,6 +50,7 @@ export interface UnfinishedTaskItem {
   record_content: string | null;
   record_updated_at: string;
   attachment_count: number;
+  sort_order: number;
 }
 
 export interface AttachmentItem {

@@ -338,6 +338,7 @@ pub struct Task {
     pub remind_at: Option<DateTime<Utc>>,
     pub repeat_rule: Option<String>,
     pub completed_at: Option<DateTime<Utc>>,
+    pub sort_order: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -504,6 +505,8 @@ pub struct UnfinishedTaskItem {
     /// Number of attachments linked to this record (cheaper than sending the
     /// full attachment list for every unfinished task).
     pub attachment_count: i64,
+    /// Sort order for drag-and-drop reordering. Lower values appear first.
+    pub sort_order: i64,
 }
 
 /// Full record payload returned by list-records / get-record-detail.

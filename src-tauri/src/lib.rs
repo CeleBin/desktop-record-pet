@@ -213,6 +213,7 @@ pub fn run() {
             commands::update_task_due_at,
             commands::remove_task,
             commands::list_unfinished_tasks,
+            commands::reorder_tasks,
             // Task 9: pet window & tray
             commands::get_pet_position,
             commands::set_pet_position,

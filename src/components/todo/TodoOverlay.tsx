@@ -20,6 +20,9 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 // 逻辑像素单位包装类型，用于设置窗口大小时无需关心系统缩放比
 import { LogicalSize } from "@tauri-apps/api/dpi";
+// dnd-kit：拖拽排序核心 + 传感器
+import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core";
+import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
 
 // Tauri 后端命令封装：删除记录、打开主面板、更新记录、更新任务状态
 import {
@@ -34,7 +37,7 @@ import { useSettingsStore } from "../../store/settings";
 import type { TaskStatus } from "../../types";
 // 子组件：详情 Drawer 和单条待办条目
 import { TodoDrawer } from "./TodoDrawer";
-import { TodoItem } from "./TodoItem";
+import { SortableTodoItem } from "./SortableTodoItem";
 
 // 当前 WebView 窗口的单例缓存（模块级），避免每次调用都重新获取
 const appWindow = getCurrentWebviewWindow();
@@ -74,12 +77,33 @@ export function TodoOverlay() {
     toggleCollapse,
     clearError,
     updateDueAt,
+    reorderItems,
   } = useTodoOverlayStore();
 
   // ── 从 settings 读取遮罩背景透明度 (0.0–1.0，默认 0.8) ──
   // 从存设置中获取原始字符串值，做安全解析，若非法则回退到 0.8
   const opacityRaw = useSettingsStore((s) => s.settings["todo_overlay_opacity"]);
   const overlayBgOpacity = Math.min(1, Math.max(0, Number.parseFloat(opacityRaw ?? "0.8") || 0.8));
+
+  // ── dnd-kit 拖拽传感器 ──
+  // 使用 PointerSensor 检测拖拽（支持鼠标和触摸）
+  // activationConstraint.distance = 5px 防止误触（点击不会触发拖拽）
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: { distance: 5 },
+    }),
+  );
+
+  // ── 拖拽结束回调 ──
+  // 拖拽结束后将 activeId 移到 overId 的位置，更新本地排序并异步持久化到后端
+  const handleDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      const { active, over } = event;
+      if (!over || active.id === over.id) return;
+      reorderItems(String(active.id), String(over.id));
+    },
+    [reorderItems],
+  );
 
   // ── 组件挂载时立即拉取一次待办列表 ──
   useEffect(() => {
@@ -467,20 +491,24 @@ export function TodoOverlay() {
               <p className="mt-1 text-xs text-slate-600">所有任务已完成</p>
             </div>
           ) : (
-            /* ── 任务列表 ── */
-            /* divide-y 在每个 TodoItem 之间添加分隔线；isFading 控制完成淡出动画 */
-            <div className="divide-y divide-white/[3%]">
-              {items.map((item) => (
-                <TodoItem
-                  key={item.task_id}
-                  item={item}
-                  isFading={fadingTaskIds.includes(item.task_id)}
-                  onToggleComplete={completeTask}
-                  onOpen={openDrawer}
-                  onRemoveTask={removeTaskAction}
-                />
-              ))}
-            </div>
+            /* ── 任务列表（可拖拽排序） ── */
+            /* DndContext + SortableContext 提供拖拽排序能力 */
+            <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+              <SortableContext items={items.map((i) => i.task_id)} strategy={verticalListSortingStrategy}>
+                <div className="divide-y divide-white/[3%]">
+                  {items.map((item) => (
+                    <SortableTodoItem
+                      key={item.task_id}
+                      item={item}
+                      isFading={fadingTaskIds.includes(item.task_id)}
+                      onToggleComplete={completeTask}
+                      onOpen={openDrawer}
+                      onRemoveTask={removeTaskAction}
+                    />
+                  ))}
+                </div>
+              </SortableContext>
+            </DndContext>
           )}
         </div>
       )}

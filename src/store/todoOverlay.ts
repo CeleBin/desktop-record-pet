@@ -10,12 +10,14 @@
  */
 
 import { create } from "zustand";
+import { arrayMove } from "@dnd-kit/sortable";
 
 import {
   listUnfinishedTasks,     // 列出所有未完成的任务
   removeTask as removeTaskCommand, // 删除指定任务（不删除关联的记录）
   updateTaskDueAt,         // 更新任务截止日期
   updateTaskStatus,        // 更新任务状态（用于标记为完成）
+  reorderTasks,            // 批量更新任务排序
 } from "../lib/tauri";
 import type { UnfinishedTaskItem } from "../types";
 
@@ -117,6 +119,14 @@ interface TodoOverlayState {
 
   /** 清除错误信息（仅在当前存在错误时执行）。 */
   clearError: () => void;
+
+  /**
+   * 拖拽排序——将 items 数组就地重排，并批量更新后端 sort_order。
+   *
+   * 乐观更新策略：先把本地 items 按新顺序重排并赋予递增 sort_order，
+   * 然后异步调用后端 reorderTasks，失败时回滚到旧顺序并设置 error。
+   */
+  reorderItems: (activeId: string, overId: string) => void;
 }
 
 /**
@@ -286,5 +296,52 @@ export const useTodoOverlayStore = create<TodoOverlayState>((set, get) => ({
     if (get().error) {
       set({ error: null });
     }
+  },
+
+  // ─────────────────────── reorderItems ───────────────────────
+
+  /**
+   * 拖拽排序——交换两个任务的位置。
+   *
+   * 策略：
+   * 1. 找到 activeId（被拖拽项）和 overId（放置目标项）在 items 中的索引
+   * 2. 在本地数组中把 activeId 移到 overId 的位置（arrayMove）
+   * 3. 给重排后的数组赋予递增 sort_order（0, 1, 2, ...）
+   * 4. 异步调用后端 reorderTasks 持久化
+   * 5. 如果后端失败，回滚到旧数组并设置 error
+   */
+  reorderItems(activeId: string, overId: string) {
+    const { items } = get();
+    if (activeId === overId) return;
+
+    const oldItems = [...items];
+    const activeIndex = items.findIndex((i) => i.task_id === activeId);
+    const overIndex = items.findIndex((i) => i.task_id === overId);
+    if (activeIndex === -1 || overIndex === -1) return;
+
+    // arrayMove: 移动元素从 activeIndex 到 overIndex
+    const reordered = arrayMove(items, activeIndex, overIndex);
+
+    // 赋予递增 sort_order
+    const updated = reordered.map((item, index) => ({
+      ...item,
+      sort_order: index,
+    }));
+
+    // 乐观更新：立即在 UI 反映新顺序
+    set({ items: updated });
+
+    // 异步持久化到后端
+    const orderPayload = updated.map((item) => ({
+      task_id: item.task_id,
+      sort_order: item.sort_order,
+    }));
+    reorderTasks(orderPayload).catch((error) => {
+      // 回滚
+      set({
+        items: oldItems,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
   },
 }));

@@ -72,6 +72,7 @@ pub fn run_migrations(conn: &Connection) -> AppResult<()> {
             remind_at TEXT,
             repeat_rule TEXT,
             completed_at TEXT,
+            sort_order INTEGER NOT NULL DEFAULT 0,
             FOREIGN KEY(record_id) REFERENCES records(id) ON DELETE CASCADE
         );
 
@@ -128,6 +129,19 @@ pub fn run_migrations(conn: &Connection) -> AppResult<()> {
         );
         "#,
     )?;
+
+    // ── Migration: add sort_order column to tasks if missing ──
+    // CREATE TABLE IF NOT EXISTS won't add columns to existing tables,
+    // so we need an ALTER TABLE for databases created before this change.
+    let tasks_columns: Vec<String> = conn
+        .prepare("SELECT * FROM tasks LIMIT 0")?
+        .column_names()
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    if !tasks_columns.iter().any(|c| c == "sort_order") {
+        conn.execute_batch("ALTER TABLE tasks ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0")?;
+    }
 
     Ok(())
 }
@@ -310,6 +324,12 @@ pub fn delete_record_physical(conn: &Connection, record_id: &str) -> AppResult<(
 }
 
 pub fn insert_task(conn: &Connection, request: CreateTaskRequest) -> AppResult<Task> {
+    // Assign sort_order: use max existing + 1, or 0 if table empty
+    let max_sort: i64 = conn
+        .query_row("SELECT COALESCE(MAX(sort_order), -1) FROM tasks", [], |row| row.get(0))
+        .unwrap_or(-1);
+    let sort_order = max_sort + 1;
+
     let task = Task {
         id: Uuid::new_v4().to_string(),
         record_id: request.record_id,
@@ -319,10 +339,11 @@ pub fn insert_task(conn: &Connection, request: CreateTaskRequest) -> AppResult<T
         remind_at: request.remind_at,
         repeat_rule: request.repeat_rule,
         completed_at: None,
+        sort_order,
     };
 
     conn.execute(
-        "INSERT INTO tasks (id, record_id, task_status, priority, due_at, remind_at, repeat_rule, completed_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        "INSERT INTO tasks (id, record_id, task_status, priority, due_at, remind_at, repeat_rule, completed_at, sort_order) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         params![
             task.id,
             task.record_id,
@@ -332,6 +353,7 @@ pub fn insert_task(conn: &Connection, request: CreateTaskRequest) -> AppResult<T
             task.remind_at.map(|value| value.to_rfc3339()),
             task.repeat_rule,
             task.completed_at.map(|value| value.to_rfc3339()),
+            task.sort_order,
         ],
     )?;
 
@@ -340,7 +362,7 @@ pub fn insert_task(conn: &Connection, request: CreateTaskRequest) -> AppResult<T
 
 pub fn get_task(conn: &Connection, id: &str) -> AppResult<Task> {
     conn.query_row(
-        "SELECT id, record_id, task_status, priority, due_at, remind_at, repeat_rule, completed_at FROM tasks WHERE id = ?1",
+        "SELECT id, record_id, task_status, priority, due_at, remind_at, repeat_rule, completed_at, sort_order FROM tasks WHERE id = ?1",
         params![id],
         map_task,
     )
@@ -350,7 +372,7 @@ pub fn get_task(conn: &Connection, id: &str) -> AppResult<Task> {
 
 pub fn list_tasks(conn: &Connection) -> AppResult<Vec<Task>> {
     let mut stmt = conn.prepare(
-        "SELECT id, record_id, task_status, priority, due_at, remind_at, repeat_rule, completed_at FROM tasks ORDER BY COALESCE(due_at, ''), rowid DESC",
+        "SELECT id, record_id, task_status, priority, due_at, remind_at, repeat_rule, completed_at, sort_order FROM tasks ORDER BY sort_order ASC, COALESCE(due_at, ''), rowid DESC",
     )?;
     let rows = stmt.query_map([], map_task)?;
     let tasks = rows.collect::<Result<Vec<_>, _>>()?;
@@ -696,7 +718,7 @@ pub fn list_tasks_filtered(conn: &Connection, filter: Option<&TaskFilter>) -> Ap
 
 pub fn get_task_for_record(conn: &Connection, record_id: &str) -> AppResult<Option<Task>> {
     conn.query_row(
-        "SELECT id, record_id, task_status, priority, due_at, remind_at, repeat_rule, completed_at FROM tasks WHERE record_id = ?1",
+        "SELECT id, record_id, task_status, priority, due_at, remind_at, repeat_rule, completed_at, sort_order FROM tasks WHERE record_id = ?1",
         params![record_id],
         map_task,
     )
@@ -778,18 +800,18 @@ pub fn convert_record_to_task(conn: &Connection, record_id: &str) -> AppResult<T
 /// Return all tasks with status `todo` or `doing`, joined with the linked
 /// record's title/content/updated_at and an attachment count.
 ///
-/// The returned vector is ordered by the record's `updated_at` descending so
-/// the overlay shows the most-recently-touched items first.
+/// The returned vector is ordered by `sort_order` ascending so users can
+/// reorder tasks via drag-and-drop, with fallback to `updated_at` desc.
 pub fn list_unfinished_tasks(conn: &Connection) -> AppResult<Vec<UnfinishedTaskItem>> {
     let mut stmt = conn.prepare(
         "SELECT t.id, t.record_id, t.task_status, t.priority, t.due_at, t.remind_at,
-                t.repeat_rule, t.completed_at,
+                t.repeat_rule, t.completed_at, t.sort_order,
                 r.title, r.content, r.updated_at,
                 (SELECT COUNT(*) FROM record_attachments WHERE record_id = r.id) AS attachment_count
          FROM tasks t
          JOIN records r ON r.id = t.record_id
          WHERE t.task_status IN ('todo', 'doing')
-         ORDER BY datetime(r.updated_at) DESC, r.rowid DESC",
+         ORDER BY t.sort_order ASC, datetime(r.updated_at) DESC, r.rowid DESC",
     )?;
 
     let rows = stmt.query_map([], |row| {
@@ -802,15 +824,33 @@ pub fn list_unfinished_tasks(conn: &Connection) -> AppResult<Vec<UnfinishedTaskI
             remind_at: parse_optional_datetime(row.get::<_, Option<String>>(5)?)?,
             repeat_rule: row.get(6)?,
             completed_at: parse_optional_datetime(row.get::<_, Option<String>>(7)?)?,
-            record_title: row.get(8)?,
-            record_content: row.get(9)?,
-            record_updated_at: parse_datetime(&row.get::<_, String>(10)?)?,
-            attachment_count: row.get(11)?,
+            sort_order: row.get(8)?,
+            record_title: row.get(9)?,
+            record_content: row.get(10)?,
+            record_updated_at: parse_datetime(&row.get::<_, String>(11)?)?,
+            attachment_count: row.get(12)?,
         })
     })?;
 
     let items = rows.collect::<Result<Vec<_>, _>>()?;
     Ok(items)
+}
+
+/// Batch-update the `sort_order` of multiple tasks.
+///
+/// `order` is a list of `(task_id, new_sort_order)` pairs. Each task's
+/// `sort_order` is set to the provided value inside a single transaction
+/// so the reorder is atomic.
+pub fn reorder_tasks(conn: &Connection, order: &[(String, i64)]) -> AppResult<()> {
+    conn.execute_batch("BEGIN")?;
+    for (task_id, sort_order) in order {
+        conn.execute(
+            "UPDATE tasks SET sort_order = ?2 WHERE id = ?1",
+            params![task_id, sort_order],
+        )?;
+    }
+    conn.execute_batch("COMMIT")?;
+    Ok(())
 }
 
 fn map_record(row: &Row<'_>) -> rusqlite::Result<Record> {
@@ -836,6 +876,7 @@ fn map_task(row: &Row<'_>) -> rusqlite::Result<Task> {
         remind_at: parse_optional_datetime(row.get(5)?)?,
         repeat_rule: row.get(6)?,
         completed_at: parse_optional_datetime(row.get(7)?)?,
+        sort_order: row.get(8)?,
     })
 }
 

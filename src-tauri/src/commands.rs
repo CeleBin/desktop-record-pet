@@ -19,6 +19,13 @@ use crate::windows;
 
 // Stable command surface -- extend with new commands, never delete existing ones.
 
+/// A single item in a batch reorder request: maps a task ID to its new sort position.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskSortOrder {
+    pub task_id: String,
+    pub sort_order: i64,
+}
+
 pub const DATA_CHANGED_EVENT: &str = "data-changed";
 
 fn emit_data_changed(app: &AppHandle) -> AppResult<()> {
@@ -446,6 +453,17 @@ pub fn remove_task(app: AppHandle, database: State<'_, Database>, task_id: Strin
 pub fn list_unfinished_tasks(database: State<'_, Database>) -> AppResult<Vec<UnfinishedTaskItem>> {
     let conn = database.conn.lock()?;
     db::list_unfinished_tasks(&conn)
+}
+
+/// Reorder tasks by updating their `sort_order` values.
+///
+/// Accepts a list of `{ task_id: String, sort_order: i64 }` objects and
+/// batch-updates each task's `sort_order` in a single transaction.
+#[tauri::command]
+pub fn reorder_tasks(database: State<'_, Database>, order: Vec<TaskSortOrder>) -> AppResult<()> {
+    let conn = database.conn.lock()?;
+    let order_tuples: Vec<(String, i64)> = order.iter().map(|o| (o.task_id.clone(), o.sort_order)).collect();
+    db::reorder_tasks(&conn, &order_tuples)
 }
 
 // ── Task 9: pet window commands ──────────────────────────────────────

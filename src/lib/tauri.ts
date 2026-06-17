@@ -95,6 +95,14 @@ export async function listUnfinishedTasks(): Promise<UnfinishedTaskItem[]> {
 }
 
 /**
+ * Batch-update task sort order for drag-and-drop reordering.
+ * Each item in the array maps a task_id to its new sort_order value.
+ */
+export async function reorderTasks(order: { task_id: string; sort_order: number }[]): Promise<void> {
+  return invoke<void>("reorder_tasks", { order });
+}
+
+/**
  * 更新待办任务的截止日期。
  *
  * 前端传纯日期字符串 "YYYY-MM-DD"，这里补上 `T00:00:00Z` 使其符合 RFC 3339
