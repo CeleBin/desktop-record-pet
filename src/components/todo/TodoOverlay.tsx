@@ -13,7 +13,7 @@
  *   （侧边详情面板）、fading（完成任务后的淡出动画）。
  */
 
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useRef } from "react";
 // Tauri 的全局事件监听 API，用于接收后端 Rust 发来的数据变更通知
 import { listen } from "@tauri-apps/api/event";
 // 获取当前 WebView 窗口实例（用于拖拽、设置尺寸等原生窗口操作）
@@ -106,6 +106,60 @@ export function TodoOverlay() {
     return () => clearTimeout(timer);
   }, [error, clearError]);
 
+  // ── 内容容器 ref，用于动态测量 DOM 尺寸 ──
+  // 通过 getBoundingClientRect() 获取容器折叠/展开后的真实物理渲染尺寸
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  // ── Header ref，用于折叠时精确测量仅显示的头部尺寸 ──
+  const headerRef = useRef<HTMLDivElement>(null);
+
+  // ── 保存展开时的窗口尺寸，折叠前记录，展开时恢复 ──
+  // 展开时存在"鸡生蛋"问题：视口仍为折叠宽度，无法直接测量展开后的自然宽度
+  // 因此折叠前先保存当前窗口尺寸，展开时直接恢复保存值
+  const expandedSizeRef = useRef<{ width: number; height: number } | null>(null);
+
+  // ── 折叠/展开时自动调整窗口尺寸 ──
+  // 折叠：根 div 添加 w-fit 使宽度塌缩到内容自然宽度，
+  //        然后测量 header 的 getBoundingClientRect 即可得到真实窄宽度
+  // 展开：先恢复保存的窗口尺寸（宽度为用户之前的展开宽度），
+  //        再设置最小尺寸约束
+  useEffect(() => {
+    const adjustSize = async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      if (collapsed && headerRef.current) {
+        // 折叠前保存当前窗口尺寸，以便展开时恢复
+        expandedSizeRef.current = {
+          width: window.innerWidth,
+          height: window.innerHeight,
+        };
+
+        // w-fit 使根 div 宽度塌缩到 header 自然内容宽度
+        // 此时 getBoundingClientRect().width 返回真实窄宽度（而非铺满视口的宽度）
+        const rect = headerRef.current.getBoundingClientRect();
+        const width = Math.round(rect.width);
+        const height = Math.round(rect.height);
+
+        console.log(`[collapse] collapsed=true, measured header: ${width}x${height}`);
+
+        await appWindow.setMinSize(new LogicalSize(0, 0));
+        await appWindow.setSize(new LogicalSize(width, height));
+
+        console.log(`[collapse] window resized to header size: ${width}x${height}`);
+      } else if (!collapsed) {
+        // 展开时恢复之前保存的窗口尺寸（或回退到默认 360×500）
+        const saved = expandedSizeRef.current || { width: 360, height: 500 };
+
+        console.log(`[collapse] collapsed=false, restoring saved size: ${saved.width}x${saved.height}`);
+
+        await appWindow.setMinSize(new LogicalSize(280, 300));
+        await appWindow.setSize(new LogicalSize(saved.width, saved.height));
+      }
+    };
+
+    void adjustSize();
+  }, [collapsed]);
+
   // ── 异步回调帮助函数 ──
   // 这些回调经由 useCallback 记忆化后传递给 TodoItem 和 TodoDrawer 子组件，
   // 避免子组件因回调引用变化而无效重渲染。
@@ -147,9 +201,13 @@ export function TodoOverlay() {
   // ── 顶部拖拽区域鼠标按下处理 ──
   // 调用 Tauri 的 startDragging() 让操作系统接管窗口拖拽，
   // 从而实现原生拖拽体验。仅响应左键（button === 0）。
+  // 如果点击目标是按钮（button 或其子元素），则跳过拖拽，让按钮的 click 事件正常触发。
   const handleDragMouseDown = useCallback(
     async (e: React.MouseEvent) => {
       if (e.button !== 0) return;
+      // 检查点击目标是否是按钮或按钮的子元素
+      const target = e.target as HTMLElement;
+      if (target.closest('button')) return;
       e.preventDefault();
       await appWindow.startDragging();
     },
@@ -195,18 +253,21 @@ export function TodoOverlay() {
 
   // ── Render ──
 
+  /*
+   * 渲染结构（从上到下）：
+   *   1. 遮罩背景（半透明毛玻璃效果，点击穿透）
+   *   2. 内容容器（z-10 确保在遮罩之上）
+   *      a. 错误提示条（条件渲染）
+   *      b. 顶栏 / 拖拽区域（含折叠 toggle、标题、主面板按钮）
+   *      c. 列表区域（loading / empty / task list 三态条件渲染）
+   *      d. Drawer 侧边面板（条件渲染）
+   *   3. 原生缩放拖拽手柄（右下角，z-50 保证在最上层）
+   *
+   * 注意：移除了根 div 的 h-screen，允许内容高度由子元素自然决定，
+   * 这样在折叠时容器高度能正确塌陷，展开时也能正确扩展。
+   */
   return (
-    /*
-     * 渲染结构（从上到下）：
-     *   1. 遮罩背景（半透明毛玻璃效果，点击穿透）
-     *   2. 内容容器（z-10 确保在遮罩之上）
-     *      a. 错误提示条（条件渲染）
-     *      b. 顶栏 / 拖拽区域（含折叠 toggle、标题、主面板按钮）
-     *      c. 列表区域（loading / empty / task list 三态条件渲染）
-     *      d. Drawer 侧边面板（条件渲染）
-     *   3. 原生缩放拖拽手柄（右下角，z-50 保证在最上层）
-     */
-    <div className="relative flex h-screen flex-col overflow-hidden">
+    <div className={`relative flex flex-col overflow-hidden${collapsed ? " w-fit" : ""}`}>
       {/* ── 半透明遮罩背景 ── */}
       {/*
         使用 backdrop-blur-xl 毛玻璃效果模糊背后内容；
@@ -219,7 +280,12 @@ export function TodoOverlay() {
       />
 
       {/* ── 内容层（完全不透明，文字和控件保持清晰可读） ── */}
-      <div className="relative z-10 flex h-screen flex-col overflow-hidden">
+      {/* ref={containerRef} 用于展开时动态测量 DOM 尺寸 */}
+      {/* 不设 h-screen，容器高度由子元素自然决定；折叠时列表被条件渲染卸载，高度自动塌陷 */}
+      <div
+        ref={containerRef}
+        className="relative z-10 flex flex-col overflow-hidden"
+      >
         {/* ── 错误提示条 ── */}
         {/*
           当 store 中 error 不为空时渲染：
@@ -270,8 +336,10 @@ export function TodoOverlay() {
         cursor-grab / active:cursor-grabbing 提示用户可拖拽；
         select-none 防止拖拽时选中文字；
         onMouseDown 调用 Tauri startDragging() 实现原生窗口拖拽。
+        ref={headerRef} 用于折叠时精确测量头部尺寸。
       */}
       <div
+        ref={headerRef}
         className="flex shrink-0 cursor-grab select-none items-center gap-2 px-3 py-2 active:cursor-grabbing"
         onMouseDown={handleDragMouseDown}
       >
@@ -317,14 +385,11 @@ export function TodoOverlay() {
           </span>
         )}
 
-        {/* flex-1 占位空间将后续按钮推到右侧 */}
-        <div className="flex-1" />
+{/* flex-1 占位空间将后续按钮推到右侧（折叠时隐藏） */}
+        {!collapsed && <div className="flex-1" />}
 
-        {/* ── "打开主面板"按钮 ── */}
-        {/*
-          点击后调用 Tauri 的 showMainPanel() 切换到应用主窗口；
-          SVG 图标为四向展开箭头，表示"最大化/跳出浮窗"。
-        */}
+        {/* ── "打开主面板"按钮（折叠时隐藏，仅保留折叠按钮和标题） ── */}
+        {!collapsed && (
         <button
           type="button"
           onClick={() => void showMainPanel()}
@@ -347,6 +412,7 @@ export function TodoOverlay() {
             />
           </svg>
         </button>
+        )}
       </div>
 
       {/* ── 待办列表区域（仅在 collapsed 为 false 时渲染） ── */}
@@ -445,6 +511,7 @@ export function TodoOverlay() {
         onMouseDown 触发 handleResizeMouseDown 开始缩放逻辑。
         SVG 为两条斜线组成的"缩放"图标，和 macOS 窗口缩放手势一致。
       */}
+      {!collapsed && (
       <div
         className="absolute bottom-0 right-0 z-50 cursor-se-resize select-none p-1.5 text-slate-600/40 hover:text-slate-400/70 transition-colors"
         onMouseDown={handleResizeMouseDown}
@@ -461,6 +528,7 @@ export function TodoOverlay() {
           <path d="M11 7L7 11" />
         </svg>
       </div>
+      )}
     </div>
   </div>
   );

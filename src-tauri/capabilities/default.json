@@ -20,6 +20,8 @@
     "global-shortcut:allow-is-registered",
     "global-shortcut:allow-register",
     "global-shortcut:allow-unregister",
-    "opener:default"
+    "opener:default",
+    "core:window:allow-set-size",
+    "core:window:allow-set-min-size"
   ]
 }
