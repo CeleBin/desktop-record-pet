@@ -127,6 +127,15 @@ interface TodoOverlayState {
    * 然后异步调用后端 reorderTasks，失败时回滚到旧顺序并设置 error。
    */
   reorderItems: (activeId: string, overId: string) => void;
+
+  /**
+   * 折叠状态的分类 ID 集合。
+   * 当某个分类 ID 在此集合中时，该分类的任务列表被隐藏，仅显示分类头部。
+   */
+  collapsedFolders: Set<string>;
+
+  /** 切换指定分类的折叠/展开状态。 */
+  toggleFolderCollapse: (folderId: string) => void;
 }
 
 /**
@@ -143,6 +152,7 @@ export const useTodoOverlayStore = create<TodoOverlayState>((set, get) => ({
   fadingTaskIds: [],          // 默认无任务处于淡出动画中
   loading: false,             // 默认非加载状态
   error: null,                // 默认无错误
+  collapsedFolders: new Set<string>(), // 默认无分类被折叠
 
   // ─────────────────────── fetchItems ───────────────────────
 
@@ -342,6 +352,26 @@ export const useTodoOverlayStore = create<TodoOverlayState>((set, get) => ({
         items: oldItems,
         error: error instanceof Error ? error.message : String(error),
       });
+    });
+  },
+
+  // ─────────────────────── toggleFolderCollapse ───────────────────────
+
+  /**
+   * 切换指定分类的折叠/展开状态。
+   *
+   * 将 folderId 从 Set 中添加（折叠）或移除（展开）。
+   * 使用不可变更新确保 Zustand 检测到状态变化并触发重渲染。
+   */
+  toggleFolderCollapse(folderId) {
+    set((state) => {
+      const next = new Set(state.collapsedFolders);
+      if (next.has(folderId)) {
+        next.delete(folderId);
+      } else {
+        next.add(folderId);
+      }
+      return { collapsedFolders: next };
     });
   },
 }));

@@ -51,6 +51,7 @@ export interface UnfinishedTaskItem {
   record_updated_at: string;
   attachment_count: number;
   sort_order: number;
+  folder_id: string | null;
 }
 
 export interface AttachmentItem {
@@ -177,6 +178,16 @@ export interface RecordFilter {
 export interface TaskFilter {
   status?: TaskStatus;
   priority?: TaskPriority;
+}
+
+// ── Folder / Category ──────────────────────────────────────────
+
+export interface FolderItem {
+  id: string;
+  name: string;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
 }
 
 // ── Shortcut commands ────────────────────────────────────────────

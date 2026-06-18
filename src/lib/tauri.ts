@@ -6,6 +6,7 @@ import type {
   CreateAiResultRequest,
   CreateAttachmentRequest,
   CreateRecordRequest,
+  FolderItem,
   ImportFilesRequest,
   CreateTaskRequest,
   RecordFilter,
@@ -199,4 +200,35 @@ export async function setShortcut(
     name: key,
     accelerator: shortcut,
   });
+}
+
+// ── Folder / Category commands ─────────────────────────────────────
+
+export async function listFolders(): Promise<FolderItem[]> {
+  return invoke<FolderItem[]>("list_folders");
+}
+
+export async function createFolder(name: string): Promise<FolderItem> {
+  return invoke<FolderItem>("create_folder", { name });
+}
+
+export async function renameFolder(id: string, name: string): Promise<FolderItem> {
+  return invoke<FolderItem>("rename_folder", { id, name });
+}
+
+export async function deleteFolder(id: string): Promise<void> {
+  return invoke<void>("delete_folder", { id });
+}
+
+export async function moveTaskToFolder(
+  taskId: string,
+  folderId: string | null,
+): Promise<void> {
+  return invoke<void>("move_task_to_folder", { taskId, folderId });
+}
+
+export async function reorderFolders(
+  order: { id: string; sort_order: number }[],
+): Promise<void> {
+  return invoke<void>("reorder_folders", { order });
 }

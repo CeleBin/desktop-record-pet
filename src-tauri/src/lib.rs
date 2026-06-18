@@ -214,6 +214,13 @@ pub fn run() {
             commands::remove_task,
             commands::list_unfinished_tasks,
             commands::reorder_tasks,
+            // Folder category commands
+            commands::list_folders,
+            commands::create_folder,
+            commands::rename_folder,
+            commands::delete_folder,
+            commands::move_task_to_folder,
+            commands::reorder_folders,
             // Task 9: pet window & tray
             commands::get_pet_position,
             commands::set_pet_position,

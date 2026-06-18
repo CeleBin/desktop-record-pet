@@ -10,7 +10,7 @@ use crate::db::{self, Database};
 use crate::errors::{AppError, AppResult};
 use crate::models::{
     AiResult, AiTriggerMode, AttachmentRole, AttachmentType, ClipboardImageRequest,
-    CreateAiResultRequest, CreateAttachmentRequest, CreateRecordRequest, CreateTaskRequest,
+    CreateAiResultRequest, CreateAttachmentRequest, CreateRecordRequest, CreateTaskRequest, Folder,
     ImportFilesRequest, Record, RecordFilter, RecordSource, RecordType, RecordWithRelations,
     SettingsEntry, Task, TaskFilter, TaskStatus, UnfinishedTaskItem, UpdateRecordRequest,
 };
@@ -464,6 +464,87 @@ pub fn reorder_tasks(database: State<'_, Database>, order: Vec<TaskSortOrder>) -
     let conn = database.conn.lock()?;
     let order_tuples: Vec<(String, i64)> = order.iter().map(|o| (o.task_id.clone(), o.sort_order)).collect();
     db::reorder_tasks(&conn, &order_tuples)
+}
+
+// ── Folder commands ─────────────────────────────────────────────
+
+#[tauri::command]
+pub fn list_folders(database: State<'_, Database>) -> AppResult<Vec<Folder>> {
+    let conn = database.conn.lock()?;
+    db::list_folders(&conn)
+}
+
+#[tauri::command]
+pub fn create_folder(app: AppHandle, database: State<'_, Database>, name: String) -> AppResult<Folder> {
+    if name.trim().is_empty() {
+        return Err(AppError::Validation("folder name is required".into()));
+    }
+    let folder = {
+        let conn = database.conn.lock()?;
+        db::create_folder(&conn, name.trim())?
+    };
+    emit_data_changed(&app)?;
+    Ok(folder)
+}
+
+#[tauri::command]
+pub fn rename_folder(app: AppHandle, database: State<'_, Database>, id: String, name: String) -> AppResult<Folder> {
+    if id.trim().is_empty() {
+        return Err(AppError::Validation("folder id is required".into()));
+    }
+    if name.trim().is_empty() {
+        return Err(AppError::Validation("folder name is required".into()));
+    }
+    let folder = {
+        let conn = database.conn.lock()?;
+        db::rename_folder(&conn, &id, name.trim())?
+    };
+    emit_data_changed(&app)?;
+    Ok(folder)
+}
+
+#[tauri::command]
+pub fn delete_folder(app: AppHandle, database: State<'_, Database>, id: String) -> AppResult<()> {
+    if id.trim().is_empty() {
+        return Err(AppError::Validation("folder id is required".into()));
+    }
+    {
+        let conn = database.conn.lock()?;
+        db::delete_folder(&conn, &id)?;
+    }
+    emit_data_changed(&app)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn move_task_to_folder(
+    app: AppHandle,
+    database: State<'_, Database>,
+    task_id: String,
+    folder_id: Option<String>,
+) -> AppResult<()> {
+    if task_id.trim().is_empty() {
+        return Err(AppError::Validation("task id is required".into()));
+    }
+    {
+        let conn = database.conn.lock()?;
+        db::move_task_to_folder(&conn, &task_id, folder_id.as_deref())?;
+    }
+    emit_data_changed(&app)?;
+    Ok(())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FolderSortOrder {
+    pub id: String,
+    pub sort_order: i64,
+}
+
+#[tauri::command]
+pub fn reorder_folders(database: State<'_, Database>, order: Vec<FolderSortOrder>) -> AppResult<()> {
+    let conn = database.conn.lock()?;
+    let order_tuples: Vec<(String, i64)> = order.iter().map(|o| (o.id.clone(), o.sort_order)).collect();
+    db::reorder_folders(&conn, &order_tuples)
 }
 
 // ── Task 9: pet window commands ──────────────────────────────────────

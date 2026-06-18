@@ -13,7 +13,7 @@
  *   （侧边详情面板）、fading（完成任务后的淡出动画）。
  */
 
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 // Tauri 的全局事件监听 API，用于接收后端 Rust 发来的数据变更通知
 import { listen } from "@tauri-apps/api/event";
 // 获取当前 WebView 窗口实例（用于拖拽、设置尺寸等原生窗口操作）
@@ -21,7 +21,15 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 // 逻辑像素单位包装类型，用于设置窗口大小时无需关心系统缩放比
 import { LogicalSize } from "@tauri-apps/api/dpi";
 // dnd-kit：拖拽排序核心 + 传感器
-import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core";
+import {
+  DndContext,
+  closestCenter,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  useDroppable,
+  type DragEndEvent,
+} from "@dnd-kit/core";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
 
 // Tauri 后端命令封装：删除记录、打开主面板、更新记录、更新任务状态
@@ -34,10 +42,13 @@ import {
 import { useTodoOverlayStore } from "../../store/todoOverlay";
 // Zustand 状态管理：settings store 用于读取背景透明度、字号等配置
 import { useSettingsStore } from "../../store/settings";
-import type { TaskStatus } from "../../types";
-// 子组件：详情 Drawer 和单条待办条目
+import type { TaskStatus, UnfinishedTaskItem } from "../../types";
+// 子组件：详情 Drawer、单条待办条目、分类区块、分类管理器
 import { TodoDrawer } from "./TodoDrawer";
 import { SortableTodoItem } from "./SortableTodoItem";
+import { CategorySection } from "./CategorySection";
+import { CategoryManager } from "./CategoryManager";
+import { useFolderStore } from "../../store/folderStore";
 
 // 当前 WebView 窗口的单例缓存（模块级），避免每次调用都重新获取
 const appWindow = getCurrentWebviewWindow();
@@ -78,7 +89,22 @@ export function TodoOverlay() {
     clearError,
     updateDueAt,
     reorderItems,
+    collapsedFolders,
+    toggleFolderCollapse,
   } = useTodoOverlayStore();
+
+  // ── 分类 store ──
+  const {
+    folders,
+    fetchFolders,
+    createFolder,
+    renameFolder,
+    deleteFolder,
+    moveTask,
+  } = useFolderStore();
+
+  // 分类管理浮层显示状态
+  const [showCategoryManager, setShowCategoryManager] = useState(false);
 
   // ── 从 settings 读取遮罩背景透明度 (0.0–1.0，默认 0.8) ──
   // 从存设置中获取原始字符串值，做安全解析，若非法则回退到 0.8
@@ -95,26 +121,55 @@ export function TodoOverlay() {
   );
 
   // ── 拖拽结束回调 ──
-  // 拖拽结束后将 activeId 移到 overId 的位置，更新本地排序并异步持久化到后端
+  // 判断目标：如果是分类 droppable → 移动任务到该分类；否则 → 同列表内排序
   const handleDragEnd = useCallback(
     (event: DragEndEvent) => {
       const { active, over } = event;
-      if (!over || active.id === over.id) return;
-      reorderItems(String(active.id), String(over.id));
+      if (!over) return;
+      const activeId = String(active.id);
+      const overId = String(over.id);
+
+      // 跨分类拖拽：拖到分类 droppable 上
+      if (overId.startsWith("folder-")) {
+        const targetFolderId = overId.replace("folder-", "");
+        const item = items.find((i) => i.task_id === activeId);
+        if (item && item.folder_id !== targetFolderId) {
+          void moveTask(activeId, targetFolderId);
+          void fetchItems();
+        }
+        return;
+      }
+
+      // 拖到未分类区域
+      if (overId === "__uncategorized__") {
+        const item = items.find((i) => i.task_id === activeId);
+        if (item && item.folder_id !== null) {
+          void moveTask(activeId, null);
+          void fetchItems();
+        }
+        return;
+      }
+
+      // 同列表内排序
+      if (active.id !== over.id) {
+        reorderItems(activeId, overId);
+      }
     },
-    [reorderItems],
+    [items, moveTask, fetchItems, reorderItems],
   );
 
-  // ── 组件挂载时立即拉取一次待办列表 ──
+  // ── 组件挂载时立即拉取一次待办列表和分类列表 ──
   useEffect(() => {
     void fetchItems();
-  }, [fetchItems]);
+    void fetchFolders();
+  }, [fetchItems, fetchFolders]);
 
   // ── 监听后端 Rust 发出的 "data-changed" 事件，有变更时重新拉取 ──
   // 这样在其他窗口（如主面板）修改了数据后浮窗能自动刷新
   useEffect(() => {
     const unlistenPromise = listen(DATA_CHANGED_EVENT, () => {
       void fetchItems();
+      void fetchFolders();
     });
     return () => {
       // 清理：解除事件监听，防止内存泄漏
@@ -229,9 +284,9 @@ export function TodoOverlay() {
   const handleDragMouseDown = useCallback(
     async (e: React.MouseEvent) => {
       if (e.button !== 0) return;
-      // 检查点击目标是否是按钮或按钮的子元素
+      // 检查点击目标是否是按钮、输入框或它们的子元素
       const target = e.target as HTMLElement;
-      if (target.closest('button')) return;
+      if (target.closest('button, input, textarea')) return;
       e.preventDefault();
       await appWindow.startDragging();
     },
@@ -274,6 +329,29 @@ export function TodoOverlay() {
     },
     [],
   );
+
+  // ── 按 folder_id 分组 ──
+  const groupedByFolder = useMemo(() => {
+    const map: Record<string, typeof items> = {};
+    for (const item of items) {
+      const key = item.folder_id ?? "__uncategorized__";
+      if (!map[key]) map[key] = [];
+      map[key].push(item);
+    }
+    return map;
+  }, [items]);
+
+  // ── 每个分类下的任务数（用于 CategoryManager） ──
+  const taskCountByFolder = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const f of folders) {
+      counts[f.id] = (groupedByFolder[f.id] || []).length;
+    }
+    return counts;
+  }, [folders, groupedByFolder]);
+
+  // ── 未分类的任务 ──
+  const uncategorizedItems = groupedByFolder["__uncategorized__"] || [];
 
   // ── Render ──
 
@@ -412,6 +490,51 @@ export function TodoOverlay() {
 {/* flex-1 占位空间将后续按钮推到右侧（折叠时隐藏） */}
         {!collapsed && <div className="flex-1" />}
 
+        {/* ── 分类管理按钮 ── */}
+        {!collapsed && (
+        <div className="relative">
+          <button
+            type="button"
+            onClick={() => setShowCategoryManager(!showCategoryManager)}
+            className="rounded-lg p-1 text-slate-500 transition hover:bg-white/10 hover:text-slate-200"
+            title="分类管理"
+          >
+            <svg
+              className="h-4 w-4"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={2}
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M12 10.5v6m3-3H9m4.06-7.19l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12A2.25 2.25 0 004.5 20.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z"
+              />
+            </svg>
+          </button>
+          {showCategoryManager && (
+            <CategoryManager
+              folders={folders}
+              taskCountByFolder={taskCountByFolder}
+              onCreate={async (name) => {
+                await createFolder(name);
+                await fetchItems();
+              }}
+              onRename={async (id, name) => {
+                await renameFolder(id, name);
+                await fetchItems();
+              }}
+              onDelete={async (id) => {
+                await deleteFolder(id);
+                await fetchItems();
+              }}
+              onClose={() => setShowCategoryManager(false)}
+            />
+          )}
+        </div>
+        )}
+
         {/* ── "打开主面板"按钮（折叠时隐藏，仅保留折叠按钮和标题） ── */}
         {!collapsed && (
         <button
@@ -491,21 +614,43 @@ export function TodoOverlay() {
               <p className="mt-1 text-xs text-slate-600">所有任务已完成</p>
             </div>
           ) : (
-            /* ── 任务列表（可拖拽排序） ── */
+            /* ── 任务列表（按分类分组，可拖拽排序） ── */
             /* DndContext + SortableContext 提供拖拽排序能力 */
             <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
               <SortableContext items={items.map((i) => i.task_id)} strategy={verticalListSortingStrategy}>
                 <div className="divide-y divide-white/[3%]">
-                  {items.map((item) => (
-                    <SortableTodoItem
-                      key={item.task_id}
-                      item={item}
-                      isFading={fadingTaskIds.includes(item.task_id)}
-                      onToggleComplete={completeTask}
-                      onOpen={openDrawer}
-                      onRemoveTask={removeTaskAction}
-                    />
-                  ))}
+                  {/* 有分类的任务 — 按文件夹 sort_order 排列，始终显示所有分类 */}
+                  {folders.map((folder) => {
+                    const folderItems = groupedByFolder[folder.id] || [];
+                    return (
+                      <CategorySection
+                        key={folder.id}
+                        folderName={folder.name}
+                        folderId={folder.id}
+                        items={folderItems}
+                        isCollapsed={collapsedFolders.has(folder.id)}
+                        onToggleCollapse={() => toggleFolderCollapse(folder.id)}
+                        isFading={(taskId) => fadingTaskIds.includes(taskId)}
+                        onToggleComplete={completeTask}
+                        onOpen={openDrawer}
+                        onRemoveTask={removeTaskAction}
+                      />
+                    );
+                  })}
+
+                  {/* 分隔线（有分类且有未分类任务时显示） */}
+                  {folders.length > 0 && (
+                    <div className="border-t border-white/[6%]" />
+                  )}
+
+                  {/* 未分类任务（始终显示为 droppable 区域） */}
+                  <UncategorizedDropZone
+                    items={uncategorizedItems}
+                    isFading={(taskId) => fadingTaskIds.includes(taskId)}
+                    onToggleComplete={completeTask}
+                    onOpen={openDrawer}
+                    onRemoveTask={removeTaskAction}
+                  />
                 </div>
               </SortableContext>
             </DndContext>
@@ -559,5 +704,43 @@ export function TodoOverlay() {
       )}
     </div>
   </div>
+  );
+}
+
+// ── 未分类区域的 droppable 包装组件 ──
+function UncategorizedDropZone({
+  items,
+  isFading,
+  onToggleComplete,
+  onOpen,
+  onRemoveTask,
+}: {
+  items: UnfinishedTaskItem[];
+  isFading: (taskId: string) => boolean;
+  onToggleComplete: (taskId: string) => void;
+  onOpen: (recordId: string) => void;
+  onRemoveTask: (taskId: string) => void;
+}) {
+  const { setNodeRef, isOver } = useDroppable({ id: "__uncategorized__" });
+
+  return (
+    <div
+      ref={setNodeRef}
+      className={`${isOver ? "bg-emerald-400/10 ring-1 ring-emerald-400/30" : ""}`}
+    >
+      {items.length === 0 && (
+        <p className="px-3 py-2 text-[11px] text-slate-600">拖拽任务到这里移除分类</p>
+      )}
+      {items.map((item) => (
+        <SortableTodoItem
+          key={item.task_id}
+          item={item}
+          isFading={isFading(item.task_id)}
+          onToggleComplete={onToggleComplete}
+          onOpen={onOpen}
+          onRemoveTask={onRemoveTask}
+        />
+      ))}
+    </div>
   );
 }

@@ -507,6 +507,17 @@ pub struct UnfinishedTaskItem {
     pub attachment_count: i64,
     /// Sort order for drag-and-drop reordering. Lower values appear first.
     pub sort_order: i64,
+    /// Category folder ID (None = uncategorized).
+    pub folder_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Folder {
+    pub id: String,
+    pub name: String,
+    pub sort_order: i64,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }
 
 /// Full record payload returned by list-records / get-record-detail.

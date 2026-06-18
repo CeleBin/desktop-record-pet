@@ -15,7 +15,7 @@ use crate::models::{
     AiResult, AiTriggerMode, Attachment, AttachmentRole, AttachmentType, CreateAiResultRequest,
     CreateAttachmentRequest, CreateRecordRequest, CreateTaskRequest, Record, RecordAttachmentLink,
     RecordFilter, RecordSource, RecordStatus, RecordType, RecordWithRelations, SettingsEntry, Task,
-    TaskFilter, TaskPriority, TaskStatus, UnfinishedTaskItem, UpdateRecordRequest,
+    TaskFilter, TaskPriority, TaskStatus, UnfinishedTaskItem, UpdateRecordRequest, Folder,
 };
 
 pub struct Database {
@@ -127,6 +127,14 @@ pub fn run_migrations(conn: &Connection) -> AppResult<()> {
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS folders (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
         "#,
     )?;
 
@@ -141,6 +149,11 @@ pub fn run_migrations(conn: &Connection) -> AppResult<()> {
         .collect();
     if !tasks_columns.iter().any(|c| c == "sort_order") {
         conn.execute_batch("ALTER TABLE tasks ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0")?;
+    }
+
+    // ── Migration: add folder_id column to tasks if missing ──
+    if !tasks_columns.iter().any(|c| c == "folder_id") {
+        conn.execute_batch("ALTER TABLE tasks ADD COLUMN folder_id TEXT REFERENCES folders(id) ON DELETE CASCADE")?;
     }
 
     Ok(())
@@ -807,7 +820,8 @@ pub fn list_unfinished_tasks(conn: &Connection) -> AppResult<Vec<UnfinishedTaskI
         "SELECT t.id, t.record_id, t.task_status, t.priority, t.due_at, t.remind_at,
                 t.repeat_rule, t.completed_at, t.sort_order,
                 r.title, r.content, r.updated_at,
-                (SELECT COUNT(*) FROM record_attachments WHERE record_id = r.id) AS attachment_count
+                (SELECT COUNT(*) FROM record_attachments WHERE record_id = r.id) AS attachment_count,
+                t.folder_id
          FROM tasks t
          JOIN records r ON r.id = t.record_id
          WHERE t.task_status IN ('todo', 'doing')
@@ -829,6 +843,7 @@ pub fn list_unfinished_tasks(conn: &Connection) -> AppResult<Vec<UnfinishedTaskI
             record_content: row.get(10)?,
             record_updated_at: parse_datetime(&row.get::<_, String>(11)?)?,
             attachment_count: row.get(12)?,
+            folder_id: row.get(13)?,
         })
     })?;
 
@@ -847,6 +862,103 @@ pub fn reorder_tasks(conn: &Connection, order: &[(String, i64)]) -> AppResult<()
         conn.execute(
             "UPDATE tasks SET sort_order = ?2 WHERE id = ?1",
             params![task_id, sort_order],
+        )?;
+    }
+    conn.execute_batch("COMMIT")?;
+    Ok(())
+}
+
+// ── Folder CRUD ─────────────────────────────────────────────────
+
+pub fn list_folders(conn: &Connection) -> AppResult<Vec<Folder>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, name, sort_order, created_at, updated_at FROM folders ORDER BY sort_order ASC, created_at ASC",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok(Folder {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            sort_order: row.get(2)?,
+            created_at: parse_datetime(&row.get::<_, String>(3)?)?,
+            updated_at: parse_datetime(&row.get::<_, String>(4)?)?,
+        })
+    })?;
+    let folders = rows.collect::<Result<Vec<_>, _>>()?;
+    Ok(folders)
+}
+
+pub fn create_folder(conn: &Connection, name: &str) -> AppResult<Folder> {
+    let now = Utc::now();
+    let max_sort: i64 = conn
+        .query_row("SELECT COALESCE(MAX(sort_order), -1) FROM folders", [], |row| row.get(0))
+        .unwrap_or(-1);
+
+    let folder = Folder {
+        id: Uuid::new_v4().to_string(),
+        name: name.to_string(),
+        sort_order: max_sort + 1,
+        created_at: now,
+        updated_at: now,
+    };
+
+    conn.execute(
+        "INSERT INTO folders (id, name, sort_order, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![folder.id, folder.name, folder.sort_order, folder.created_at.to_rfc3339(), folder.updated_at.to_rfc3339()],
+    )?;
+
+    Ok(folder)
+}
+
+pub fn rename_folder(conn: &Connection, id: &str, name: &str) -> AppResult<Folder> {
+    let now = Utc::now();
+    conn.execute(
+        "UPDATE folders SET name = ?2, updated_at = ?3 WHERE id = ?1",
+        params![id, name, now.to_rfc3339()],
+    )?;
+
+    conn.query_row(
+        "SELECT id, name, sort_order, created_at, updated_at FROM folders WHERE id = ?1",
+        params![id],
+        |row| {
+            Ok(Folder {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                sort_order: row.get(2)?,
+                created_at: parse_datetime(&row.get::<_, String>(3)?)?,
+                updated_at: parse_datetime(&row.get::<_, String>(4)?)?,
+            })
+        },
+    )
+    .optional()?
+    .ok_or_else(|| AppError::NotFound(format!("folder {id}")))
+}
+
+pub fn delete_folder(conn: &Connection, id: &str) -> AppResult<()> {
+    conn.query_row("SELECT id FROM folders WHERE id = ?1", params![id], |_| Ok(()))
+        .optional()?
+        .ok_or_else(|| AppError::NotFound(format!("folder {id}")))?;
+
+    conn.execute("DELETE FROM folders WHERE id = ?1", params![id])?;
+    Ok(())
+}
+
+pub fn move_task_to_folder(conn: &Connection, task_id: &str, folder_id: Option<&str>) -> AppResult<()> {
+    let updated = conn.execute(
+        "UPDATE tasks SET folder_id = ?2 WHERE id = ?1",
+        params![task_id, folder_id],
+    )?;
+    if updated == 0 {
+        return Err(AppError::NotFound(format!("task {task_id}")));
+    }
+    Ok(())
+}
+
+pub fn reorder_folders(conn: &Connection, order: &[(String, i64)]) -> AppResult<()> {
+    conn.execute_batch("BEGIN")?;
+    for (folder_id, sort_order) in order {
+        conn.execute(
+            "UPDATE folders SET sort_order = ?2 WHERE id = ?1",
+            params![folder_id, sort_order],
         )?;
     }
     conn.execute_batch("COMMIT")?;
