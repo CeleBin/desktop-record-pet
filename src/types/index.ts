@@ -190,6 +190,60 @@ export interface FolderItem {
   updated_at: string;
 }
 
+// ── Recurrence / Repeat rules ──────────────────────────────────
+
+export type RepeatRule =
+  | { type: "daily" }
+  | { type: "weekdays" }
+  | { type: "weekly"; days: number[] };
+
+/** 将 RepeatRule 对象格式化为中文可读文字（例如 "每天"、"工作日"、"每周一、三"）。 */
+export function formatRepeatRule(rule: RepeatRule | null): string | null {
+  if (!rule) return null;
+  switch (rule.type) {
+    case "daily":
+      return "每天";
+    case "weekdays":
+      return "工作日";
+    case "weekly": {
+      const dayNames = ["一", "二", "三", "四", "五", "六", "日"];
+      return `每${rule.days.map((d) => `周${dayNames[d]}`).join("、")}`;
+    }
+  }
+}
+
+/** 将 RepeatRule 对象序列化为 JSON 字符串，null 返回 null。 */
+export function serializeRepeatRule(rule: RepeatRule | null): string | null {
+  return rule ? JSON.stringify(rule) : null;
+}
+
+/** 从 JSON 字符串反序列化 RepeatRule，无效时返回 null。 */
+export function parseRepeatRule(json: string | null): RepeatRule | null {
+  if (!json) return null;
+  try {
+    const parsed = JSON.parse(json);
+    if (
+      parsed &&
+      typeof parsed.type === "string" &&
+      ["daily", "weekdays", "weekly"].includes(parsed.type)
+    ) {
+      if (parsed.type === "weekly") {
+        if (
+          Array.isArray(parsed.days) &&
+          parsed.days.every((d: unknown) => typeof d === "number" && d >= 0 && d <= 6)
+        ) {
+          return parsed as RepeatRule;
+        }
+        return null;
+      }
+      return parsed as RepeatRule;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 // ── Shortcut commands ────────────────────────────────────────────
 
 export interface SetShortcutResult {

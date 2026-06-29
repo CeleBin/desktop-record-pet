@@ -120,6 +120,19 @@ export async function updateTaskDueAt(
   });
 }
 
+/**
+ * 更新任务的重复规则。
+ *
+ * @param taskId     任务 ID
+ * @param repeatRule 重复规则 JSON 字符串，传 null 表示取消重复
+ */
+export async function updateTaskRepeatRule(
+  taskId: string,
+  repeatRule: string | null,
+): Promise<TaskItem> {
+  return invoke<TaskItem>("update_task_repeat_rule", { taskId, repeatRule });
+}
+
 export async function removeTask(taskId: string): Promise<TaskItem> {
   return invoke<TaskItem>("remove_task", { taskId });
 }

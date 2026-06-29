@@ -37,6 +37,7 @@ import {
   showMainPanel,
   updateRecord,
   updateTaskStatus,
+  updateTaskRepeatRule,
 } from "../../lib/tauri";
 // Zustand 状态管理：todoOverlay store 持有浮窗的条目、折叠态、Drawer 等
 import { useTodoOverlayStore } from "../../store/todoOverlay";
@@ -270,6 +271,15 @@ export function TodoOverlay() {
     [fetchItems],
   );
 
+  // 更新任务重复规则
+  const handleUpdateRepeatRule = useCallback(
+    async (taskId: string, repeatRule: string | null) => {
+      await updateTaskRepeatRule(taskId, repeatRule);
+      await fetchItems();
+    },
+    [fetchItems],
+  );
+
   // ── 派生数据 ──
   // 根据 drawerRecordId 从 items 中找到对应的记录对象，
   // 找不到或 drawerRecordId 为 null 时 drawerItem 为 null
@@ -365,11 +375,10 @@ export function TodoOverlay() {
    *      d. Drawer 侧边面板（条件渲染）
    *   3. 原生缩放拖拽手柄（右下角，z-50 保证在最上层）
    *
-   * 注意：移除了根 div 的 h-screen，允许内容高度由子元素自然决定，
-   * 这样在折叠时容器高度能正确塌陷，展开时也能正确扩展。
+   * 注意：非折叠时使用 h-screen 填充窗口高度，折叠时使用 w-fit 收缩。
    */
   return (
-    <div className={`relative flex flex-col overflow-hidden${collapsed ? " w-fit" : ""}`}>
+    <div className={`relative flex flex-col overflow-hidden${collapsed ? " w-fit" : " h-screen"}`}>
       {/* ── 半透明遮罩背景 ── */}
       {/*
         使用 backdrop-blur-xl 毛玻璃效果模糊背后内容；
@@ -386,7 +395,7 @@ export function TodoOverlay() {
       {/* 不设 h-screen，容器高度由子元素自然决定；折叠时列表被条件渲染卸载，高度自动塌陷 */}
       <div
         ref={containerRef}
-        className="relative z-10 flex flex-col overflow-hidden"
+        className={`relative z-10 flex flex-col overflow-hidden${collapsed ? "" : " flex-1"}`}
       >
         {/* ── 错误提示条 ── */}
         {/*
@@ -673,6 +682,7 @@ export function TodoOverlay() {
           onUpdateContent={handleUpdateContent}
           onUpdateTaskStatus={handleUpdateTaskStatus}
           onUpdateDueAt={updateDueAt}
+          onUpdateRepeatRule={handleUpdateRepeatRule}
         />
       )}
 

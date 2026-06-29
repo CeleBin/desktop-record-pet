@@ -211,6 +211,7 @@ pub fn run() {
             commands::list_tasks,
             commands::update_task_status,
             commands::update_task_due_at,
+            commands::update_task_repeat_rule,
             commands::remove_task,
             commands::list_unfinished_tasks,
             commands::reorder_tasks,

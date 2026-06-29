@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import type { TaskStatus, UnfinishedTaskItem } from "../../types";
+import type { RepeatRule, TaskStatus, UnfinishedTaskItem } from "../../types";
+import { formatRepeatRule, parseRepeatRule } from "../../types";
 import { DatePicker } from "./DatePicker";
 
 /**
@@ -21,6 +22,7 @@ interface TodoDrawerProps {
   onUpdateContent: (recordId: string, content: string) => Promise<void>;
   onUpdateTaskStatus: (taskId: string, status: TaskStatus) => Promise<void>;
   onUpdateDueAt: (recordId: string, taskId: string, dueAt: string | null) => Promise<void>;
+  onUpdateRepeatRule: (taskId: string, repeatRule: string | null) => Promise<void>;
 }
 
 /**
@@ -87,6 +89,7 @@ export function TodoDrawer({
   onUpdateContent,
   onUpdateTaskStatus,
   onUpdateDueAt,
+  onUpdateRepeatRule,
 }: TodoDrawerProps) {
   // item 不为 null 时抽屉打开，否则不渲染
   const isOpen = item !== null;
@@ -99,6 +102,7 @@ export function TodoDrawer({
 
   const [updatingStatus, setUpdatingStatus] = useState(false); // 状态切换请求进行中
   const [showDatePicker, setShowDatePicker] = useState(false); // 日期选择器可见性
+  const [showRepeatPicker, setShowRepeatPicker] = useState(false); // 重复规则选择器可见性
 
   // 标题 input 的 ref，用于自动聚焦
   const titleRef = useRef<HTMLInputElement>(null);
@@ -497,6 +501,103 @@ export function TodoDrawer({
               })()}
             </section>
 
+            {/**
+              * ── 重复规则 ──
+              * 点击按钮展开/收起重复规则选择器。
+              * 支持四种模式：不重复、每天、工作日、每周（可选多日）。
+              * 选择后调用 onUpdateRepeatRule 保存。
+              */}
+            <section>
+              <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.2em] text-slate-500">
+                重复
+              </p>
+              <div>
+                <button
+                  type="button"
+                  onClick={() => setShowRepeatPicker((v) => !v)}
+                  className="flex w-full items-center gap-2 rounded-lg border border-white/10
+                    bg-slate-900/80 px-3 py-2 text-sm transition
+                    hover:border-white/20"
+                >
+                  {/* 循环图标 */}
+                  <svg
+                    className="h-4 w-4 shrink-0 text-slate-500"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    strokeWidth={1.5}
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182"
+                    />
+                  </svg>
+
+                  {(() => {
+                    const rule = parseRepeatRule(item.repeat_rule);
+                    return rule ? (
+                      <span className="text-emerald-400">{formatRepeatRule(rule)}</span>
+                    ) : (
+                      <span className="italic text-slate-500">不重复</span>
+                    );
+                  })()}
+
+                  <div className="flex-1" />
+
+                  {/* 展开/收起箭头 */}
+                  <svg
+                    className={`h-3.5 w-3.5 text-slate-500 transition-transform duration-200 ${
+                      showRepeatPicker ? "rotate-180" : ""
+                    }`}
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    strokeWidth={2}
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+                  </svg>
+                </button>
+
+                {showRepeatPicker && (
+                  <div className="mt-2 space-y-1 rounded-lg border border-white/10 bg-slate-900/80 p-2">
+                    <RepeatOption
+                      label="不重复"
+                      active={!item.repeat_rule}
+                      onClick={async () => {
+                        await onUpdateRepeatRule(item.task_id, null);
+                        setShowRepeatPicker(false);
+                      }}
+                    />
+                    <RepeatOption
+                      label="每天"
+                      active={item.repeat_rule?.startsWith('{"type":"daily"}') ?? false}
+                      onClick={async () => {
+                        await onUpdateRepeatRule(item.task_id, '{"type":"daily"}');
+                        setShowRepeatPicker(false);
+                      }}
+                    />
+                    <RepeatOption
+                      label="工作日"
+                      active={item.repeat_rule?.startsWith('{"type":"weekdays"}') ?? false}
+                      onClick={async () => {
+                        await onUpdateRepeatRule(item.task_id, '{"type":"weekdays"}');
+                        setShowRepeatPicker(false);
+                      }}
+                    />
+                    <WeeklyRepeatOption
+                      currentRule={parseRepeatRule(item.repeat_rule)}
+                      onSelect={async (days: number[]) => {
+                        const rule: RepeatRule = { type: "weekly", days };
+                        await onUpdateRepeatRule(item.task_id, JSON.stringify(rule));
+                      }}
+                      onClose={() => setShowRepeatPicker(false)}
+                    />
+                  </div>
+                )}
+              </div>
+            </section>
+
             {/* 内容编辑区 */}
             <section>
               <p className="mb-1.5 text-[10px] font-medium uppercase tracking-[0.2em] text-slate-500">
@@ -593,5 +694,128 @@ export function TodoDrawer({
         </div>
       </div>
     </>
+  );
+}
+
+/**
+ * 重复规则单选按钮。
+ * 在弹出菜单中渲染一个选项，active 时高亮为翠绿色。
+ */
+function RepeatOption({
+  label,
+  active,
+  onClick,
+}: {
+  label: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`flex w-full items-center rounded-md px-3 py-1.5 text-left text-sm transition ${
+        active
+          ? "bg-emerald-400/10 text-emerald-400"
+          : "text-slate-400 hover:bg-white/5 hover:text-slate-200"
+      }`}
+    >
+      {label}
+      {active && (
+        <svg className="ml-auto h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+        </svg>
+      )}
+    </button>
+  );
+}
+
+/**
+ * 每周重复规则选择器。
+ * 展示一周七天（周一至周日）的按钮，支持多选。
+ * 当前规则对应的日期会高亮，点击切换选中状态。
+ */
+function WeeklyRepeatOption({
+  currentRule,
+  onSelect,
+  onClose,
+}: {
+  currentRule: RepeatRule | null;
+  onSelect: (days: number[]) => void;
+  onClose: () => void;
+}) {
+  const dayLabels = ["一", "二", "三", "四", "五", "六", "日"];
+  const isWeekly = currentRule?.type === "weekly";
+  const currentDays: number[] = isWeekly ? (currentRule as Extract<RepeatRule, { type: "weekly" }>).days : [];
+  const [selectedDays, setSelectedDays] = useState<number[]>(currentDays);
+
+  const toggleDay = (day: number) => {
+    setSelectedDays((prev) =>
+      prev.includes(day) ? prev.filter((d) => d !== day) : [...prev, day].sort(),
+    );
+  };
+
+  const isActive = isWeekly && currentDays.length > 0;
+
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => {
+          // 点击"每周"标签切换展开/收起
+          if (isActive) {
+            // 已选中，点击关闭
+            void onSelect([]);
+            onClose();
+          }
+        }}
+        className={`flex w-full items-center rounded-md px-3 py-1.5 text-left text-sm transition ${
+          isActive
+            ? "bg-emerald-400/10 text-emerald-400"
+            : "text-slate-400 hover:bg-white/5 hover:text-slate-200"
+        }`}
+      >
+        每周
+        {isActive && (
+          <svg className="ml-auto h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+          </svg>
+        )}
+      </button>
+      {/* 星期选择按钮 */}
+      <div className="mt-1 flex flex-wrap gap-1 px-1">
+        {dayLabels.map((label, index) => {
+          const day = index; // 0=周一, 6=周日
+          const selected = selectedDays.includes(day);
+          return (
+            <button
+              key={day}
+              type="button"
+              onClick={() => toggleDay(day)}
+              className={`rounded-md px-2 py-1 text-xs transition ${
+                selected
+                  ? "bg-emerald-400/20 text-emerald-400 ring-1 ring-emerald-400/30"
+                  : "bg-white/5 text-slate-500 hover:bg-white/10 hover:text-slate-300"
+              }`}
+            >
+              {label}
+            </button>
+          );
+        })}
+      </div>
+      {/* 确认按钮 */}
+      {selectedDays.length > 0 && (
+        <button
+          type="button"
+          onClick={async () => {
+            await onSelect(selectedDays);
+            onClose();
+          }}
+          className="mt-2 w-full rounded-md bg-emerald-400/20 px-3 py-1.5 text-xs font-medium text-emerald-400 transition hover:bg-emerald-400/30"
+        >
+          确定
+        </button>
+      )}
+    </div>
   );
 }

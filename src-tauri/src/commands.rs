@@ -447,6 +447,28 @@ pub fn remove_task(app: AppHandle, database: State<'_, Database>, task_id: Strin
     Ok(task)
 }
 
+/// 更新任务的重复规则（或清除）。
+///
+/// `repeat_rule` 为 JSON 字符串，例如 `{"type":"daily"}`，
+/// 传 `null` 清除重复规则。
+#[tauri::command]
+pub fn update_task_repeat_rule(
+    app: AppHandle,
+    database: State<'_, Database>,
+    task_id: String,
+    repeat_rule: Option<String>,
+) -> AppResult<Task> {
+    if task_id.trim().is_empty() {
+        return Err(AppError::Validation("task id is required".into()));
+    }
+    let task = {
+        let conn = database.conn.lock()?;
+        db::update_task_repeat_rule(&conn, &task_id, repeat_rule.as_deref())?
+    };
+    emit_data_changed(&app)?;
+    Ok(task)
+}
+
 /// Return all unfinished tasks (todo / doing) with linked record fields
 /// and attachment count, ordered by most-recently-updated first.
 #[tauri::command]

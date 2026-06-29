@@ -196,12 +196,14 @@ export const useTodoOverlayStore = create<TodoOverlayState>((set, get) => ({
         fadingTaskIds: [...state.fadingTaskIds, taskId],
         loading: false,
       }));
-      // 2 秒后从列表和淡出集合中同时移除
+      // 2 秒后从列表和淡出集合中同时移除，然后刷新以获取可能新创建的重复任务
       setTimeout(() => {
         set((state) => ({
           items: state.items.filter((item) => item.task_id !== taskId),
           fadingTaskIds: state.fadingTaskIds.filter((id) => id !== taskId),
         }));
+        // 刷新列表——如果完成的任务带有 repeat_rule，后端会创建下一次任务并发出 data-changed 事件
+        get().fetchItems();
       }, 2000);
     } catch (error) {
       set({

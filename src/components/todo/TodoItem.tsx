@@ -204,6 +204,28 @@ export function TodoItem({
           </span>
 
           {/**
+            * 重复规则图标。
+            * 当任务设置了 repeat_rule 时，显示一个循环箭头图标。
+            */}
+          {item.repeat_rule && (
+            <span className="inline-flex items-center text-[10px] text-emerald-400" title="重复任务">
+              <svg
+                className="h-3 w-3"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth={2}
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182"
+                />
+              </svg>
+            </span>
+          )}
+
+          {/**
             * 截止日期显示。
             * 仅当 item.due_at 非空且能解析为有效日期时才渲染。
             * 使用 getDueDateInfo 计算相对天数并决定颜色（过期红/临期橙/未来灰）。

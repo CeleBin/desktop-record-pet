@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 // Task 2 intentionally defines the shared domain surface ahead of command wiring.
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Datelike, Utc};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -339,6 +339,70 @@ pub struct Task {
     pub repeat_rule: Option<String>,
     pub completed_at: Option<DateTime<Utc>>,
     pub sort_order: i64,
+}
+
+// ── Recurrence / Repeat rule ────────────────────────────────────
+
+/// 任务重复规则，与前端 `RepeatRule` 类型保持同步。
+/// 序列化为 `{ "type": "daily" }` / `{ "type": "weekdays" }` /
+/// `{ "type": "weekly", "days": [0, 2, 4] }`（0=周一, 6=周日）。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type")]
+pub enum RepeatRule {
+    #[serde(rename = "daily")]
+    Daily,
+    #[serde(rename = "weekdays")]
+    Weekdays,
+    #[serde(rename = "weekly")]
+    Weekly { days: Vec<u32> },
+}
+
+impl RepeatRule {
+    /// 从 JSON 字符串解析。空字符串或无效 JSON 返回 `None`。
+    pub fn from_json(s: &str) -> Option<Self> {
+        serde_json::from_str(s).ok()
+    }
+
+    /// 序列化为 JSON 字符串。
+    pub fn to_json(&self) -> String {
+        serde_json::to_string(self).unwrap_or_default()
+    }
+
+    /// 计算 `after` 日期之后的下一次出现日期（不含当天）。
+    ///
+    /// * `Daily` → `after + 1`
+    /// * `Weekdays` → 下一个周一至周五
+    /// * `Weekly { days }` → 本周内下一个匹配的星期几，若已过则跳到下周第一个
+    pub fn next_date(&self, after: chrono::NaiveDate) -> Option<chrono::NaiveDate> {
+        match self {
+            RepeatRule::Daily => Some(after + chrono::Duration::days(1)),
+            RepeatRule::Weekdays => {
+                let mut next = after + chrono::Duration::days(1);
+                loop {
+                    let weekday = next.weekday().num_days_from_monday(); // 0=Mon..6=Sun
+                    if weekday <= 4 {
+                        return Some(next);
+                    }
+                    next = next + chrono::Duration::days(1);
+                }
+            }
+            RepeatRule::Weekly { days } => {
+                if days.is_empty() {
+                    return None;
+                }
+                let today_weekday = after.weekday().num_days_from_monday(); // 0=Mon
+                for &day in days {
+                    if day > today_weekday {
+                        return Some(after + chrono::Duration::days((day - today_weekday) as i64));
+                    }
+                }
+                // 本周已无匹配，跳到下周第一个
+                let first = days[0];
+                let offset = 7 - today_weekday + first;
+                Some(after + chrono::Duration::days(offset as i64))
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

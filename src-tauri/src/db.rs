@@ -14,8 +14,9 @@ use crate::errors::{AppError, AppResult};
 use crate::models::{
     AiResult, AiTriggerMode, Attachment, AttachmentRole, AttachmentType, CreateAiResultRequest,
     CreateAttachmentRequest, CreateRecordRequest, CreateTaskRequest, Record, RecordAttachmentLink,
-    RecordFilter, RecordSource, RecordStatus, RecordType, RecordWithRelations, SettingsEntry, Task,
-    TaskFilter, TaskPriority, TaskStatus, UnfinishedTaskItem, UpdateRecordRequest, Folder,
+    RecordFilter, RecordSource, RecordStatus, RecordType, RecordWithRelations, RepeatRule,
+    SettingsEntry, Task, TaskFilter, TaskPriority, TaskStatus, UnfinishedTaskItem,
+    UpdateRecordRequest, Folder,
 };
 
 pub struct Database {
@@ -395,8 +396,53 @@ pub fn list_tasks(conn: &Connection) -> AppResult<Vec<Task>> {
 pub fn update_task_status(conn: &Connection, id: &str, task_status: TaskStatus) -> AppResult<Task> {
     let mut task = get_task(conn, id)?;
     task.task_status = task_status;
+    let now = Utc::now();
     if task_status == TaskStatus::Done {
-        task.completed_at = Some(Utc::now());
+        task.completed_at = Some(now);
+
+        // 如果是重复任务，创建一个新的 Record + Task 作为下一次出现
+        if let Some(ref rule_json) = task.repeat_rule {
+            if let Some(rule) = RepeatRule::from_json(rule_json) {
+                let base_date = task
+                    .due_at
+                    .map(|dt| dt.date_naive())
+                    .unwrap_or_else(|| now.date_naive());
+                if let Some(next_date) = rule.next_date(base_date) {
+                    let next_dt = next_date
+                        .and_hms_opt(0, 0, 0)
+                        .and_then(|t| t.and_local_timezone(Utc).earliest())
+                        .unwrap_or(now);
+
+                    // 获取原记录内容并创建新记录
+                    if let Ok(record) = get_record(conn, &task.record_id) {
+                        let new_record = insert_record(
+                            conn,
+                            CreateRecordRequest {
+                                record_type: Some(RecordType::Task),
+                                title: record.title.clone(),
+                                content: record.content.clone(),
+                                source: record.source,
+                                create_as_task: false,
+                                attachment_ids: vec![],
+                            },
+                        )?;
+
+                        // 为新记录创建任务（设置下次出现日期和相同重复规则）
+                        let _new_task = insert_task(
+                            conn,
+                            CreateTaskRequest {
+                                record_id: new_record.id,
+                                task_status: Some(TaskStatus::Todo),
+                                priority: Some(task.priority),
+                                due_at: Some(next_dt),
+                                remind_at: task.remind_at,
+                                repeat_rule: task.repeat_rule.clone(),
+                            },
+                        )?;
+                    }
+                }
+            }
+        }
     }
 
     conn.execute(
@@ -406,6 +452,23 @@ pub fn update_task_status(conn: &Connection, id: &str, task_status: TaskStatus) 
             task.task_status.as_str(),
             task.completed_at.map(|value| value.to_rfc3339()),
         ],
+    )?;
+
+    Ok(task)
+}
+
+/// 更新任务的重复规则。
+pub fn update_task_repeat_rule(
+    conn: &Connection,
+    id: &str,
+    repeat_rule: Option<&str>,
+) -> AppResult<Task> {
+    let mut task = get_task(conn, id)?;
+    task.repeat_rule = repeat_rule.map(String::from);
+
+    conn.execute(
+        "UPDATE tasks SET repeat_rule = ?2 WHERE id = ?1",
+        params![task.id, task.repeat_rule],
     )?;
 
     Ok(task)
@@ -808,6 +871,32 @@ pub fn convert_record_to_task(conn: &Connection, record_id: &str) -> AppResult<T
             repeat_rule: None,
         },
     )
+}
+
+/// 刷新已到期的重复任务：将 status=done 且 repeat_rule 不为空、
+/// 且 due_at 已到今天的任务重置为 "todo" 状态。
+///
+/// 这样用户完成一个"每天"任务后它会消失，第二天自动重新出现。
+pub fn refresh_recurring_tasks(conn: &Connection) -> AppResult<()> {
+    let now = Utc::now();
+    let today = now.date_naive();
+    // 用当天 00:00:00 UTC 作为比较阈值，所有 due_at <= 今天 00:00 的任务都该刷新
+    let threshold = today
+        .and_hms_opt(0, 0, 0)
+        .and_then(|t| t.and_local_timezone(Utc).earliest())
+        .unwrap_or(now);
+
+    conn.execute(
+        "UPDATE tasks SET task_status = 'todo', completed_at = NULL
+         WHERE task_status = 'done'
+           AND repeat_rule IS NOT NULL
+           AND repeat_rule != ''
+           AND due_at IS NOT NULL
+           AND due_at <= ?1",
+        params![threshold.to_rfc3339()],
+    )?;
+
+    Ok(())
 }
 
 /// Return all tasks with status `todo` or `doing`, joined with the linked
