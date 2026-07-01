@@ -149,9 +149,9 @@ export function MainPanel() {
   );
 
   return (
-    <div className="flex h-screen overflow-hidden bg-slate-950 text-slate-100">
+    <div className="flex h-screen overflow-hidden bg-bg text-text">
       {/* ── Left: Navigation sidebar ── */}
-      <aside className="w-[200px] shrink-0 border-r border-white/[5%] bg-slate-950/50">
+      <aside className="w-[200px] shrink-0 border-r border-border bg-bg/50">
         <Navigation
           viewMode={viewMode}
           activeType={activeType}
@@ -169,7 +169,7 @@ export function MainPanel() {
       </aside>
 
       {/* ── Middle: Record list or Settings ── */}
-      <section className="flex w-[360px] shrink-0 flex-col border-r border-white/[5%] bg-slate-950/30">
+      <section className="flex w-[360px] shrink-0 flex-col border-r border-border bg-bg/30">
         {showSettings ? (
           <SettingsPanel onClose={() => setShowSettings(false)} />
         ) : (
@@ -185,7 +185,7 @@ export function MainPanel() {
       </section>
 
       {/* ── Right: Record detail ── */}
-      <section className="flex min-w-0 flex-1 flex-col bg-slate-950/20">
+      <section className="flex min-w-0 flex-1 flex-col bg-bg/20">
         <RecordDetail
           record={selectedRecord}
           loading={recordsLoading}

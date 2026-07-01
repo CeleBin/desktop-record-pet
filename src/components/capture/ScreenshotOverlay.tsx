@@ -180,14 +180,14 @@ export function ScreenshotOverlay() {
 
       {/* Instruction hint -- shown before any selection */}
       {!selection && !isDragging && (
-        <div className="pointer-events-none fixed bottom-8 left-1/2 -translate-x-1/2 rounded-full border border-white/10 bg-slate-950/80 px-5 py-2 text-xs text-slate-300 backdrop-blur">
+        <div className="pointer-events-none fixed bottom-8 left-1/2 -translate-x-1/2 rounded-full border border-border bg-bg/80 px-5 py-2 text-xs text-text backdrop-blur">
           拖拽选择截图区域 / Enter 确认 / Esc 取消
         </div>
       )}
 
       {capturing && (
         <div className="pointer-events-none fixed inset-0 flex items-center justify-center">
-          <div className="rounded-2xl border border-sky-400/20 bg-slate-950/90 px-6 py-3 text-sm text-sky-300 backdrop-blur">
+          <div className="rounded-2xl border border-sky-400/20 bg-bg/90 px-6 py-3 text-sm text-sky-300 backdrop-blur">
             正在截图…
           </div>
         </div>

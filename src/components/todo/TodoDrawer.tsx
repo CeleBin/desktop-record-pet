@@ -39,9 +39,9 @@ const STATUS_OPTIONS: {
   {
     label: "待办",
     value: "todo",
-    dot: "bg-amber-400",
+    dot: "bg-primary",
     activeClasses:
-      "bg-amber-400/20 text-amber-300 ring-1 ring-amber-400/30",
+      "bg-primary/20 text-primary ring-1 ring-primary/30",
   },
   {
     label: "进行中",
@@ -52,16 +52,16 @@ const STATUS_OPTIONS: {
   {
     label: "已完成",
     value: "done",
-    dot: "bg-emerald-400",
+    dot: "bg-secondary",
     activeClasses:
-      "bg-emerald-400/20 text-emerald-300 ring-1 ring-emerald-400/30",
+      "bg-secondary/20 text-secondary ring-1 ring-secondary/30",
   },
   {
     label: "已取消",
     value: "cancelled",
-    dot: "bg-slate-400",
+    dot: "bg-text-muted",
     activeClasses:
-      "bg-slate-500/20 text-slate-400 ring-1 ring-slate-400/20",
+      "bg-text-muted/20 text-text-muted ring-1 ring-text-muted/20",
   },
 ];
 
@@ -258,17 +258,17 @@ export function TodoDrawer({
 
         {/*
           右侧抽屉面板：固定宽度 340px，不可收缩（shrink-0）。
-          半透明深色背景（bg-slate-950/90）加上 backdrop-blur-2xl 毛玻璃。
+          半透明深色背景（bg-bg/90）加上 backdrop-blur-2xl 毛玻璃。
           左侧细边框用于与遮罩区分。
         */}
         <div
           ref={drawerRef}
           className="drawer-panel flex w-[340px] shrink-0 flex-col overflow-hidden
-            border-l border-white/[6%] bg-slate-950/90 backdrop-blur-2xl"
+            border-l border-border bg-bg/90 backdrop-blur-2xl"
         >
           {/* ── 顶部栏 ── */}
-          <div className="flex shrink-0 items-center gap-2 border-b border-white/5 px-4 py-3">
-            <span className="text-[10px] font-medium uppercase tracking-[0.2em] text-slate-500">
+          <div className="flex shrink-0 items-center gap-2 border-b border-border px-4 py-3">
+            <span className="text-[10px] font-medium uppercase tracking-[0.2em] text-text0">
               编辑
             </span>
             <div className="flex-1" />
@@ -278,7 +278,7 @@ export function TodoDrawer({
             <button
               type="button"
               onClick={onClose}
-              className="rounded-lg p-1 text-slate-500 transition hover:bg-white/10 hover:text-slate-200"
+              className="rounded-lg p-1 text-text0 transition hover:bg-white/10 hover:text-text"
             >
               <svg
                 className="h-4 w-4"
@@ -317,10 +317,10 @@ export function TodoDrawer({
                     }
                   }}
                   placeholder="添加标题…"
-                  className="w-full rounded-lg border border-white/10 bg-slate-900/80
-                    px-3 py-2 text-sm font-medium text-slate-100 outline-none
-                    transition focus:border-emerald-400/40 focus:ring-2
-                    focus:ring-emerald-400/20"
+                  className="w-full rounded-lg border border-border bg-surface/80
+                    px-3 py-2 text-sm font-medium text-text outline-none
+                    transition focus:border-secondary/40 focus:ring-2
+                    focus:ring-secondary/20"
                 />
               ) : (
                 <button
@@ -328,12 +328,12 @@ export function TodoDrawer({
                   onClick={startEditTitle}
                   className="group w-full text-left"
                 >
-                  <h3 className="text-sm font-medium leading-6 text-slate-200 transition group-hover:text-emerald-300">
+                  <h3 className="text-sm font-medium leading-6 text-text transition group-hover:text-secondary">
                     {displayTitle(item) || (
-                      <span className="italic text-slate-500">无标题</span>
+                      <span className="italic text-text0">无标题</span>
                     )}
                   </h3>
-                  <span className="mt-0.5 block text-[10px] text-slate-600 opacity-0 transition group-hover:opacity-100">
+                  <span className="mt-0.5 block text-[10px] text-text-muted opacity-0 transition group-hover:opacity-100">
                     点击编辑
                   </span>
                 </button>
@@ -342,7 +342,7 @@ export function TodoDrawer({
 
             {/* 任务状态切换 */}
             <section>
-              <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.2em] text-slate-500">
+              <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.2em] text-text0">
                 任务状态
               </p>
               <div className="flex flex-wrap gap-1.5">
@@ -360,7 +360,7 @@ export function TodoDrawer({
                         ${
                           isActive
                             ? opt.activeClasses
-                            : "bg-white/5 text-slate-400 hover:bg-white/10 hover:text-slate-200"
+                            : "bg-white/5 text-text-muted hover:bg-white/10 hover:text-text"
                         }
                         disabled:cursor-not-allowed disabled:opacity-60
                       `}
@@ -391,15 +391,15 @@ export function TodoDrawer({
               * 显示文字根据到期情况自动变色：过期=红，3天内=橙，未来=灰。
               */}
             <section>
-              <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.2em] text-slate-500">
+              <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.2em] text-text0">
                 截止日期
               </p>
               {(() => {
                 /**
                  * 将 "YYYY-MM-DD" 字符串解析为中文本地化显示，附带颜色编码。
-                 * - 已过期：玫瑰色（text-rose-400）
-                 * - 今天/3天内：琥珀色（text-amber-400）
-                 * - 未来：默认灰色（text-slate-500）
+                 * - 已过期：玫瑰色（text-danger）
+                 * - 今天/3天内：琥珀色（text-primary）
+                 * - 未来：默认灰色（text-text0）
                  */
                 function getDueDisplay(dueAt: string | null): {
                   display: string;
@@ -416,10 +416,10 @@ export function TodoDrawer({
                   const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24));
                   const dateStr = `${m}月${d}日`;
 
-                  if (diffDays < 0) return { display: `${dateStr} · 已过期`, className: "text-rose-400" };
-                  if (diffDays === 0) return { display: `${dateStr} · 今天到期`, className: "text-amber-400" };
-                  if (diffDays <= 3) return { display: `${dateStr} · ${diffDays}天后`, className: "text-amber-400" };
-                  return { display: `${dateStr} · ${diffDays}天后`, className: "text-slate-500" };
+                  if (diffDays < 0) return { display: `${dateStr} · 已过期`, className: "text-danger" };
+                  if (diffDays === 0) return { display: `${dateStr} · 今天到期`, className: "text-primary" };
+                  if (diffDays <= 3) return { display: `${dateStr} · ${diffDays}天后`, className: "text-primary" };
+                  return { display: `${dateStr} · ${diffDays}天后`, className: "text-text0" };
                 }
 
                 const dueInfo = item.due_at ? getDueDisplay(item.due_at) : null;
@@ -429,13 +429,13 @@ export function TodoDrawer({
                     <button
                       type="button"
                       onClick={() => setShowDatePicker((v) => !v)}
-                      className="flex w-full items-center gap-2 rounded-lg border border-white/10
-                        bg-slate-900/80 px-3 py-2 text-sm transition
+                      className="flex w-full items-center gap-2 rounded-lg border border-border
+                        bg-surface/80 px-3 py-2 text-sm transition
                         hover:border-white/20"
                     >
                       {/* 日历图标 */}
                       <svg
-                        className="h-4 w-4 shrink-0 text-slate-500"
+                        className="h-4 w-4 shrink-0 text-text0"
                         fill="none"
                         viewBox="0 0 24 24"
                         stroke="currentColor"
@@ -453,14 +453,14 @@ export function TodoDrawer({
                       {dueInfo ? (
                         <span className={`${dueInfo.className}`}>{dueInfo.display}</span>
                       ) : (
-                        <span className="italic text-slate-500">未设置</span>
+                        <span className="italic text-text0">未设置</span>
                       )}
 
                       <div className="flex-1" />
 
                       {/* 展开/收起箭头 */}
                       <svg
-                        className={`h-3.5 w-3.5 text-slate-500 transition-transform duration-200 ${
+                        className={`h-3.5 w-3.5 text-text0 transition-transform duration-200 ${
                           showDatePicker ? "rotate-180" : ""
                         }`}
                         fill="none"
@@ -508,20 +508,20 @@ export function TodoDrawer({
               * 选择后调用 onUpdateRepeatRule 保存。
               */}
             <section>
-              <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.2em] text-slate-500">
+              <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.2em] text-text0">
                 重复
               </p>
               <div>
                 <button
                   type="button"
                   onClick={() => setShowRepeatPicker((v) => !v)}
-                  className="flex w-full items-center gap-2 rounded-lg border border-white/10
-                    bg-slate-900/80 px-3 py-2 text-sm transition
+                  className="flex w-full items-center gap-2 rounded-lg border border-border
+                    bg-surface/80 px-3 py-2 text-sm transition
                     hover:border-white/20"
                 >
                   {/* 循环图标 */}
                   <svg
-                    className="h-4 w-4 shrink-0 text-slate-500"
+                    className="h-4 w-4 shrink-0 text-text0"
                     fill="none"
                     viewBox="0 0 24 24"
                     stroke="currentColor"
@@ -537,9 +537,9 @@ export function TodoDrawer({
                   {(() => {
                     const rule = parseRepeatRule(item.repeat_rule);
                     return rule ? (
-                      <span className="text-emerald-400">{formatRepeatRule(rule)}</span>
+                      <span className="text-secondary">{formatRepeatRule(rule)}</span>
                     ) : (
-                      <span className="italic text-slate-500">不重复</span>
+                      <span className="italic text-text0">不重复</span>
                     );
                   })()}
 
@@ -547,7 +547,7 @@ export function TodoDrawer({
 
                   {/* 展开/收起箭头 */}
                   <svg
-                    className={`h-3.5 w-3.5 text-slate-500 transition-transform duration-200 ${
+                    className={`h-3.5 w-3.5 text-text0 transition-transform duration-200 ${
                       showRepeatPicker ? "rotate-180" : ""
                     }`}
                     fill="none"
@@ -560,7 +560,7 @@ export function TodoDrawer({
                 </button>
 
                 {showRepeatPicker && (
-                  <div className="mt-2 space-y-1 rounded-lg border border-white/10 bg-slate-900/80 p-2">
+                  <div className="mt-2 space-y-1 rounded-lg border border-border bg-surface/80 p-2">
                     <RepeatOption
                       label="不重复"
                       active={!item.repeat_rule}
@@ -600,7 +600,7 @@ export function TodoDrawer({
 
             {/* 内容编辑区 */}
             <section>
-              <p className="mb-1.5 text-[10px] font-medium uppercase tracking-[0.2em] text-slate-500">
+              <p className="mb-1.5 text-[10px] font-medium uppercase tracking-[0.2em] text-text0">
                 内容
               </p>
               {editingContent ? (
@@ -616,10 +616,10 @@ export function TodoDrawer({
                   }}
                   placeholder="添加内容…"
                   rows={4}
-                  className="w-full resize-none rounded-lg border border-white/10
-                    bg-slate-900/80 px-3 py-2 text-sm leading-6 text-slate-100
-                    outline-none transition focus:border-emerald-400/40
-                    focus:ring-2 focus:ring-emerald-400/20"
+                  className="w-full resize-none rounded-lg border border-border
+                    bg-surface/80 px-3 py-2 text-sm leading-6 text-text
+                    outline-none transition focus:border-secondary/40
+                    focus:ring-2 focus:ring-secondary/20"
                 />
               ) : (
                 <button
@@ -628,15 +628,15 @@ export function TodoDrawer({
                   className="group w-full text-left"
                 >
                   {item.record_content ? (
-                    <p className="whitespace-pre-wrap text-sm leading-6 text-slate-300 transition group-hover:text-slate-200">
+                    <p className="whitespace-pre-wrap text-sm leading-6 text-text transition group-hover:text-text">
                       {item.record_content}
                     </p>
                   ) : (
-                    <p className="text-sm italic leading-6 text-slate-500">
+                    <p className="text-sm italic leading-6 text-text0">
                       无内容
                     </p>
                   )}
-                  <span className="mt-0.5 block text-[10px] text-slate-600 opacity-0 transition group-hover:opacity-100">
+                  <span className="mt-0.5 block text-[10px] text-text-muted opacity-0 transition group-hover:opacity-100">
                     点击编辑
                   </span>
                 </button>
@@ -645,19 +645,19 @@ export function TodoDrawer({
 
             {/* 附件区域（占位实现） */}
             <section>
-              <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.2em] text-slate-500">
+              <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.2em] text-text0">
                 附件
               </p>
               <div
-                className="rounded-xl border border-dashed border-white/[8%] p-4
+                className="rounded-xl border border-dashed border-border p-4
                   text-center transition hover:border-white/[15%]"
               >
                 {item.attachment_count > 0 ? (
-                  <p className="text-xs text-slate-400">
+                  <p className="text-xs text-text-muted">
                     共 {item.attachment_count} 个附件
                   </p>
                 ) : (
-                  <p className="text-xs text-slate-500">暂无附件</p>
+                  <p className="text-xs text-text0">暂无附件</p>
                 )}
                 {/*
                   添加附件按钮——当前为占位，文件选择器将在后续任务中接入。
@@ -666,8 +666,8 @@ export function TodoDrawer({
                 <button
                   type="button"
                   className="mt-2 inline-flex items-center gap-1 rounded-lg
-                    bg-white/[5%] px-3 py-1.5 text-[11px] text-slate-400
-                    transition hover:bg-white/[10%] hover:text-slate-200"
+                    bg-white/[5%] px-3 py-1.5 text-[11px] text-text-muted
+                    transition hover:bg-white/[10%] hover:text-text"
                   onClick={() => {
                     // Placeholder — file picker will be wired in a later task
                     // using addAttachmentsToRecord from lib/tauri
@@ -716,8 +716,8 @@ function RepeatOption({
       onClick={onClick}
       className={`flex w-full items-center rounded-md px-3 py-1.5 text-left text-sm transition ${
         active
-          ? "bg-emerald-400/10 text-emerald-400"
-          : "text-slate-400 hover:bg-white/5 hover:text-slate-200"
+          ? "bg-secondary/10 text-secondary"
+          : "text-text-muted hover:bg-white/5 hover:text-text"
       }`}
     >
       {label}
@@ -771,8 +771,8 @@ function WeeklyRepeatOption({
         }}
         className={`flex w-full items-center rounded-md px-3 py-1.5 text-left text-sm transition ${
           isActive
-            ? "bg-emerald-400/10 text-emerald-400"
-            : "text-slate-400 hover:bg-white/5 hover:text-slate-200"
+            ? "bg-secondary/10 text-secondary"
+            : "text-text-muted hover:bg-white/5 hover:text-text"
         }`}
       >
         每周
@@ -794,8 +794,8 @@ function WeeklyRepeatOption({
               onClick={() => toggleDay(day)}
               className={`rounded-md px-2 py-1 text-xs transition ${
                 selected
-                  ? "bg-emerald-400/20 text-emerald-400 ring-1 ring-emerald-400/30"
-                  : "bg-white/5 text-slate-500 hover:bg-white/10 hover:text-slate-300"
+                  ? "bg-secondary/20 text-secondary ring-1 ring-secondary/30"
+                  : "bg-white/5 text-text0 hover:bg-white/10 hover:text-text"
               }`}
             >
               {label}
@@ -811,7 +811,7 @@ function WeeklyRepeatOption({
             await onSelect(selectedDays);
             onClose();
           }}
-          className="mt-2 w-full rounded-md bg-emerald-400/20 px-3 py-1.5 text-xs font-medium text-emerald-400 transition hover:bg-emerald-400/30"
+          className="mt-2 w-full rounded-md bg-secondary/20 px-3 py-1.5 text-xs font-medium text-secondary transition hover:bg-secondary/30"
         >
           确定
         </button>

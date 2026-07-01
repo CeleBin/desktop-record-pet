@@ -31,7 +31,7 @@ export function CategorySection({
   return (
     <div
       ref={setNodeRef}
-      className={`rounded-lg transition-colors ${isOver ? "bg-emerald-400/10 ring-1 ring-emerald-400/30" : ""}`}
+      className={`rounded-lg transition-colors ${isOver ? "bg-secondary/10 ring-1 ring-secondary/30" : ""}`}
     >
       {/* 分类头部 */}
       <button
@@ -40,7 +40,7 @@ export function CategorySection({
         className="flex w-full items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-white/[3%]"
       >
         <svg
-          className="h-3 w-3 shrink-0 text-slate-500 transition-transform duration-200"
+          className="h-3 w-3 shrink-0 text-text0 transition-transform duration-200"
           fill="none"
           viewBox="0 0 24 24"
           stroke="currentColor"
@@ -55,10 +55,10 @@ export function CategorySection({
             d="M19.5 8.25l-7.5 7.5-7.5-7.5"
           />
         </svg>
-        <span className="text-[11px] font-medium text-slate-300">
+        <span className="text-[11px] font-medium text-text">
           {folderName}
         </span>
-        <span className="text-[10px] text-slate-600">{items.length}</span>
+        <span className="text-[10px] text-text-muted">{items.length}</span>
       </button>
 
       {/* 任务列表（折叠时隐藏） */}

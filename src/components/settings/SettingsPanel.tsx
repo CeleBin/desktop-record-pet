@@ -25,6 +25,30 @@ const SETTING_DEFS: Record<string, SettingDef> = {
     ],
     category: "general",
   },
+  theme: {
+    label: "主题",
+    description: "选择应用配色风格",
+    type: "select",
+    options: [
+      { label: "午夜琥珀", value: "midnight-amber" },
+      { label: "樱花薄雾", value: "sakura-mist" },
+      { label: "抹茶清晨", value: "matcha-morning" },
+      { label: "薰衣草梦境", value: "lavender-dream" },
+      { label: "暮色暖阳", value: "sunset-warm" },
+    ],
+    category: "general",
+  },
+  theme_mode: {
+    label: "外观模式",
+    description: "亮色/暗色/跟随系统",
+    type: "select",
+    options: [
+      { label: "亮色", value: "light" },
+      { label: "暗色", value: "dark" },
+      { label: "跟随系统", value: "system" },
+    ],
+    category: "general",
+  },
   auto_ocr: {
     label: "自动 OCR",
     description: "截图后自动识别图片中的文字",
@@ -213,7 +237,7 @@ function Toggle({
       className={`
         relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full
         transition-all duration-200
-        ${enabled ? "bg-amber-400" : "bg-slate-700/60"}
+        ${enabled ? "bg-primary" : "bg-surface-2/60"}
       `}
     >
       <span
@@ -297,15 +321,15 @@ function ShortcutInput({
           text-xs font-mono transition-all min-w-[80px]
           ${
             recording
-              ? "border-amber-400/50 bg-amber-400/10 text-amber-300 ring-2 ring-amber-400/20"
-              : "border-white/10 bg-slate-800/80 text-slate-200 hover:border-white/20"
+              ? "border-primary/50 bg-primary/10 text-primary ring-2 ring-primary/20"
+              : "border-border bg-surface-2/80 text-text hover:border-white/20"
           }
-          ${error ? "border-rose-400/50 ring-1 ring-rose-400/20" : ""}
+          ${error ? "border-danger/50 ring-1 ring-danger/20" : ""}
         `}
       >
         {recording ? (
           <span className="flex items-center gap-1.5">
-            <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-amber-400" />
+            <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-primary" />
             {pendingMods.length > 0
               ? pendingMods.join("+") + "+…"
               : "按下快捷键…"}
@@ -314,21 +338,21 @@ function ShortcutInput({
           <span className="flex items-center gap-0.5">
             {value.split("+").map((part, i) => (
               <span key={i} className="flex items-center gap-0.5">
-                {i > 0 && <span className="text-slate-600 select-none">+</span>}
-                <kbd className="rounded bg-slate-700/60 px-1 py-0.5 text-[10px] font-medium text-slate-300">
+                {i > 0 && <span className="text-text-muted select-none">+</span>}
+                <kbd className="rounded bg-surface-2/60 px-1 py-0.5 text-[10px] font-medium text-text">
                   {part}
                 </kbd>
               </span>
             ))}
           </span>
         ) : (
-          <span className="text-slate-500">未设置</span>
+          <span className="text-text0">未设置</span>
         )}
       </button>
 
       {error && (
-        <div className="pointer-events-none mt-1.5 w-56 text-[10px] leading-relaxed text-rose-400">
-          <div className="rounded-lg border border-rose-400/10 bg-rose-400/5 px-2.5 py-1.5">
+        <div className="pointer-events-none mt-1.5 w-56 text-[10px] leading-relaxed text-danger">
+          <div className="rounded-lg border border-danger/10 bg-danger/5 px-2.5 py-1.5">
             {error}
           </div>
         </div>
@@ -368,8 +392,8 @@ function SettingRow({
   return (
     <div className="group flex items-center justify-between gap-4 rounded-xl px-4 py-3 transition hover:bg-white/[3%]">
       <div className="min-w-0 flex-1">
-        <p className="text-sm font-medium text-slate-200">{def.label}</p>
-        <p className="mt-0.5 text-[11px] leading-4 text-slate-500">
+        <p className="text-sm font-medium text-text">{def.label}</p>
+        <p className="mt-0.5 text-[11px] leading-4 text-text0">
           {def.description}
         </p>
       </div>
@@ -384,9 +408,9 @@ function SettingRow({
           <select
             value={value ?? ""}
             onChange={(e) => onChange(e.target.value)}
-            className="appearance-none rounded-lg border border-white/10 bg-slate-800/80
-              px-3 py-1.5 text-xs text-slate-200 outline-none transition
-              hover:border-white/20 focus:border-amber-400/40 focus:ring-2 focus:ring-amber-400/20
+            className="appearance-none rounded-lg border border-border bg-surface-2/80
+              px-3 py-1.5 text-xs text-text outline-none transition
+              hover:border-white/20 focus:border-primary/40 focus:ring-2 focus:ring-primary/20
               cursor-pointer"
           >
             {(def.options ?? []).map((opt) => (
@@ -420,17 +444,17 @@ function SettingRow({
                 }
               }}
               placeholder={def.placeholder ?? ""}
-              className="w-48 rounded-lg border border-white/10 bg-slate-800/80
-                px-3 py-1.5 text-xs text-slate-200 outline-none transition
-                placeholder:text-slate-600
-                hover:border-white/20 focus:border-amber-400/40 focus:ring-2 focus:ring-amber-400/20"
+              className="w-48 rounded-lg border border-border bg-surface-2/80
+                px-3 py-1.5 text-xs text-text outline-none transition
+                placeholder:text-text-muted
+                hover:border-white/20 focus:border-primary/40 focus:ring-2 focus:ring-primary/20"
             />
             {def.mask && value && (
               <button
                 type="button"
                 onClick={() => setShowMasked(!showMasked)}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500
-                  hover:text-slate-300 transition"
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-text0
+                  hover:text-text transition"
               >
                 <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                   {showMasked ? (
@@ -534,10 +558,10 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
   return (
     <div className="flex h-full flex-col overflow-hidden">
       {/* Header */}
-      <div className="shrink-0 border-b border-white/5 px-5 py-4">
+      <div className="shrink-0 border-b border-border px-5 py-4">
         <div className="flex items-center gap-2">
           <svg
-            className="h-4 w-4 text-amber-400"
+            className="h-4 w-4 text-primary"
             fill="none"
             viewBox="0 0 24 24"
             stroke="currentColor"
@@ -554,11 +578,11 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
               d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
             />
           </svg>
-          <span className="text-[10px] font-medium uppercase tracking-[0.2em] text-slate-500">
+          <span className="text-[10px] font-medium uppercase tracking-[0.2em] text-text0">
             设置
           </span>
-          <span className="text-slate-600">·</span>
-          <span className="text-[10px] text-slate-500">
+          <span className="text-text-muted">·</span>
+          <span className="text-[10px] text-text0">
             管理应用偏好
           </span>
 
@@ -566,7 +590,7 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
             <button
               type="button"
               onClick={onClose}
-              className="ml-auto rounded-lg p-1 text-slate-500 transition hover:bg-white/10 hover:text-slate-200"
+              className="ml-auto rounded-lg p-1 text-text0 transition hover:bg-white/10 hover:text-text"
             >
               <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
@@ -577,15 +601,15 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
       </div>
 
       {/* Status bar */}
-      <div className="h-8 shrink-0 border-b border-white/[3%] px-5 flex items-center">
+      <div className="h-8 shrink-0 border-b border-border px-5 flex items-center">
         {loading && (
-          <div className="flex items-center gap-2 text-[11px] text-slate-400">
-            <span className="inline-block h-2.5 w-2.5 animate-spin rounded-full border border-amber-400/30 border-t-amber-400" />
+          <div className="flex items-center gap-2 text-[11px] text-text-muted">
+            <span className="inline-block h-2.5 w-2.5 animate-spin rounded-full border border-primary/30 border-t-primary" />
             加载中…
           </div>
         )}
         {error && (
-          <div className="flex items-center gap-1.5 text-[11px] text-rose-400">
+          <div className="flex items-center gap-1.5 text-[11px] text-danger">
             <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
             </svg>
@@ -593,7 +617,7 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
           </div>
         )}
         {successMsg && (
-          <div className="flex items-center gap-1.5 text-[11px] text-emerald-400">
+          <div className="flex items-center gap-1.5 text-[11px] text-secondary">
             <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
@@ -607,19 +631,19 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
         {!loading && Object.keys(settings).length === 0 && !error ? (
           <div className="flex h-full items-center justify-center px-6">
             <div className="text-center">
-              <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-800/50">
-                <svg className="h-6 w-6 text-slate-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+              <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-surface-2/50">
+                <svg className="h-6 w-6 text-text0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.24-.438.613-.431.992a6.759 6.759 0 010 .255c-.007.378.138.75.43.99l1.005.828c.424.35.534.954.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.57 6.57 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.28c-.09.543-.56.941-1.11.941h-2.594c-.55 0-1.02-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.992a6.932 6.932 0 010-.255c.007-.378-.138-.75-.43-.99l-1.004-.828a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.087.22-.128.332-.183.582-.495.644-.869l.214-1.281z" />
                 </svg>
               </div>
-              <p className="text-sm text-slate-500">暂无可用设置</p>
-              <p className="mt-1 text-xs text-slate-600">
+              <p className="text-sm text-text0">暂无可用设置</p>
+              <p className="mt-1 text-xs text-text-muted">
                 后端服务可能尚未初始化
               </p>
             </div>
           </div>
         ) : (
-          <div className="divide-y divide-white/[4%]">
+          <div className="divide-y divide-border">
             {categoryOrder.map((catKey) => {
               const entries = categories[catKey];
               if (!entries || entries.length === 0) return null;
@@ -634,9 +658,9 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
                 <section key={catKey} className="px-5 py-5">
                   {/* Category header */}
                   <div className="mb-3 flex items-center gap-2.5">
-                    <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-amber-400/10">
+                    <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary/10">
                       <svg
-                        className="h-4 w-4 text-amber-400"
+                        className="h-4 w-4 text-primary"
                         fill="none"
                         viewBox="0 0 24 24"
                         stroke="currentColor"
@@ -650,17 +674,17 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
                       </svg>
                     </div>
                     <div>
-                      <p className="text-sm font-medium text-slate-200">
+                      <p className="text-sm font-medium text-text">
                         {meta.label}
                       </p>
-                      <p className="text-[11px] text-slate-500">
+                      <p className="text-[11px] text-text0">
                         {meta.description}
                       </p>
                     </div>
                   </div>
 
                   {/* Setting rows */}
-                  <div className="-mx-2 rounded-xl border border-white/[4%] bg-slate-900/40">
+                  <div className="-mx-2 rounded-xl border border-border bg-surface/40">
                     {entries.map(({ def, key }) => (
                       <SettingRow
                         key={key}
@@ -676,8 +700,8 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
                   {catSettings.filter(
                     ({ key }) => !SETTING_DEFS[key],
                   ).length > 0 && (
-                    <div className="mt-3 rounded-xl border border-white/[4%] bg-slate-900/20 p-3">
-                      <p className="mb-1 text-[11px] font-medium text-slate-500">
+                    <div className="mt-3 rounded-xl border border-border bg-surface/20 p-3">
+                      <p className="mb-1 text-[11px] font-medium text-text0">
                         其他设置
                       </p>
                       {catSettings
@@ -708,19 +732,19 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
       </div>
 
       {/* Footer action bar */}
-      <div className="shrink-0 border-t border-white/5 px-5 py-3">
+      <div className="shrink-0 border-t border-border px-5 py-3">
         <div className="flex items-center gap-2">
           <button
             type="button"
             onClick={() => void handleReset()}
             disabled={resetting}
             className="inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5
-              text-xs font-medium text-slate-400 transition
-              hover:bg-rose-400/10 hover:text-rose-300
+              text-xs font-medium text-text-muted transition
+              hover:bg-danger/10 hover:text-danger
               disabled:opacity-50"
           >
             {resetting ? (
-              <span className="inline-block h-3 w-3 animate-spin rounded-full border border-rose-400/30 border-t-rose-400" />
+              <span className="inline-block h-3 w-3 animate-spin rounded-full border border-danger/30 border-t-danger" />
             ) : (
               <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182" />
@@ -731,7 +755,7 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
 
           <div className="flex-1" />
 
-          <p className="text-[10px] text-slate-600">
+          <p className="text-[10px] text-text-muted">
             {Object.keys(settings).length} 项设置
           </p>
         </div>

@@ -405,9 +405,9 @@ export function TodoOverlay() {
           4 秒后自动消失（见上方 useEffect 自动定时器）。
         */}
       {error && (
-        <div className="flex shrink-0 items-center gap-2 border-b border-rose-400/10 bg-rose-400/10 px-3 py-1.5">
+        <div className="flex shrink-0 items-center gap-2 border-b border-danger/10 bg-danger/10 px-3 py-1.5">
           <svg
-            className="h-3 w-3 shrink-0 text-rose-400"
+            className="h-3 w-3 shrink-0 text-danger"
             fill="none"
             viewBox="0 0 24 24"
             stroke="currentColor"
@@ -420,11 +420,11 @@ export function TodoOverlay() {
                 0zm-9 3.75h.008v.008H12v-.008z"
             />
           </svg>
-          <span className="flex-1 text-[11px] text-rose-300">{error}</span>
+          <span className="flex-1 text-[11px] text-danger">{error}</span>
           <button
             type="button"
             onClick={clearError}
-            className="text-rose-400/60 transition hover:text-rose-300"
+            className="text-danger/60 transition hover:text-danger"
           >
             <svg
               className="h-3 w-3"
@@ -463,7 +463,7 @@ export function TodoOverlay() {
         <button
           type="button"
           onClick={toggleCollapse}
-          className="rounded-lg p-1 text-slate-500 transition hover:bg-white/10 hover:text-slate-200"
+          className="rounded-lg p-1 text-text0 transition hover:bg-white/10 hover:text-text"
           title={collapsed ? "展开" : "折叠"}
         >
           <svg
@@ -485,14 +485,14 @@ export function TodoOverlay() {
         {/*
           "待办"标题文字：小号大写字母间距，保持与整体 UI 风格一致
         */}
-        <span className="text-[10px] font-medium uppercase tracking-[0.2em] text-slate-500">
+        <span className="text-[10px] font-medium uppercase tracking-[0.2em] text-text0">
           待办
         </span>
         {/*
           当列表展开且 item 数量 > 0 时，在标题旁显示条目计数
         */}
         {!collapsed && items.length > 0 && (
-          <span className="text-[10px] text-slate-600">
+          <span className="text-[10px] text-text-muted">
             {items.length} 项
           </span>
         )}
@@ -506,7 +506,7 @@ export function TodoOverlay() {
           <button
             type="button"
             onClick={() => setShowCategoryManager(!showCategoryManager)}
-            className="rounded-lg p-1 text-slate-500 transition hover:bg-white/10 hover:text-slate-200"
+            className="rounded-lg p-1 text-text0 transition hover:bg-white/10 hover:text-text"
             title="分类管理"
           >
             <svg
@@ -551,7 +551,7 @@ export function TodoOverlay() {
         <button
           type="button"
           onClick={() => void showMainPanel()}
-          className="rounded-lg p-1 text-slate-500 transition hover:bg-white/10 hover:text-slate-200"
+          className="rounded-lg p-1 text-text0 transition hover:bg-white/10 hover:text-text"
           title="打开主面板"
         >
           <svg
@@ -590,15 +590,15 @@ export function TodoOverlay() {
             /* ── 加载中状态：旋转圆圈动画 ── */
             /* 利用 border 模拟圆环，border-t-* 只给顶部着色实现旋转加载效果 */
             <div className="flex items-center justify-center py-12">
-              <div className="h-4 w-4 animate-spin rounded-full border-2 border-emerald-400/30 border-t-emerald-400" />
+              <div className="h-4 w-4 animate-spin rounded-full border-2 border-secondary/30 border-t-secondary" />
             </div>
           ) : items.length === 0 ? (
             /* ── 空状态 ── */
             /* 居中显示文档图标和两行提示文字，告知用户当前没有待办事项 */
             <div className="flex flex-col items-center justify-center px-6 py-12 text-center">
-              <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-2xl bg-slate-800/40">
+              <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-2xl bg-surface-2/40">
                 <svg
-                  className="h-5 w-5 text-slate-500"
+                  className="h-5 w-5 text-text0"
                   fill="none"
                   viewBox="0 0 24 24"
                   stroke="currentColor"
@@ -621,8 +621,8 @@ export function TodoOverlay() {
                   />
                 </svg>
               </div>
-              <p className="text-sm text-slate-500">暂无待办事项</p>
-              <p className="mt-1 text-xs text-slate-600">所有任务已完成</p>
+              <p className="text-sm text-text0">暂无待办事项</p>
+              <p className="mt-1 text-xs text-text-muted">所有任务已完成</p>
             </div>
           ) : (
             /* ── 任务列表（按分类分组，可拖拽排序） ── */
@@ -651,7 +651,7 @@ export function TodoOverlay() {
 
                   {/* 分隔线（有分类且有未分类任务时显示） */}
                   {folders.length > 0 && (
-                    <div className="border-t border-white/[6%]" />
+                    <div className="border-t border-border" />
                   )}
 
                   {/* 未分类任务（始终显示为 droppable 区域） */}
@@ -698,7 +698,7 @@ export function TodoOverlay() {
       */}
       {!collapsed && (
       <div
-        className="absolute bottom-0 right-0 z-50 cursor-se-resize select-none p-1.5 text-slate-600/40 hover:text-slate-400/70 transition-colors"
+        className="absolute bottom-0 right-0 z-50 cursor-se-resize select-none p-1.5 text-text-muted/40 hover:text-text-muted/70 transition-colors"
         onMouseDown={handleResizeMouseDown}
       >
         <svg
@@ -738,10 +738,10 @@ function UncategorizedDropZone({
   return (
     <div
       ref={setNodeRef}
-      className={`${isOver ? "bg-emerald-400/10 ring-1 ring-emerald-400/30" : ""}`}
+      className={`${isOver ? "bg-secondary/10 ring-1 ring-secondary/30" : ""}`}
     >
       {items.length === 0 && (
-        <p className="px-3 py-2 text-[11px] text-slate-600">拖拽任务到这里移除分类</p>
+        <p className="px-3 py-2 text-[11px] text-text-muted">拖拽任务到这里移除分类</p>
       )}
       {items.map((item) => (
         <SortableTodoItem

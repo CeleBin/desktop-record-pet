@@ -43,10 +43,10 @@ const TASK_STATUS_OPTIONS: { label: string; value: TaskStatus | null }[] = [
 ];
 
 const TASK_STATUS_STYLES: Record<string, string> = {
-  todo: "bg-amber-400/20 text-amber-300 ring-amber-400/30",
+  todo: "bg-primary/20 text-primary ring-primary/30",
   doing: "bg-sky-400/20 text-sky-300 ring-sky-400/30",
-  done: "bg-emerald-400/20 text-emerald-300 ring-emerald-400/30",
-  cancelled: "bg-slate-500/20 text-slate-400 ring-slate-400/20",
+  done: "bg-secondary/20 text-secondary ring-secondary/30",
+  cancelled: "bg-text-muted/20 text-text-muted ring-text-muted/20",
 };
 
 export function Navigation({
@@ -68,7 +68,7 @@ export function Navigation({
   return (
     <nav className="flex h-full flex-col gap-5 overflow-y-auto p-4">
       {/* ── View mode toggle ── */}
-      <div className="flex rounded-xl bg-slate-900/60 p-0.5 ring-1 ring-white/[5%]">
+      <div className="flex rounded-xl bg-surface/60 p-0.5 ring-1 ring-white/[5%]">
         <button
           type="button"
           onClick={() => onViewModeChange("records")}
@@ -76,8 +76,8 @@ export function Navigation({
             flex-1 rounded-lg px-3 py-1.5 text-xs font-medium transition-all duration-150
             ${
               viewMode === "records"
-                ? "bg-emerald-400/15 text-emerald-300 shadow-sm shadow-emerald-400/10"
-                : "text-slate-400 hover:text-slate-200"
+                ? "bg-secondary/15 text-secondary shadow-sm shadow-secondary/10"
+                : "text-text-muted hover:text-text"
             }
           `}
         >
@@ -95,8 +95,8 @@ export function Navigation({
             flex-1 rounded-lg px-3 py-1.5 text-xs font-medium transition-all duration-150
             ${
               viewMode === "tasks"
-                ? "bg-emerald-400/15 text-emerald-300 shadow-sm shadow-emerald-400/10"
-                : "text-slate-400 hover:text-slate-200"
+                ? "bg-secondary/15 text-secondary shadow-sm shadow-secondary/10"
+                : "text-text-muted hover:text-text"
             }
           `}
         >
@@ -113,16 +113,16 @@ export function Navigation({
       <div className="relative">
         <div
           className={`
-            flex items-center gap-2 rounded-2xl border bg-slate-900/60 px-3 py-2.5
+            flex items-center gap-2 rounded-2xl border bg-surface/60 px-3 py-2.5
             text-sm transition-all duration-200
             ${focused
-              ? "border-emerald-400/40 ring-2 ring-emerald-400/15"
-              : "border-white/10"
+              ? "border-secondary/40 ring-2 ring-secondary/15"
+              : "border-border"
             }
           `}
         >
           <svg
-            className="h-4 w-4 shrink-0 text-slate-400"
+            className="h-4 w-4 shrink-0 text-text-muted"
             fill="none"
             viewBox="0 0 24 24"
             stroke="currentColor"
@@ -137,13 +137,13 @@ export function Navigation({
             onFocus={() => setFocused(true)}
             onBlur={() => setFocused(false)}
             placeholder={viewMode === "tasks" ? "搜索任务…" : "搜索记录…"}
-            className="min-w-0 flex-1 bg-transparent text-sm text-slate-100 placeholder-slate-500 outline-none"
+            className="min-w-0 flex-1 bg-transparent text-sm text-text placeholder-text-muted outline-none"
           />
           {searchQuery.length > 0 && (
             <button
               type="button"
               onClick={() => onSearchChange("")}
-              className="rounded-full p-0.5 text-slate-500 transition hover:text-slate-300"
+              className="rounded-full p-0.5 text-text0 transition hover:text-text"
             >
               <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
@@ -158,7 +158,7 @@ export function Navigation({
         <>
           {/* Type filter */}
           <section>
-            <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.2em] text-slate-500">
+            <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.2em] text-text0">
               类型
             </p>
             <div className="flex flex-wrap gap-1.5">
@@ -173,8 +173,8 @@ export function Navigation({
                       rounded-full px-3 py-1.5 text-xs font-medium transition-all duration-150
                       ${
                         isActive
-                          ? "bg-emerald-400/15 text-emerald-300 ring-1 ring-emerald-400/30"
-                          : "bg-white/5 text-slate-400 hover:bg-white/10 hover:text-slate-200"
+                          ? "bg-secondary/15 text-secondary ring-1 ring-secondary/30"
+                          : "bg-white/5 text-text-muted hover:bg-white/10 hover:text-text"
                       }
                     `}
                   >
@@ -187,7 +187,7 @@ export function Navigation({
 
           {/* Status filter */}
           <section>
-            <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.2em] text-slate-500">
+            <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.2em] text-text0">
               状态
             </p>
             <div className="flex flex-wrap gap-1.5">
@@ -203,7 +203,7 @@ export function Navigation({
                       ${
                         isActive
                           ? "bg-sky-400/15 text-sky-300 ring-1 ring-sky-400/30"
-                          : "bg-white/5 text-slate-400 hover:bg-white/10 hover:text-slate-200"
+                          : "bg-white/5 text-text-muted hover:bg-white/10 hover:text-text"
                       }
                     `}
                   >
@@ -218,7 +218,7 @@ export function Navigation({
         <>
           {/* ── Task status filter ── */}
           <section>
-            <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.2em] text-slate-500">
+            <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.2em] text-text0">
               任务状态
             </p>
             <div className="flex flex-wrap gap-1.5">
@@ -235,8 +235,8 @@ export function Navigation({
                         isActive && opt.value
                           ? `${TASK_STATUS_STYLES[opt.value]} ring-1`
                           : isActive && !opt.value
-                            ? "bg-emerald-400/15 text-emerald-300 ring-1 ring-emerald-400/30"
-                            : "bg-white/5 text-slate-400 hover:bg-white/10 hover:text-slate-200"
+                            ? "bg-secondary/15 text-secondary ring-1 ring-secondary/30"
+                            : "bg-white/5 text-text-muted hover:bg-white/10 hover:text-text"
                       }
                     `}
                   >
@@ -248,8 +248,8 @@ export function Navigation({
           </section>
 
           {/* Hint about task context */}
-          <section className="rounded-2xl bg-emerald-400/5 border border-emerald-400/10 p-3">
-            <p className="text-[11px] leading-5 text-slate-400">
+          <section className="rounded-2xl bg-secondary/5 border border-secondary/10 p-3">
+            <p className="text-[11px] leading-5 text-text-muted">
               显示所有已转为待办的记录。点击记录可查看详情并更新进度。
             </p>
           </section>
@@ -268,8 +268,8 @@ export function Navigation({
             inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5
             text-xs font-medium transition-all duration-150
             ${settingsOpen
-              ? "bg-amber-400/15 text-amber-300 ring-1 ring-amber-400/30"
-              : "text-slate-500 hover:bg-white/5 hover:text-slate-300"
+              ? "bg-primary/15 text-primary ring-1 ring-primary/30"
+              : "text-text0 hover:bg-white/5 hover:text-text"
             }
           `}
           title="设置"
@@ -282,7 +282,7 @@ export function Navigation({
 
         <div className="flex-1" />
 
-        <p className="text-[10px] text-slate-600">
+        <p className="text-[10px] text-text-muted">
           Ctrl+N 新建
         </p>
       </div>

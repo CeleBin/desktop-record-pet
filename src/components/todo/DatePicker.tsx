@@ -121,14 +121,14 @@ export function DatePicker({ value, onChange, onClear }: DatePickerProps) {
   const goNext = () => setCurrentMonth((p) => new Date(p.getFullYear(), p.getMonth() + 1, 1));
 
   return (
-    <div className="w-[276px] rounded-xl border border-white/[8%] bg-slate-900/80 p-3 shadow-lg shadow-black/30">
+    <div className="w-[276px] rounded-xl border border-border bg-surface/80 p-3 shadow-lg shadow-black/30">
       {/* ── Month / Year header ── */}
       <div className="mb-2 flex items-center justify-between">
         <button
           type="button"
           onClick={goPrev}
-          className="flex h-7 w-7 items-center justify-center rounded-lg text-slate-400
-            transition hover:bg-white/10 hover:text-slate-200"
+          className="flex h-7 w-7 items-center justify-center rounded-lg text-text-muted
+            transition hover:bg-white/10 hover:text-text"
           aria-label="上月"
         >
           <svg
@@ -142,15 +142,15 @@ export function DatePicker({ value, onChange, onClear }: DatePickerProps) {
           </svg>
         </button>
 
-        <span className="select-none text-sm font-medium tabular-nums text-slate-200">
+        <span className="select-none text-sm font-medium tabular-nums text-text">
           {year} 年 {month + 1} 月
         </span>
 
         <button
           type="button"
           onClick={goNext}
-          className="flex h-7 w-7 items-center justify-center rounded-lg text-slate-400
-            transition hover:bg-white/10 hover:text-slate-200"
+          className="flex h-7 w-7 items-center justify-center rounded-lg text-text-muted
+            transition hover:bg-white/10 hover:text-text"
           aria-label="下月"
         >
           <svg
@@ -170,7 +170,7 @@ export function DatePicker({ value, onChange, onClear }: DatePickerProps) {
         {WEEKDAYS.map((d) => (
           <div
             key={d}
-            className="py-1 text-center text-[11px] font-medium uppercase tracking-wide text-slate-500"
+            className="py-1 text-center text-[11px] font-medium uppercase tracking-wide text-text0"
           >
             {d}
           </div>
@@ -192,11 +192,11 @@ export function DatePicker({ value, onChange, onClear }: DatePickerProps) {
                 onClick={() => onChange(date)}
                 className={[
                   "flex h-8 w-9 items-center justify-center rounded-lg text-xs transition-colors duration-100",
-                  cell.isCurrentMonth ? "text-slate-200" : "text-slate-600",
+                  cell.isCurrentMonth ? "text-text" : "text-text-muted",
                   selected
-                    ? "bg-emerald-400 font-semibold text-slate-900"
-                    : "hover:bg-white/10 hover:text-slate-100",
-                  todayMatch && !selected ? "ring-1 ring-inset ring-emerald-400/50" : "",
+                    ? "bg-secondary font-semibold text-primary-fg"
+                    : "hover:bg-white/10 hover:text-text",
+                  todayMatch && !selected ? "ring-1 ring-inset ring-secondary/50" : "",
                 ].join(" ")}
               >
                 {cell.day}
@@ -212,7 +212,7 @@ export function DatePicker({ value, onChange, onClear }: DatePickerProps) {
           type="button"
           onClick={onClear}
           className="mt-2 flex w-full items-center justify-center gap-1 rounded-lg px-3 py-1.5
-            text-[11px] text-slate-400 transition hover:bg-white/[5%] hover:text-slate-300"
+            text-[11px] text-text-muted transition hover:bg-white/[5%] hover:text-text"
         >
           <svg
             className="h-3 w-3"

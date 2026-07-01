@@ -52,10 +52,10 @@ function formatTime(iso: string): string {
  *
  * 返回值为 null 表示无需显示（传入 null 时）。
  * 颜色规则：
- *   - 已过期（diffDays < 0）：text-rose-400（玫瑰红）
- *   - 今天到期（diffDays === 0）：text-amber-400（琥珀色）
- *   - 3 天内（diffDays <= 3）：text-amber-400（琥珀色）
- *   - 未来（diffDays > 3）：text-slate-500（灰色）
+ *   - 已过期（diffDays < 0）：text-danger（玫瑰红）
+ *   - 今天到期（diffDays === 0）：text-primary（琥珀色）
+ *   - 3 天内（diffDays <= 3）：text-primary（琥珀色）
+ *   - 未来（diffDays > 3）：text-text0（灰色）
  */
 function getDueDateInfo(dueAt: string | null): {
   display: string;
@@ -72,10 +72,10 @@ function getDueDateInfo(dueAt: string | null): {
   const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24));
   const dateStr = `${m}月${d}日`;
 
-  if (diffDays < 0) return { display: `${dateStr} · 已过期`, className: "text-rose-400" };
-  if (diffDays === 0) return { display: `${dateStr} · 今天到期`, className: "text-amber-400" };
-  if (diffDays <= 3) return { display: `${dateStr} · ${diffDays}天后`, className: "text-amber-400" };
-  return { display: `${dateStr} · ${diffDays}天后`, className: "text-slate-500" };
+  if (diffDays < 0) return { display: `${dateStr} · 已过期`, className: "text-danger" };
+  if (diffDays === 0) return { display: `${dateStr} · 今天到期`, className: "text-primary" };
+  if (diffDays <= 3) return { display: `${dateStr} · ${diffDays}天后`, className: "text-primary" };
+  return { display: `${dateStr} · ${diffDays}天后`, className: "text-text0" };
 }
 
 export function TodoItem({
@@ -134,9 +134,9 @@ export function TodoItem({
         type="button"
         onClick={handleToggle}
         className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded
-          border border-slate-600/60 bg-slate-800/40 transition
-          hover:border-emerald-400/50 hover:bg-emerald-400/10
-          focus:outline-none focus:ring-2 focus:ring-emerald-400/30"
+          border border-text-muted/60 bg-surface-2/40 transition
+          hover:border-secondary/50 hover:bg-secondary/10
+          focus:outline-none focus:ring-2 focus:ring-secondary/30"
         aria-label="标记完成"
       />
 
@@ -147,9 +147,9 @@ export function TodoItem({
            * 标题行：优先显示用户设置的标题，无标题则回退到内容预览，均无则显示"无标题"占位符。
            * truncate 保证超长文本单行省略。
            */}
-          <p className="truncate text-sm font-medium text-slate-200">
+          <p className="truncate text-sm font-medium text-text">
             {displayTitle(item) || (
-              <span className="italic text-slate-500">无标题</span>
+              <span className="italic text-text0">无标题</span>
             )}
           </p>
 
@@ -163,12 +163,12 @@ export function TodoItem({
             className={`inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ${
               item.task_status === "doing"
                 ? "bg-sky-400/10 text-sky-300"
-                : "bg-amber-400/10 text-amber-300"
+                : "bg-primary/10 text-primary"
             }`}
           >
             <span
               className={`inline-block h-1 w-1 rounded-full ${
-                item.task_status === "doing" ? "bg-sky-400" : "bg-amber-400"
+                item.task_status === "doing" ? "bg-sky-400" : "bg-primary"
               }`}
             />
             {item.task_status === "doing" ? "进行中" : "待办"}
@@ -181,7 +181,7 @@ export function TodoItem({
          */}
         <div className="mt-0.5 flex items-center gap-2">
           {item.attachment_count > 0 && (
-            <span className="inline-flex items-center gap-0.5 text-[10px] text-slate-500">
+            <span className="inline-flex items-center gap-0.5 text-[10px] text-text0">
               <svg
                 className="h-3 w-3"
                 fill="none"
@@ -199,7 +199,7 @@ export function TodoItem({
             </span>
           )}
 
-          <span className="text-[10px] text-slate-600">
+          <span className="text-[10px] text-text-muted">
             {formatTime(item.record_updated_at)}
           </span>
 
@@ -208,7 +208,7 @@ export function TodoItem({
             * 当任务设置了 repeat_rule 时，显示一个循环箭头图标。
             */}
           {item.repeat_rule && (
-            <span className="inline-flex items-center text-[10px] text-emerald-400" title="重复任务">
+            <span className="inline-flex items-center text-[10px] text-secondary" title="重复任务">
               <svg
                 className="h-3 w-3"
                 fill="none"
@@ -267,7 +267,7 @@ export function TodoItem({
         <button
           type="button"
           onClick={handleRemove}
-          className="rounded-lg p-1.5 text-slate-500 transition hover:bg-rose-400/10 hover:text-rose-300"
+          className="rounded-lg p-1.5 text-text0 transition hover:bg-danger/10 hover:text-danger"
           title="移除待办"
         >
           <svg

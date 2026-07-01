@@ -86,21 +86,21 @@ export function QuickInput() {
   }
 
   return (
-    <main className="min-h-screen bg-transparent p-3 text-slate-100">
-      <section className="flex h-full min-h-[148px] flex-col rounded-3xl border border-white/10 bg-slate-950/95 p-4 shadow-2xl shadow-black/50 backdrop-blur-xl">
+    <main className="min-h-screen bg-transparent p-3 text-text">
+      <section className="flex h-full min-h-[148px] flex-col rounded-3xl border border-border bg-bg/95 p-4 shadow-2xl shadow-black/50 backdrop-blur-xl">
         <div className="mb-3 flex items-center justify-between gap-3">
           <div>
-            <p className="text-xs uppercase tracking-[0.24em] text-emerald-300/80">
+            <p className="text-xs uppercase tracking-[0.24em] text-secondary/80">
               Quick capture
             </p>
-            <h1 className="mt-1 text-sm font-semibold text-slate-100">
+            <h1 className="mt-1 text-sm font-semibold text-text">
               文字速记
             </h1>
           </div>
-          <label className="inline-flex cursor-pointer items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-slate-200">
+          <label className="inline-flex cursor-pointer items-center gap-2 rounded-full border border-border bg-white/5 px-3 py-1.5 text-xs text-text">
             <input
               type="checkbox"
-              className="h-3.5 w-3.5 accent-emerald-400"
+              className="h-3.5 w-3.5 accent-secondary"
               checked={createAsTask}
               onChange={(event) => setCreateAsTask(event.target.checked)}
             />
@@ -126,10 +126,10 @@ export function QuickInput() {
           }}
           rows={3}
           placeholder="记一句话，回车立即保存"
-          className="min-h-0 flex-1 resize-none rounded-2xl border border-white/10 bg-slate-900/80 px-4 py-3 text-sm leading-6 text-slate-100 outline-none transition focus:border-emerald-400/40 focus:ring-2 focus:ring-emerald-400/20"
+          className="min-h-0 flex-1 resize-none rounded-2xl border border-border bg-surface/80 px-4 py-3 text-sm leading-6 text-text outline-none transition focus:border-secondary/40 focus:ring-2 focus:ring-secondary/20"
         />
 
-        <div className="mt-3 flex items-center justify-between gap-3 text-xs text-slate-400">
+        <div className="mt-3 flex items-center justify-between gap-3 text-xs text-text-muted">
           <div className="space-y-1">
             <p>Enter 保存</p>
             <p>Ctrl+Enter 保存并打开主面板</p>
@@ -137,20 +137,20 @@ export function QuickInput() {
           <button
             type="button"
             onClick={() => void handleCancel()}
-            className="rounded-full border border-white/10 px-3 py-1.5 text-slate-300 transition hover:border-white/20 hover:text-white"
+            className="rounded-full border border-border px-3 py-1.5 text-text transition hover:border-white/20 hover:text-white"
           >
             Esc 取消
           </button>
         </div>
 
         {error ? (
-          <p className="mt-3 rounded-2xl border border-rose-400/20 bg-rose-400/10 px-3 py-2 text-xs text-rose-200">
+          <p className="mt-3 rounded-2xl border border-danger/20 bg-danger/10 px-3 py-2 text-xs text-danger">
             {error}
           </p>
         ) : null}
 
         {submitting ? (
-          <p className="mt-3 text-xs text-emerald-300/80">正在本地保存…</p>
+          <p className="mt-3 text-xs text-secondary/80">正在本地保存…</p>
         ) : null}
       </section>
     </main>

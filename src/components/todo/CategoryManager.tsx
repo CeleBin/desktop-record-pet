@@ -111,15 +111,15 @@ export function CategoryManager({
       />
 
       {/* 浮层 */}
-      <div className="absolute right-0 top-full z-50 mt-1 w-56 rounded-xl border border-white/[6%] bg-slate-900/95 p-3 shadow-2xl backdrop-blur-xl">
-        <h3 className="mb-2 text-[10px] font-medium uppercase tracking-[0.15em] text-slate-500">
+      <div className="absolute right-0 top-full z-50 mt-1 w-56 rounded-xl border border-border bg-surface/95 p-3 shadow-2xl backdrop-blur-xl">
+        <h3 className="mb-2 text-[10px] font-medium uppercase tracking-[0.15em] text-text0">
           分类管理
         </h3>
 
         {/* 分类列表（可拖拽排序） */}
         <div className="max-h-48 overflow-y-auto">
           {folders.length === 0 ? (
-            <p className="py-3 text-center text-[11px] text-slate-600">
+            <p className="py-3 text-center text-[11px] text-text-muted">
               暂无分类
             </p>
           ) : (
@@ -162,12 +162,12 @@ export function CategoryManager({
               if (e.key === "Enter") void handleCreate();
             }}
             placeholder="新建分类..."
-            className="min-w-0 flex-1 rounded-lg bg-white/5 px-2.5 py-1.5 text-[12px] text-slate-200 outline-none placeholder:text-slate-600"
+            className="min-w-0 flex-1 rounded-lg bg-white/5 px-2.5 py-1.5 text-[12px] text-text outline-none placeholder:text-text-muted"
           />
           <button
             onClick={() => void handleCreate()}
             disabled={!newName.trim()}
-            className="rounded-lg px-2.5 py-1.5 text-[12px] text-emerald-400 transition hover:bg-emerald-400/10 disabled:cursor-not-allowed disabled:opacity-30"
+            className="rounded-lg px-2.5 py-1.5 text-[12px] text-secondary transition hover:bg-secondary/10 disabled:cursor-not-allowed disabled:opacity-30"
           >
             创建
           </button>
@@ -183,8 +183,8 @@ export function CategoryManager({
             onMouseDown={(e) => e.stopPropagation()}
           />
           <div className="fixed inset-0 z-[60] flex items-center justify-center">
-            <div className="w-64 rounded-xl border border-white/[8%] bg-slate-900 p-4 shadow-2xl">
-              <p className="text-[12px] text-slate-300">
+            <div className="w-64 rounded-xl border border-border bg-surface p-4 shadow-2xl">
+              <p className="text-[12px] text-text">
                 分类「
                 {folders.find((f) => f.id === deletingId)?.name}
                 」下有 {taskCountByFolder[deletingId] || 0}{" "}
@@ -193,13 +193,13 @@ export function CategoryManager({
               <div className="mt-3 flex justify-end gap-2">
                 <button
                   onClick={() => setDeletingId(null)}
-                  className="rounded-lg px-3 py-1.5 text-[11px] text-slate-400 transition hover:bg-white/5"
+                  className="rounded-lg px-3 py-1.5 text-[11px] text-text-muted transition hover:bg-white/5"
                 >
                   取消
                 </button>
                 <button
                   onClick={() => void confirmDelete()}
-                  className="rounded-lg bg-rose-500/20 px-3 py-1.5 text-[11px] text-rose-400 transition hover:bg-rose-500/30"
+                  className="rounded-lg bg-danger/20 px-3 py-1.5 text-[11px] text-danger transition hover:bg-danger/30"
                 >
                   确认删除
                 </button>
@@ -260,13 +260,13 @@ function SortableFolderRow({
     <div
       ref={setNodeRef}
       style={style}
-      className={`flex items-center gap-1.5 rounded-lg px-2 py-1.5 hover:bg-white/[4%] ${isDragging ? "ring-1 ring-emerald-400/30" : ""}`}
+      className={`flex items-center gap-1.5 rounded-lg px-2 py-1.5 hover:bg-white/[4%] ${isDragging ? "ring-1 ring-secondary/30" : ""}`}
     >
       {/* 编辑态隐藏拖拽手柄，避免与 input 抢焦点 */}
       {!isEditing && (
         <button
           type="button"
-          className="cursor-grab p-0.5 text-slate-600 transition hover:text-slate-400 active:cursor-grabbing"
+          className="cursor-grab p-0.5 text-text-muted transition hover:text-text-muted active:cursor-grabbing"
           title="拖拽排序"
           {...attributes}
           {...listeners}
@@ -294,25 +294,25 @@ function SortableFolderRow({
               if (e.key === "Enter") onCommitRename();
               if (e.key === "Escape") onCancelEdit();
             }}
-            className="min-w-0 flex-1 rounded bg-white/5 px-2 py-0.5 text-[12px] text-slate-200 outline-none ring-1 ring-emerald-400/50"
+            className="min-w-0 flex-1 rounded bg-white/5 px-2 py-0.5 text-[12px] text-text outline-none ring-1 ring-secondary/50"
             autoFocus
           />
           <button
             onClick={onCommitRename}
-            className="text-[10px] text-emerald-400"
+            className="text-[10px] text-secondary"
           >
             确定
           </button>
         </>
       ) : (
         <>
-          <span className="min-w-0 flex-1 truncate text-[12px] text-slate-300">
+          <span className="min-w-0 flex-1 truncate text-[12px] text-text">
             {folder.name}
           </span>
-          <span className="text-[10px] text-slate-600">{taskCount}</span>
+          <span className="text-[10px] text-text-muted">{taskCount}</span>
           <button
             onClick={onStartEdit}
-            className="p-0.5 text-slate-600 hover:text-slate-300"
+            className="p-0.5 text-text-muted hover:text-text"
           >
             <svg
               className="h-3 w-3"
@@ -330,7 +330,7 @@ function SortableFolderRow({
           </button>
           <button
             onClick={onDelete}
-            className="p-0.5 text-slate-600 hover:text-rose-400"
+            className="p-0.5 text-text-muted hover:text-danger"
           >
             <svg
               className="h-3 w-3"

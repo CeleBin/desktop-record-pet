@@ -115,8 +115,8 @@ export function PetShell() {
         style={{
           background:
             currentPose === "idle"
-              ? "radial-gradient(circle, rgba(245,158,11,0.5) 0%, rgba(52,211,153,0.2) 70%, transparent 100%)"
-              : "radial-gradient(circle, rgba(245,158,11,0.7) 0%, rgba(52,211,153,0.3) 70%, transparent 100%)",
+              ? `radial-gradient(circle, var(--pet-glow) 0%, color-mix(in srgb, var(--secondary) 20%, transparent) 70%, transparent 100%)`
+              : `radial-gradient(circle, color-mix(in srgb, var(--pet-glow) 70%, transparent) 0%, color-mix(in srgb, var(--secondary) 30%, transparent) 70%, transparent 100%)`,
         }}
       />
 
@@ -125,11 +125,11 @@ export function PetShell() {
         className="relative flex h-[72px] w-[72px] items-center justify-center rounded-full transition-all duration-[2000ms] ease-in-out"
         style={{
           background:
-            "radial-gradient(circle at 40% 35%, rgba(251,191,36,0.9) 0%, rgba(217,119,6,0.7) 40%, rgba(180,83,9,0.4) 100%)",
+            "radial-gradient(circle at 40% 35%, var(--pet-from) 0%, color-mix(in srgb, var(--primary) 70%, transparent) 40%, var(--pet-to) 100%)",
           boxShadow:
             currentPose === "blink"
-              ? "0 0 20px rgba(245,158,11,0.4), inset 0 -2px 8px rgba(0,0,0,0.3)"
-              : "0 0 30px rgba(245,158,11,0.25), inset 0 -2px 8px rgba(0,0,0,0.3)",
+              ? `0 0 20px color-mix(in srgb, var(--pet-glow) 40%, transparent), inset 0 -2px 8px rgba(0,0,0,0.3)`
+              : `0 0 30px color-mix(in srgb, var(--pet-glow) 25%, transparent), inset 0 -2px 8px rgba(0,0,0,0.3)`,
           transform: dragging ? "scale(0.92)" : "scale(1)",
         }}
       >
@@ -166,7 +166,7 @@ export function PetShell() {
 
       {/* ── Idle bubble hint ── */}
       <div className="pointer-events-none absolute -top-1 left-1/2 -translate-x-1/2 opacity-0 transition-opacity duration-700 group-hover:opacity-100">
-        <div className="whitespace-nowrap rounded-full border border-white/[8%] bg-slate-900/80 px-2.5 py-1 text-[9px] text-slate-400 backdrop-blur-sm">
+        <div className="whitespace-nowrap rounded-full border border-border bg-surface/80 px-2.5 py-1 text-[9px] text-text-muted backdrop-blur-sm">
           click to open · drag to move
         </div>
       </div>
