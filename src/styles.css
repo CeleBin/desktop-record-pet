@@ -1,0 +1,230 @@
+@import "tailwindcss";
+
+/* ════════════════════════════════════════════════════════════════════
+   Theme tokens — 5 families × 2 modes = 10 variants
+   Apply via: <html data-theme="midnight-amber" data-mode="dark">
+   ════════════════════════════════════════════════════════════════════ */
+
+/* ── Midnight Amber ── */
+:root[data-theme="midnight-amber"][data-mode="dark"] {
+  --bg: #020617;
+  --surface: #0f172a;
+  --surface-2: #1e293b;
+  --primary: #fbbf24;
+  --primary-fg: #020617;
+  --secondary: #34d399;
+  --danger: #fb7185;
+  --text: #f1f5f9;
+  --text-muted: #64748b;
+  --border: rgba(255, 255, 255, 0.08);
+  --pet-from: rgba(251, 191, 36, 0.9);
+  --pet-to: rgba(180, 83, 9, 0.4);
+  --pet-glow: rgba(245, 158, 11, 0.5);
+}
+:root[data-theme="midnight-amber"][data-mode="light"] {
+  --bg: #fffbeb;
+  --surface: #ffffff;
+  --surface-2: #fef3c7;
+  --primary: #d97706;
+  --primary-fg: #ffffff;
+  --secondary: #059669;
+  --danger: #e11d48;
+  --text: #1c1917;
+  --text-muted: #78716c;
+  --border: rgba(0, 0, 0, 0.08);
+  --pet-from: rgba(251, 191, 36, 0.9);
+  --pet-to: rgba(180, 83, 9, 0.4);
+  --pet-glow: rgba(245, 158, 11, 0.5);
+}
+
+/* ── Sakura Mist ── */
+:root[data-theme="sakura-mist"][data-mode="light"] {
+  --bg: #fdf2f8;
+  --surface: #ffffff;
+  --surface-2: #fce7f3;
+  --primary: #ec4899;
+  --primary-fg: #ffffff;
+  --secondary: #a78bfa;
+  --danger: #f43f5e;
+  --text: #500724;
+  --text-muted: #9d7888;
+  --border: rgba(157, 23, 77, 0.1);
+  --pet-from: rgba(244, 114, 182, 0.9);
+  --pet-to: rgba(190, 24, 93, 0.4);
+  --pet-glow: rgba(236, 72, 153, 0.5);
+}
+:root[data-theme="sakura-mist"][data-mode="dark"] {
+  --bg: #1a0a14;
+  --surface: #2a1220;
+  --surface-2: #3a1a2c;
+  --primary: #f472b6;
+  --primary-fg: #1a0a14;
+  --secondary: #c4b5fd;
+  --danger: #fb7185;
+  --text: #fce7f3;
+  --text-muted: #9d7888;
+  --border: rgba(255, 255, 255, 0.08);
+  --pet-from: rgba(244, 114, 182, 0.9);
+  --pet-to: rgba(190, 24, 93, 0.4);
+  --pet-glow: rgba(236, 72, 153, 0.5);
+}
+
+/* ── Matcha Morning ── */
+:root[data-theme="matcha-morning"][data-mode="light"] {
+  --bg: #f0fdf4;
+  --surface: #ffffff;
+  --surface-2: #dcfce7;
+  --primary: #10b981;
+  --primary-fg: #ffffff;
+  --secondary: #f59e0b;
+  --danger: #ef4444;
+  --text: #052e16;
+  --text-muted: #6b7280;
+  --border: rgba(6, 78, 59, 0.1);
+  --pet-from: rgba(52, 211, 153, 0.9);
+  --pet-to: rgba(6, 95, 70, 0.4);
+  --pet-glow: rgba(16, 185, 129, 0.5);
+}
+:root[data-theme="matcha-morning"][data-mode="dark"] {
+  --bg: #0a1a0f;
+  --surface: #122018;
+  --surface-2: #1a2d22;
+  --primary: #34d399;
+  --primary-fg: #0a1a0f;
+  --secondary: #fbbf24;
+  --danger: #f87171;
+  --text: #d1fae5;
+  --text-muted: #6b7280;
+  --border: rgba(255, 255, 255, 0.08);
+  --pet-from: rgba(52, 211, 153, 0.9);
+  --pet-to: rgba(6, 95, 70, 0.4);
+  --pet-glow: rgba(16, 185, 129, 0.5);
+}
+
+/* ── Lavender Dream ── */
+:root[data-theme="lavender-dream"][data-mode="light"] {
+  --bg: #faf5ff;
+  --surface: #ffffff;
+  --surface-2: #f3e8ff;
+  --primary: #8b5cf6;
+  --primary-fg: #ffffff;
+  --secondary: #06b6d4;
+  --danger: #f43f5e;
+  --text: #2e1065;
+  --text-muted: #8b7da3;
+  --border: rgba(76, 29, 149, 0.1);
+  --pet-from: rgba(167, 139, 250, 0.9);
+  --pet-to: rgba(91, 33, 182, 0.4);
+  --pet-glow: rgba(139, 92, 246, 0.5);
+}
+:root[data-theme="lavender-dream"][data-mode="dark"] {
+  --bg: #140a1f;
+  --surface: #1f1230;
+  --surface-2: #2a1a40;
+  --primary: #a78bfa;
+  --primary-fg: #140a1f;
+  --secondary: #22d3ee;
+  --danger: #fb7185;
+  --text: #ede9fe;
+  --text-muted: #8b7da3;
+  --border: rgba(255, 255, 255, 0.08);
+  --pet-from: rgba(167, 139, 250, 0.9);
+  --pet-to: rgba(91, 33, 182, 0.4);
+  --pet-glow: rgba(139, 92, 246, 0.5);
+}
+
+/* ── Sunset Warm ── */
+:root[data-theme="sunset-warm"][data-mode="light"] {
+  --bg: #fffbeb;
+  --surface: #ffffff;
+  --surface-2: #fef3c7;
+  --primary: #f59e0b;
+  --primary-fg: #ffffff;
+  --secondary: #ef4444;
+  --danger: #dc2626;
+  --text: #451a03;
+  --text-muted: #a8956b;
+  --border: rgba(120, 53, 15, 0.1);
+  --pet-from: rgba(251, 191, 36, 0.9);
+  --pet-to: rgba(180, 83, 9, 0.4);
+  --pet-glow: rgba(245, 158, 11, 0.5);
+}
+:root[data-theme="sunset-warm"][data-mode="dark"] {
+  --bg: #1a0f00;
+  --surface: #261a0a;
+  --surface-2: #332410;
+  --primary: #fbbf24;
+  --primary-fg: #1a0f00;
+  --secondary: #f87171;
+  --danger: #ef4444;
+  --text: #fef3c7;
+  --text-muted: #a8956b;
+  --border: rgba(255, 255, 255, 0.08);
+  --pet-from: rgba(251, 191, 36, 0.9);
+  --pet-to: rgba(180, 83, 9, 0.4);
+  --pet-glow: rgba(245, 158, 11, 0.5);
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   Fallback (no data-* attributes yet) — mirrors midnight-amber/dark
+   ════════════════════════════════════════════════════════════════════ */
+:root {
+  --bg: #020617;
+  --surface: #0f172a;
+  --surface-2: #1e293b;
+  --primary: #fbbf24;
+  --primary-fg: #020617;
+  --secondary: #34d399;
+  --danger: #fb7185;
+  --text: #f1f5f9;
+  --text-muted: #64748b;
+  --border: rgba(255, 255, 255, 0.08);
+  --pet-from: rgba(251, 191, 36, 0.9);
+  --pet-to: rgba(180, 83, 9, 0.4);
+  --pet-glow: rgba(245, 158, 11, 0.5);
+
+  font-family: Inter, "Segoe UI", sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+  color: var(--text);
+  background: var(--bg);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-size-adjust: 100%;
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   Tailwind v4 bridge — expose tokens as utilities:
+   bg-bg, bg-surface, bg-surface-2, bg-primary, bg-secondary, bg-danger,
+   text-text, text-text-muted, text-primary, text-secondary, text-danger,
+   border-border, bg-primary/10, etc. (opacity modifiers work)
+   ════════════════════════════════════════════════════════════════════ */
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-primary: var(--primary);
+  --color-primary-fg: var(--primary-fg);
+  --color-secondary: var(--secondary);
+  --color-danger: var(--danger);
+  --color-text: var(--text);
+  --color-text-muted: var(--text-muted);
+  --color-border: var(--border);
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  min-height: 100%;
+  overflow: hidden;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
