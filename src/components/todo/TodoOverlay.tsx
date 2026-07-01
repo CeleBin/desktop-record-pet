@@ -102,6 +102,7 @@ export function TodoOverlay() {
     renameFolder,
     deleteFolder,
     moveTask,
+    reorderFolders,
   } = useFolderStore();
 
   // 分类管理浮层显示状态
@@ -538,6 +539,7 @@ export function TodoOverlay() {
                 await deleteFolder(id);
                 await fetchItems();
               }}
+              onReorder={reorderFolders}
               onClose={() => setShowCategoryManager(false)}
             />
           )}
