@@ -302,10 +302,15 @@ pub fn list_records(
 ) -> AppResult<Vec<RecordWithRelations>> {
     let conn = database.conn.lock()?;
     let records = db::list_records_filtered(&conn, filter.as_ref())?;
-    // Return minimal relations for list view
+    // Fetch the related task for each record so the list view can render
+    // task status badges immediately without waiting for a click to load
+    // the full detail. Attachments / AI results stay lazy.
     let result: Vec<RecordWithRelations> = records
         .into_iter()
-        .map(RecordWithRelations::from_record_minimal)
+        .map(|record| {
+            let task = db::get_task_for_record(&conn, &record.id).unwrap_or(None);
+            RecordWithRelations::from_record(record, task, vec![], vec![], vec![])
+        })
         .collect();
     Ok(result)
 }
