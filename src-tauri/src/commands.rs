@@ -27,9 +27,17 @@ pub struct TaskSortOrder {
 }
 
 pub const DATA_CHANGED_EVENT: &str = "data-changed";
+pub const SETTINGS_CHANGED_EVENT: &str = "settings-changed";
 
 fn emit_data_changed(app: &AppHandle) -> AppResult<()> {
     app.emit(DATA_CHANGED_EVENT, ())
+        .map_err(|error| AppError::State(error.to_string()))
+}
+
+/// Broadcast a settings change so every window can reload its settings
+/// store (keeps theme / shortcuts / overlay prefs in sync across windows).
+fn emit_settings_changed(app: &AppHandle) -> AppResult<()> {
+    app.emit(SETTINGS_CHANGED_EVENT, ())
         .map_err(|error| AppError::State(error.to_string()))
 }
 
@@ -627,6 +635,7 @@ pub fn get_all_settings(database: State<'_, Database>) -> AppResult<Vec<Settings
 /// Upsert a single setting by key/value.
 #[tauri::command]
 pub fn update_setting(
+    app: AppHandle,
     database: State<'_, Database>,
     key: String,
     value: String,
@@ -636,14 +645,17 @@ pub fn update_setting(
     }
     let conn = database.conn.lock()?;
     db::set_setting(&conn, &key, &value)?;
+    emit_settings_changed(&app)?;
     Ok(())
 }
 
 /// Delete all settings entries.
 #[tauri::command]
-pub fn reset_settings(database: State<'_, Database>) -> AppResult<()> {
+pub fn reset_settings(app: AppHandle, database: State<'_, Database>) -> AppResult<()> {
     let conn = database.conn.lock()?;
-    db::delete_all_settings(&conn)
+    db::delete_all_settings(&conn)?;
+    emit_settings_changed(&app)?;
+    Ok(())
 }
 
 // ── Editable global shortcuts ───────────────────────────────────────
@@ -695,6 +707,7 @@ pub fn set_shortcut(
                     }
                     // Persist to DB and update in-memory state.
                     persist_and_update(&database, &shortcut_state, "quick_capture_shortcut", &accelerator);
+                    let _ = emit_settings_changed(&app);
                     SetShortcutResult { ok: true, error: None }
                 }
                 Err(e) => SetShortcutResult {
@@ -723,6 +736,7 @@ pub fn set_shortcut(
                         let _ = app.global_shortcut().unregister(old);
                     }
                     persist_and_update(&database, &shortcut_state, "screenshot_shortcut", &accelerator);
+                    let _ = emit_settings_changed(&app);
                     SetShortcutResult { ok: true, error: None }
                 }
                 Err(e) => SetShortcutResult {

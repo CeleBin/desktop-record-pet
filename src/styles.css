@@ -133,36 +133,38 @@
   --pet-glow: rgba(139, 92, 246, 0.5);
 }
 
-/* ── Sunset Warm ── */
+/* ── Sunset Warm ──
+   Distinct from Midnight Amber: leans into orange/coral sunset tones
+   (Midnight Amber is gold-on-navy; Sunset Warm is orange-on-warm-brown). */
 :root[data-theme="sunset-warm"][data-mode="light"] {
-  --bg: #fffbeb;
+  --bg: #fff7ed;
   --surface: #ffffff;
-  --surface-2: #fef3c7;
-  --primary: #f59e0b;
+  --surface-2: #ffedd5;
+  --primary: #ea580c;
   --primary-fg: #ffffff;
-  --secondary: #ef4444;
+  --secondary: #e11d48;
   --danger: #dc2626;
-  --text: #451a03;
-  --text-muted: #a8956b;
-  --border: rgba(120, 53, 15, 0.1);
-  --pet-from: rgba(251, 191, 36, 0.9);
-  --pet-to: rgba(180, 83, 9, 0.4);
-  --pet-glow: rgba(245, 158, 11, 0.5);
+  --text: #431407;
+  --text-muted: #9a7b5a;
+  --border: rgba(124, 45, 18, 0.1);
+  --pet-from: rgba(249, 115, 22, 0.9);
+  --pet-to: rgba(194, 65, 12, 0.4);
+  --pet-glow: rgba(249, 115, 22, 0.5);
 }
 :root[data-theme="sunset-warm"][data-mode="dark"] {
-  --bg: #1a0f00;
-  --surface: #261a0a;
-  --surface-2: #332410;
-  --primary: #fbbf24;
-  --primary-fg: #1a0f00;
-  --secondary: #f87171;
+  --bg: #1c0a05;
+  --surface: #2a1208;
+  --surface-2: #3a1c0e;
+  --primary: #f97316;
+  --primary-fg: #1c0a05;
+  --secondary: #fb7185;
   --danger: #ef4444;
-  --text: #fef3c7;
-  --text-muted: #a8956b;
+  --text: #ffedd5;
+  --text-muted: #b08968;
   --border: rgba(255, 255, 255, 0.08);
-  --pet-from: rgba(251, 191, 36, 0.9);
-  --pet-to: rgba(180, 83, 9, 0.4);
-  --pet-glow: rgba(245, 158, 11, 0.5);
+  --pet-from: rgba(249, 115, 22, 0.9);
+  --pet-to: rgba(194, 65, 12, 0.4);
+  --pet-glow: rgba(249, 115, 22, 0.5);
 }
 
 /* ════════════════════════════════════════════════════════════════════

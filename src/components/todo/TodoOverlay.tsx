@@ -388,7 +388,9 @@ export function TodoOverlay() {
       */}
       <div
         className="pointer-events-none absolute inset-0 backdrop-blur-xl"
-        style={{ backgroundColor: `rgba(2, 6, 23, ${overlayBgOpacity})` }}
+        style={{
+          backgroundColor: `color-mix(in srgb, var(--bg) ${overlayBgOpacity * 100}%, transparent)`,
+        }}
       />
 
       {/* ── 内容层（完全不透明，文字和控件保持清晰可读） ── */}
