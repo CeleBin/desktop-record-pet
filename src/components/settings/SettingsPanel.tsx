@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useSettingsStore } from "../../store/settings";
+import { THEME_OPTIONS } from "../../lib/theme";
 
 // ── Known setting key schema ──────────────────────────────────────────
 
@@ -219,6 +220,104 @@ const CATEGORY_META: Record<
   },
 };
 
+// ── Theme swatch card grid ─────────────────────────────────────────────
+
+function ThemeSwatchGrid({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <div className="grid grid-cols-2 gap-2 w-full min-w-[260px]">
+      {THEME_OPTIONS.map((opt) => {
+        const isSelected = value === opt.value;
+        return (
+          <button
+            key={opt.value}
+            type="button"
+            aria-pressed={isSelected}
+            onClick={() => onChange(opt.value)}
+            className={`
+              relative rounded-xl border p-2.5 text-left transition-all
+              ${isSelected
+                ? "border-primary ring-2 ring-primary/30"
+                : "border-border hover:border-white/20"
+              }
+            `}
+          >
+            {/* Mini preview gradient strip */}
+            <div
+              className="h-6 w-full rounded-sm mb-1.5"
+              style={{
+                background: `linear-gradient(135deg, ${opt.swatch.bg}, ${opt.swatch.surface} 50%, ${opt.swatch.primary})`,
+              }}
+            />
+            {/* Label */}
+            <div className="text-xs font-medium text-text truncate">{opt.label}</div>
+            {/* Description */}
+            <div className="text-[10px] text-text0 leading-tight mt-0.5">{opt.description}</div>
+            {/* Font info */}
+            <div className="text-[9px] text-text-muted font-mono truncate mt-0.5">
+              {opt.displayFont} / {opt.bodyFont}
+            </div>
+            {/* Selected checkmark */}
+            {isSelected && (
+              <div className="absolute top-3 right-3 flex h-4 w-4 items-center justify-center rounded-full bg-primary">
+                <svg className="h-2.5 w-2.5 text-primary-fg" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                </svg>
+              </div>
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// ── Theme mode segmented control ───────────────────────────────────────
+
+function ThemeModeSegmented({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const options = [
+    { label: "亮色", value: "light" },
+    { label: "暗色", value: "dark" },
+    { label: "跟随系统", value: "system" },
+  ];
+  return (
+    <div className="inline-flex rounded-lg border border-border overflow-hidden">
+      {options.map((opt) => {
+        const isSelected = value === opt.value;
+        return (
+          <button
+            key={opt.value}
+            type="button"
+            aria-pressed={isSelected}
+            onClick={() => onChange(opt.value)}
+            className={`
+              px-3 py-1.5 text-xs font-medium transition-all
+              ${isSelected
+                ? "bg-primary text-primary-fg"
+                : "bg-transparent text-text-muted hover:text-text hover:bg-white/[5%]"
+              }
+              ${opt !== options[0] ? "border-l border-border" : ""}
+            `}
+          >
+            {opt.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 // ── Toggle switch component ───────────────────────────────────────────
 
 function Toggle({
@@ -389,8 +488,11 @@ function SettingRow({
     }
   }, [isDirty, localText, onChange]);
 
+  const isThemeSelect = def === SETTING_DEFS.theme;
+  const isThemeModeSelect = def === SETTING_DEFS.theme_mode;
+
   return (
-    <div className="group flex items-center justify-between gap-4 rounded-xl px-4 py-3 transition hover:bg-white/[3%]">
+    <div className={`group flex ${isThemeSelect ? "flex-col items-stretch" : "flex-row items-center justify-between"} gap-4 rounded-xl px-4 py-3 transition hover:bg-white/[3%]`}>
       <div className="min-w-0 flex-1">
         <p className="text-sm font-medium text-text">{def.label}</p>
         <p className="mt-0.5 text-[11px] leading-4 text-text0">
@@ -398,11 +500,21 @@ function SettingRow({
         </p>
       </div>
 
-      <div className="shrink-0">
+      <div className={isThemeSelect ? "w-full" : "shrink-0"}>
         {def.type === "boolean" ? (
           <Toggle
             enabled={value === "true"}
             onChange={(v) => onChange(v ? "true" : "false")}
+          />
+        ) : isThemeSelect ? (
+          <ThemeSwatchGrid
+            value={value}
+            onChange={onChange}
+          />
+        ) : isThemeModeSelect ? (
+          <ThemeModeSegmented
+            value={value}
+            onChange={onChange}
           />
         ) : def.type === "select" && def.options ? (
           <select

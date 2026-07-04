@@ -13,12 +13,61 @@ export type ThemeName =
 
 export type ThemeMode = "light" | "dark" | "system";
 
-export const THEME_OPTIONS: { label: string; value: ThemeName }[] = [
-  { label: "午夜琥珀", value: "midnight-amber" },
-  { label: "樱花薄雾", value: "sakura-mist" },
-  { label: "抹茶清晨", value: "matcha-morning" },
-  { label: "薰衣草梦境", value: "lavender-dream" },
-  { label: "暮色暖阳", value: "sunset-warm" },
+export interface ThemeOption {
+  label: string;
+  value: ThemeName;
+  swatch: {
+    bg: string;
+    surface: string;
+    primary: string;
+    accent: string;
+  };
+  displayFont: string;
+  bodyFont: string;
+  description: string;
+}
+
+export const THEME_OPTIONS: ThemeOption[] = [
+  {
+    label: "午夜琥珀",
+    value: "midnight-amber",
+    swatch: { bg: "#060b18", surface: "#0e1525", primary: "#f0b84d", accent: "#c48a4a" },
+    displayFont: "JetBrains Mono",
+    bodyFont: "IBM Plex Sans",
+    description: "深夜终端 × 暖金光泽",
+  },
+  {
+    label: "樱花薄雾",
+    value: "sakura-mist",
+    swatch: { bg: "#160812", surface: "#24101e", primary: "#d45a7a", accent: "#c49a40" },
+    displayFont: "Playfair Display",
+    bodyFont: "Nunito Sans",
+    description: "编辑杂志 × 柔粉",
+  },
+  {
+    label: "抹茶清晨",
+    value: "matcha-morning",
+    swatch: { bg: "#0a180e", surface: "#142418", primary: "#8aa56a", accent: "#d48a3a" },
+    displayFont: "Fraunces",
+    bodyFont: "DM Sans",
+    description: "和纸质感 × 抹茶",
+  },
+  {
+    label: "薰衣草梦境",
+    value: "lavender-dream",
+    swatch: { bg: "#120818", surface: "#1c1028", primary: "#9a7ad4", accent: "#c49ad4" },
+    displayFont: "Cormorant Garamond",
+    bodyFont: "Quicksand",
+    description: "梦幻虹彩 × 软发光",
+  },
+  {
+    label: "暮色暖阳",
+    value: "sunset-warm",
+    swatch: { bg: "#180c06", surface: "#261610", primary: "#c75d29", accent: "#d48a5a" },
+    displayFont: "Archivo Black",
+    bodyFont: "Work Sans",
+    description: "暖色粗野 × 赤陶",
+  },
 ];
 
 export const THEME_MODE_OPTIONS: { label: string; value: ThemeMode }[] = [
