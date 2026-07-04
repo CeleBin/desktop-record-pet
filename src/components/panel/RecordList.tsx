@@ -1,6 +1,6 @@
 import type { RecordWithRelations } from "../../types";
 
-type ViewMode = "records" | "tasks";
+type ViewMode = "all" | "notes" | "tasks";
 
 interface RecordListProps {
   records: RecordWithRelations[];
@@ -14,9 +14,6 @@ interface RecordListProps {
 const TYPE_LABELS: Record<string, { label: string; dot: string }> = {
   note: { label: "笔记", dot: "bg-text-muted" },
   task: { label: "待办", dot: "bg-secondary" },
-  experience: { label: "经验", dot: "bg-primary" },
-  issue: { label: "问题", dot: "bg-danger" },
-  "file-note": { label: "文件", dot: "bg-sky-400" },
 };
 
 const TASK_STATUS_BADGE: Record<
@@ -80,7 +77,7 @@ export function RecordList({
       <div className="flex h-full items-center justify-center px-4">
         <div className="text-center">
           <p className="text-sm text-text0">
-            {viewMode === "tasks" ? "暂无任务" : "暂无记录"}
+            {viewMode === "tasks" ? "暂无任务" : viewMode === "notes" ? "暂无笔记" : "暂无记录"}
           </p>
           <p className="mt-1 text-xs text-text-muted">
             {viewMode === "tasks"
@@ -97,11 +94,11 @@ export function RecordList({
       {/* Column header */}
       <div className="shrink-0 border-b border-border px-4 py-3">
         <p className="text-[10px] font-medium uppercase tracking-[0.2em] text-text0">
-          {viewMode === "tasks" ? "任务列表" : "记录列表"}
+          {viewMode === "tasks" ? "任务列表" : viewMode === "notes" ? "笔记列表" : "记录列表"}
         </p>
         <p className="mt-0.5 text-xs text-text-muted">
           {records.length}{" "}
-          {viewMode === "tasks" ? "项任务" : "条记录"}
+          {viewMode === "tasks" ? "项任务" : viewMode === "notes" ? "条笔记" : "条记录"}
         </p>
       </div>
 

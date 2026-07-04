@@ -222,6 +222,13 @@ pub fn run() {
             commands::delete_folder,
             commands::move_task_to_folder,
             commands::reorder_folders,
+            // Tag commands
+            commands::create_tag,
+            commands::list_tags,
+            commands::update_tag,
+            commands::delete_tag,
+            commands::set_record_tags,
+            commands::list_record_tags,
             // Task 9: pet window & tray
             commands::get_pet_position,
             commands::set_pet_position,

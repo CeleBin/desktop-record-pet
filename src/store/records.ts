@@ -55,6 +55,7 @@ export const useRecordsStore = create<RecordsState>((set, get) => ({
         attachment_links: [],
         ai_results: [],
         task: null,
+        tags: [],
       };
       set((state) => ({
         records: [hydrated, ...state.records],

@@ -13,10 +13,10 @@ use uuid::Uuid;
 use crate::errors::{AppError, AppResult};
 use crate::models::{
     AiResult, AiTriggerMode, Attachment, AttachmentRole, AttachmentType, CreateAiResultRequest,
-    CreateAttachmentRequest, CreateRecordRequest, CreateTaskRequest, Record, RecordAttachmentLink,
-    RecordFilter, RecordSource, RecordStatus, RecordType, RecordWithRelations, RepeatRule,
-    SettingsEntry, Task, TaskFilter, TaskPriority, TaskStatus, UnfinishedTaskItem,
-    UpdateRecordRequest, Folder,
+    CreateAttachmentRequest, CreateRecordRequest, CreateTaskRequest, Folder, Record,
+    RecordAttachmentLink, RecordFilter, RecordSource, RecordStatus, RecordType,
+    RecordWithRelations, RepeatRule, SettingsEntry, Tag, Task, TaskFilter, TaskPriority,
+    TaskStatus, UnfinishedTaskItem, UpdateRecordRequest,
 };
 
 pub struct Database {
@@ -136,7 +136,28 @@ pub fn run_migrations(conn: &Connection) -> AppResult<()> {
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS tags (
+            id TEXT PRIMARY KEY NOT NULL,
+            name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+            color TEXT,
+            created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS record_tags (
+            record_id TEXT NOT NULL,
+            tag_id TEXT NOT NULL,
+            PRIMARY KEY (record_id, tag_id),
+            FOREIGN KEY (record_id) REFERENCES records(id) ON DELETE CASCADE,
+            FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE CASCADE
+        );
         "#,
+    )?;
+
+    // ── Migration: convert old record types to 'note' ──
+    conn.execute(
+        "UPDATE records SET type = 'note' WHERE type IN ('experience', 'issue', 'file-note')",
+        [],
     )?;
 
     // ── Migration: add sort_order column to tasks if missing ──
@@ -717,35 +738,47 @@ pub fn delete_all_settings(conn: &Connection) -> AppResult<()> {
 
 // ── Task 7: filtered listing helpers ──────────────────────────────────
 
-pub fn list_records_filtered(conn: &Connection, filter: Option<&RecordFilter>) -> AppResult<Vec<Record>> {
+pub fn list_records_filtered(
+    conn: &Connection,
+    filter: Option<&RecordFilter>,
+    tag_ids: &[String],
+) -> AppResult<Vec<Record>> {
     let filter = match filter {
         Some(f) => f,
         None => return list_records(conn),
     };
 
     let mut sql = String::from(
-        "SELECT id, type, title, content, source, status, created_at, updated_at FROM records WHERE 1=1",
+        "SELECT r.id, r.type, r.title, r.content, r.source, r.status, r.created_at, r.updated_at FROM records r WHERE 1=1",
     );
     let mut param_values: Vec<String> = Vec::new();
 
     if let Some(t) = &filter.type_filter {
         param_values.push(t.as_str().to_string());
-        sql.push_str(&format!(" AND type = ?{}", param_values.len()));
+        sql.push_str(&format!(" AND r.type = ?{}", param_values.len()));
     }
     if let Some(s) = &filter.status_filter {
         param_values.push(s.as_str().to_string());
-        sql.push_str(&format!(" AND status = ?{}", param_values.len()));
+        sql.push_str(&format!(" AND r.status = ?{}", param_values.len()));
     }
     if let Some(q) = &filter.search_query {
         let idx = param_values.len() + 1;
         sql.push_str(&format!(
-            " AND (title LIKE ?{idx} OR content LIKE ?{idx})"
+            " AND (r.title LIKE ?{idx} OR r.content LIKE ?{idx})"
         ));
         let escaped = q.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
         param_values.push(format!("%{escaped}%"));
     }
 
-    sql.push_str(" ORDER BY datetime(created_at) DESC, rowid DESC");
+    for tag_id in tag_ids {
+        let idx = param_values.len() + 1;
+        sql.push_str(&format!(
+            " AND EXISTS (SELECT 1 FROM record_tags rt WHERE rt.record_id = r.id AND rt.tag_id = ?{idx})"
+        ));
+        param_values.push(tag_id.clone());
+    }
+
+    sql.push_str(" ORDER BY datetime(r.created_at) DESC, r.rowid DESC");
 
     if let Some(limit) = filter.limit {
         sql.push_str(&format!(" LIMIT {limit}"));
@@ -821,7 +854,8 @@ pub fn get_record_with_relations(conn: &Connection, id: &str) -> AppResult<Recor
     let attachment_links = get_record_attachments(conn, id)?;
     let attachments = get_attachments_for_record(conn, id)?;
     let ai_results = get_ai_results_for_record(conn, id)?;
-    Ok(RecordWithRelations::from_record(record, task, attachments, attachment_links, ai_results))
+    let tags = list_record_tags(conn, id)?;
+    Ok(RecordWithRelations::from_record(record, task, attachments, attachment_links, ai_results, tags))
 }
 
 /// Create a task for a record with full parameter control.
@@ -1054,6 +1088,122 @@ pub fn reorder_folders(conn: &Connection, order: &[(String, i64)]) -> AppResult<
     Ok(())
 }
 
+// ── Tag CRUD ────────────────────────────────────────────────────
+
+pub fn create_tag(conn: &Connection, name: &str, color: Option<&str>) -> AppResult<Tag> {
+    let tag = Tag {
+        id: Uuid::new_v4().to_string(),
+        name: name.to_string(),
+        color: color.map(String::from),
+        created_at: Utc::now(),
+    };
+
+    conn.execute(
+        "INSERT INTO tags (id, name, color, created_at) VALUES (?1, ?2, ?3, ?4)",
+        params![tag.id, tag.name, tag.color, tag.created_at.to_rfc3339()],
+    )?;
+
+    Ok(tag)
+}
+
+pub fn list_tags(conn: &Connection) -> AppResult<Vec<Tag>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, name, color, created_at FROM tags ORDER BY name COLLATE NOCASE ASC",
+    )?;
+    let rows = stmt.query_map([], map_tag)?;
+    let tags = rows.collect::<Result<Vec<_>, _>>()?;
+    Ok(tags)
+}
+
+pub fn update_tag(
+    conn: &Connection,
+    id: &str,
+    name: Option<&str>,
+    color: Option<Option<&str>>,
+) -> AppResult<Tag> {
+    if let Some(n) = name {
+        conn.execute("UPDATE tags SET name = ?2 WHERE id = ?1", params![id, n])?;
+    }
+    match color {
+        Some(Some(c)) => {
+            conn.execute("UPDATE tags SET color = ?2 WHERE id = ?1", params![id, c])?;
+        }
+        Some(None) => {
+            conn.execute("UPDATE tags SET color = NULL WHERE id = ?1", params![id])?;
+        }
+        None => {}
+    }
+
+    conn.query_row(
+        "SELECT id, name, color, created_at FROM tags WHERE id = ?1",
+        params![id],
+        map_tag,
+    )
+    .optional()?
+    .ok_or_else(|| AppError::NotFound(format!("tag {id}")))
+}
+
+pub fn delete_tag(conn: &Connection, id: &str) -> AppResult<()> {
+    let updated = conn.execute("DELETE FROM tags WHERE id = ?1", params![id])?;
+    if updated == 0 {
+        return Err(AppError::NotFound(format!("tag {id}")));
+    }
+    Ok(())
+}
+
+pub fn set_record_tags(conn: &Connection, record_id: &str, tag_ids: &[String]) -> AppResult<()> {
+    conn.execute("DELETE FROM record_tags WHERE record_id = ?1", params![record_id])?;
+    for tag_id in tag_ids {
+        conn.execute(
+            "INSERT OR IGNORE INTO record_tags (record_id, tag_id) VALUES (?1, ?2)",
+            params![record_id, tag_id],
+        )?;
+    }
+    Ok(())
+}
+
+pub fn list_record_tags(conn: &Connection, record_id: &str) -> AppResult<Vec<Tag>> {
+    let mut stmt = conn.prepare(
+        "SELECT t.id, t.name, t.color, t.created_at
+         FROM tags t
+         INNER JOIN record_tags rt ON rt.tag_id = t.id
+         WHERE rt.record_id = ?1
+         ORDER BY t.name COLLATE NOCASE ASC",
+    )?;
+    let rows = stmt.query_map(params![record_id], map_tag)?;
+    let tags = rows.collect::<Result<Vec<_>, _>>()?;
+    Ok(tags)
+}
+
+pub fn find_or_create_tag_by_name(conn: &Connection, name: &str) -> AppResult<Tag> {
+    conn.query_row(
+        "SELECT id, name, color, created_at FROM tags WHERE name = ?1 COLLATE NOCASE",
+        params![name],
+        map_tag,
+    )
+    .optional()?
+    .map_or_else(|| create_tag(conn, name, None), Ok)
+}
+
+pub fn link_tags_to_record(conn: &Connection, record_id: &str, tag_ids: &[String]) -> AppResult<()> {
+    for tag_id in tag_ids {
+        conn.execute(
+            "INSERT OR IGNORE INTO record_tags (record_id, tag_id) VALUES (?1, ?2)",
+            params![record_id, tag_id],
+        )?;
+    }
+    Ok(())
+}
+
+fn map_tag(row: &Row<'_>) -> rusqlite::Result<Tag> {
+    Ok(Tag {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        color: row.get(2)?,
+        created_at: parse_datetime(&row.get::<_, String>(3)?)?,
+    })
+}
+
 fn map_record(row: &Row<'_>) -> rusqlite::Result<Record> {
     Ok(Record {
         id: row.get(0)?,
@@ -1145,12 +1295,12 @@ mod tests {
         let conn = in_memory();
         let count: i64 = conn
             .query_row(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('records','tasks','attachments','record_attachments','ai_results','reminders','settings')",
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('records','tasks','attachments','record_attachments','ai_results','reminders','settings','tags','record_tags')",
                 [],
                 |row| row.get(0),
             )
             .expect("table count");
-        assert_eq!(count, 7);
+        assert_eq!(count, 9);
     }
 
     #[test]
@@ -1159,7 +1309,7 @@ mod tests {
         let record = insert_record(
             &conn,
             CreateRecordRequest {
-                record_type: Some(RecordType::Issue),
+                record_type: Some(RecordType::Note),
                 title: Some("VPN broken".into()),
                 content: Some("Cannot connect after reboot".into()),
                 source: RecordSource::QuickText,
@@ -1170,7 +1320,7 @@ mod tests {
         .expect("insert record");
 
         let fetched = get_record(&conn, &record.id).expect("get record");
-        assert_eq!(fetched.record_type, RecordType::Issue);
+        assert_eq!(fetched.record_type, RecordType::Note);
         assert_eq!(fetched.title.as_deref(), Some("VPN broken"));
     }
 
@@ -1448,7 +1598,7 @@ mod tests {
         let record = insert_record(
             &conn,
             CreateRecordRequest {
-                record_type: Some(RecordType::Issue),
+                record_type: Some(RecordType::Note),
                 title: Some("convert me".into()),
                 content: None,
                 source: RecordSource::QuickText,

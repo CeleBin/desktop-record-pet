@@ -10,8 +10,9 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
-import { triggerAiAnalysis } from "../../lib/tauri";
+import { setRecordTags, triggerAiAnalysis } from "../../lib/tauri";
 import { useRecordsStore } from "../../store/records";
+import { useTagsStore } from "../../store/tags";
 import type {
   AttachmentItem,
   RecordWithRelations,
@@ -31,9 +32,6 @@ interface RecordDetailProps {
 const TYPE_LABELS: Record<string, string> = {
   note: "笔记",
   task: "待办",
-  experience: "经验",
-  issue: "问题",
-  "file-note": "文件",
 };
 
 const STATUS_LABELS: Record<string, string> = {
@@ -138,6 +136,82 @@ export function RecordDetail({
   const [previewSrc, setPreviewSrc] = useState<string | null>(null);
 
   const { selectRecord } = useRecordsStore();
+  const allTags = useTagsStore((s) => s.tags);
+  const createTag = useTagsStore((s) => s.createTag);
+
+  // ── Tag management ──
+  const [showTagPopover, setShowTagPopover] = useState(false);
+  const [newTagName, setNewTagName] = useState("");
+  const [newTagColor, setNewTagColor] = useState("#a78bfa");
+  const tagPopoverRef = useRef<HTMLDivElement>(null);
+  const TAG_PRESET_COLORS = [
+    "#a78bfa", "#fbbf24", "#34d399", "#fb7185",
+    "#38bdf8", "#fb923c", "#e879f9", "#2dd4bf",
+  ];
+
+  // Close tag popover on outside click
+  useEffect(() => {
+    if (!showTagPopover) return;
+    const handler = (e: MouseEvent) => {
+      if (tagPopoverRef.current && !tagPopoverRef.current.contains(e.target as Node)) {
+        setShowTagPopover(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [showTagPopover]);
+
+  const recordTagIds = useMemo(
+    () => new Set(record?.tags.map((t) => t.id) ?? []),
+    [record?.tags],
+  );
+
+  const availableTags = useMemo(
+    () => allTags.filter((t) => !recordTagIds.has(t.id)),
+    [allTags, recordTagIds],
+  );
+
+  const handleRemoveTag = useCallback(
+    async (tagId: string) => {
+      if (!record) return;
+      const newIds = (record.tags ?? [])
+        .filter((t) => t.id !== tagId)
+        .map((t) => t.id);
+      try {
+        await setRecordTags(record.id, newIds);
+        await selectRecord(record.id);
+      } catch {
+        // error handled elsewhere
+      }
+    },
+    [record, selectRecord],
+  );
+
+  const handleAddTag = useCallback(
+    async (tagId: string) => {
+      if (!record) return;
+      const newIds = [...(record.tags ?? []).map((t) => t.id), tagId];
+      try {
+        await setRecordTags(record.id, newIds);
+        await selectRecord(record.id);
+        setShowTagPopover(false);
+      } catch {
+        // error handled elsewhere
+      }
+    },
+    [record, selectRecord],
+  );
+
+  const handleCreateAndAddTag = useCallback(async () => {
+    if (!record || !newTagName.trim()) return;
+    try {
+      const tag = await createTag(newTagName.trim(), newTagColor);
+      setNewTagName("");
+      await handleAddTag(tag.id);
+    } catch {
+      // error handled by store
+    }
+  }, [record, newTagName, newTagColor, createTag, handleAddTag]);
 
   const titleRef = useRef<HTMLInputElement>(null);
   const contentRef = useRef<HTMLTextAreaElement>(null);
@@ -477,11 +551,7 @@ export function RecordDetail({
               <div className="flex flex-wrap gap-2">
                 <span className="inline-flex items-center gap-1 rounded-full bg-white/5 px-2.5 py-1 text-[11px] text-text">
                   <span className={`inline-block h-1.5 w-1.5 rounded-full ${
-                    record.type === "note" ? "bg-text-muted"
-                    : record.type === "task" ? "bg-secondary"
-                    : record.type === "experience" ? "bg-primary"
-                    : record.type === "issue" ? "bg-danger"
-                    : "bg-sky-400"
+                    record.type === "note" ? "bg-text-muted" : "bg-secondary"
                   }`} />
                   {TYPE_LABELS[record.type] ?? record.type}
                 </span>
@@ -492,6 +562,146 @@ export function RecordDetail({
                   {SOURCE_LABELS[record.source] ?? record.source}
                 </span>
               </div>
+
+              {/* Tags */}
+              <section>
+                <p className="mb-1.5 text-[10px] font-medium uppercase tracking-[0.2em] text-text0">
+                  标签
+                </p>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {record.tags && record.tags.length > 0
+                    ? record.tags.map((tag) => {
+                        const hasColor = !!tag.color;
+                        return (
+                          <span
+                            key={tag.id}
+                            className={`
+                              inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px]
+                              ${hasColor ? "" : "bg-white/5 text-text"}
+                            `}
+                          style={
+                            hasColor
+                              ? {
+                                  backgroundColor: `${tag.color!}1a`,
+                                  color: tag.color!,
+                                }
+                              : undefined
+                          }
+                        >
+                          {tag.name}
+                          <button
+                            type="button"
+                            onClick={() => void handleRemoveTag(tag.id)}
+                            className="ml-0.5 rounded-full p-0.5 opacity-60 transition hover:opacity-100"
+                          >
+                            <svg className="h-2.5 w-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                            </svg>
+                          </button>
+                        </span>
+                      );
+                        })
+                      : null}
+                  {/* Add tag button */}
+                  <div className="relative">
+                    <button
+                      type="button"
+                      onClick={() => setShowTagPopover((prev) => !prev)}
+                      className="inline-flex items-center gap-0.5 rounded-full border border-dashed border-white/15 px-2 py-0.5 text-[11px] text-text-muted transition hover:border-white/30 hover:text-text"
+                    >
+                      <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+                      </svg>
+                      添加
+                    </button>
+
+                    {showTagPopover && (
+                      <div
+                        ref={tagPopoverRef}
+                        className="absolute left-0 z-50 mt-1 w-56 rounded-xl border border-border bg-surface/95 p-3 shadow-2xl backdrop-blur-xl"
+                      >
+                        {availableTags.length > 0 && (
+                          <div className="mb-2">
+                            <p className="mb-1.5 text-[10px] font-medium text-text-muted">
+                              已有标签
+                            </p>
+                            <div className="flex flex-wrap gap-1">
+                              {availableTags.map((tag) => {
+                                const hasColor = !!tag.color;
+                                return (
+                                  <button
+                                    key={tag.id}
+                                    type="button"
+                                    onClick={() => void handleAddTag(tag.id)}
+                                    className={`
+                                      rounded-full px-2 py-0.5 text-[10px] font-medium transition
+                                      ${hasColor ? "" : "bg-white/5 text-text-muted hover:bg-white/10 hover:text-text"}
+                                    `}
+                                  style={
+                                        hasColor
+                                          ? {
+                                              backgroundColor: `${tag.color!}1a`,
+                                              color: tag.color!,
+                                            }
+                                          : undefined
+                                      }
+                                    >
+                                      {tag.name}
+                                    </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+
+                        <p className="mb-1.5 text-[10px] font-medium text-text-muted">
+                          新建标签
+                        </p>
+                        <input
+                          type="text"
+                          value={newTagName}
+                          onChange={(e) => setNewTagName(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              void handleCreateAndAddTag();
+                            }
+                            if (e.key === "Escape") {
+                              setShowTagPopover(false);
+                            }
+                          }}
+                          placeholder="输入名称…"
+                          className="mb-2 w-full rounded-lg border border-border bg-white/5 px-2.5 py-1.5 text-xs text-text placeholder-text-muted outline-none transition focus:border-secondary/40 focus:ring-2 focus:ring-secondary/20"
+                          autoFocus
+                        />
+                        <div className="mb-2 flex gap-1.5">
+                          {TAG_PRESET_COLORS.map((color) => (
+                            <button
+                              key={color}
+                              type="button"
+                              onClick={() => setNewTagColor(color)}
+                              className={`h-4 w-4 rounded-full transition-all duration-150 ${
+                                newTagColor === color
+                                  ? "ring-2 ring-white ring-offset-1 ring-offset-surface/95"
+                                  : "ring-1 ring-white/10"
+                              }`}
+                              style={{ backgroundColor: color }}
+                            />
+                          ))}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => void handleCreateAndAddTag()}
+                          disabled={!newTagName.trim()}
+                          className="w-full rounded-lg bg-secondary/15 px-3 py-1.5 text-xs font-medium text-secondary transition hover:bg-secondary/25 disabled:opacity-40"
+                        >
+                          创建并添加
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </section>
 
               {/* Content */}
               <section>
