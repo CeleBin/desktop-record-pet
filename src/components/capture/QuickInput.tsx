@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 
 import { createRecord, hideWindow, showMainPanel } from "../../lib/tauri";
 
@@ -12,6 +13,7 @@ function normalizeContent(value: string) {
 }
 
 export function QuickInput() {
+  const appWindow = getCurrentWebviewWindow();
   const [content, setContent] = useState("");
   const [createAsTask, setCreateAsTask] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -20,7 +22,25 @@ export function QuickInput() {
 
   const isEmpty = useMemo(() => normalizeContent(content) === null, [content]);
 
+  async function handleDragMouseDown(e: React.MouseEvent<HTMLElement>) {
+    if (e.button !== 0) return;
+    const target = e.target as HTMLElement;
+    if (target.closest("button, input, textarea")) return;
+    e.preventDefault();
+    try {
+      await appWindow.startDragging();
+    } catch {
+      // ignore drag errors (e.g. window already released)
+    }
+  }
+
   useEffect(() => {
+    // Make the html :root background transparent so the window's
+    // `transparent: true` shows the desktop in the padding area around
+    // the floating card. (styles.css sets `background: var(--bg)` on :root
+    // globally, which would otherwise paint an opaque box around the card.)
+    document.documentElement.style.background = "transparent";
+
     const focus = () => {
       const node = textareaRef.current;
       if (!node) return;
@@ -86,9 +106,12 @@ export function QuickInput() {
   }
 
   return (
-    <main className="min-h-screen bg-transparent p-3 text-text">
-      <section className="flex h-full min-h-[148px] flex-col rounded-3xl border border-border bg-bg/95 p-4 shadow-2xl shadow-black/50 backdrop-blur-xl">
-        <div className="mb-3 flex items-center justify-between gap-3">
+    <main className="h-screen bg-transparent p-3 text-text">
+      <section className="flex h-full min-h-[148px] flex-col rounded-3xl bg-bg p-4 backdrop-blur-xl">
+        <div
+          onMouseDown={handleDragMouseDown}
+          className="mb-3 flex cursor-grab items-center justify-between gap-3 select-none active:cursor-grabbing"
+        >
           <div>
             <p className="text-xs uppercase tracking-[0.24em] text-secondary/80">
               Quick capture

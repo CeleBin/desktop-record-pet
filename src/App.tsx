@@ -21,6 +21,7 @@ const SETTINGS_CHANGED_EVENT = "settings-changed";
 /** Subscribes to settings store and re-applies theme when theme/theme_mode changes. */
 function ThemeManager() {
   const settings = useSettingsStore((s) => s.settings);
+  const hasLoaded = useSettingsStore((s) => s.hasLoaded);
   const loadSettings = useSettingsStore((s) => s.loadSettings);
 
   // Load settings on mount (each window loads independently)
@@ -41,13 +42,17 @@ function ThemeManager() {
     };
   }, [loadSettings]);
 
-  // Re-apply theme whenever theme/theme_mode settings change
+  // Re-apply theme whenever theme/theme_mode settings change.
+  // Skip until settings have loaded — initThemeFromCache() (called in main.tsx)
+  // already applied the cached theme synchronously at startup to avoid FOUC.
+  // Running with empty settings would override the cache with the default theme.
   useEffect(() => {
+    if (!hasLoaded) return;
     const theme = parseTheme(settings.theme);
     const mode = parseThemeMode(settings.theme_mode);
     applyTheme(theme, mode);
     cacheTheme(theme, mode);
-  }, [settings.theme, settings.theme_mode]);
+  }, [settings.theme, settings.theme_mode, hasLoaded]);
 
   return null;
 }
