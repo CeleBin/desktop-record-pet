@@ -198,6 +198,7 @@ pub fn run() {
             commands::show_window,
             commands::import_files,
             commands::import_clipboard_image,
+            commands::save_clipboard_image,
             commands::add_attachments_to_record,
             commands::capture_screenshot,
             commands::save_screenshot_record,

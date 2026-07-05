@@ -160,6 +160,25 @@ pub fn import_clipboard_image(
 }
 
 #[tauri::command]
+pub fn save_clipboard_image(
+    rgba: Vec<u8>,
+    width: u32,
+    height: u32,
+) -> AppResult<String> {
+    let image = RgbaImage::from_raw(width, height, rgba).ok_or_else(|| {
+        AppError::Validation("clipboard image buffer does not match width/height".into())
+    })?;
+
+    let temp_dir = std::env::temp_dir();
+    fs::create_dir_all(&temp_dir)?;
+    let file_path = temp_dir.join(format!("drp-clip-{}.png", uuid::Uuid::new_v4()));
+    image
+        .save(&file_path)
+        .map_err(|error| AppError::Io(error.to_string()))?;
+    Ok(file_path.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
 pub fn add_attachments_to_record(
     app: AppHandle,
     database: State<'_, Database>,

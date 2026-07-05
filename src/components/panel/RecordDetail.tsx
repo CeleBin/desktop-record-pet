@@ -9,12 +9,12 @@ import {
 import { convertFileSrc } from "@tauri-apps/api/core";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { listenForFileDrops } from "../../lib/dragDrop";
 
-import { setRecordTags, triggerAiAnalysis } from "../../lib/tauri";
+import { addAttachmentsToRecord, getRecordDetail, saveClipboardImage, setRecordTags, triggerAiAnalysis } from "../../lib/tauri";
 import { useRecordsStore } from "../../store/records";
 import { useTagsStore } from "../../store/tags";
 import type {
-  AttachmentItem,
   RecordWithRelations,
   TaskStatus,
   UpdateRecordRequest,
@@ -69,23 +69,47 @@ function formatDateTime(iso: string): string {
   }
 }
 
-function InlineImage({
-  attachment,
-  onClick,
-}: {
-  attachment: AttachmentItem;
-  onClick: (src: string) => void;
-}) {
-  const src = convertFileSrc(attachment.local_path);
-  return (
-    <img
-      src={src}
-      alt="attachment"
-      className="max-h-96 w-full rounded-xl border border-border object-contain
-        cursor-pointer transition hover:brightness-110"
-      onClick={() => onClick(src)}
-    />
-  );
+/**
+ * Custom URL transform for ReactMarkdown. Allows standard web protocols and
+ * Tauri asset URLs through, converts local filesystem paths (Windows `C:\…`
+ * or `C:/…`) to Tauri asset URLs via convertFileSrc, and strips everything
+ * else (security: prevents javascript: URLs etc.).
+ */
+const markdownUrlTransform = (url: string): string => {
+  if (/^(https?:|data:|blob:|asset:|mailto:|tel:)/i.test(url)) {
+    return url;
+  }
+  if (/^[a-zA-Z]:[\\/]/.test(url)) {
+    return convertFileSrc(url);
+  }
+  return "";
+};
+
+/** Convert an image Blob to raw RGBA pixel data + dimensions via a canvas. */
+function blobToRgba(blob: Blob): Promise<{ rgba: Uint8Array; width: number; height: number }> {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(blob);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const canvas = document.createElement("canvas");
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) {
+        reject(new Error("Failed to get 2d canvas context"));
+        return;
+      }
+      ctx.drawImage(img, 0, 0);
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      resolve({ rgba: new Uint8Array(imageData.data.buffer), width: canvas.width, height: canvas.height });
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("Failed to load pasted image"));
+    };
+    img.src = url;
+  });
 }
 
 // ── Markdown helpers ────────────────────────────────────────────────
@@ -216,6 +240,23 @@ export function RecordDetail({
 
   const titleRef = useRef<HTMLInputElement>(null);
   const contentRef = useRef<HTMLTextAreaElement>(null);
+  // Mirrors contentDraft for use inside async callbacks (paste/drop) where
+  // the closure would otherwise capture a stale value.
+  const contentDraftRef = useRef("");
+  useEffect(() => {
+    contentDraftRef.current = contentDraft;
+  }, [contentDraft]);
+
+  // Mirrors record + editingContent for the window-level drag-drop listener.
+  const recordRef = useRef(record);
+  useEffect(() => {
+    recordRef.current = record;
+  }, [record]);
+  const editingContentRef = useRef(editingContent);
+  useEffect(() => {
+    editingContentRef.current = editingContent;
+  }, [editingContent]);
+
   // Points at whichever markdown container is currently rendered (view body or
   // edit preview). Used by the TOC to locate heading elements for scroll jumps.
   const markdownContainerRef = useRef<HTMLDivElement>(null);
@@ -311,15 +352,23 @@ export function RecordDetail({
         <td className="border border-border px-3 py-1.5 text-text-muted">{children}</td>
       ),
       hr: () => <hr className="border-border my-6" />,
-      img: ({ src, alt }: { src?: string; alt?: string }) => (
-        <img
-          src={src}
-          alt={alt}
-          className="max-h-96 w-full rounded-xl border border-border object-contain my-3"
-        />
-      ),
+      img: ({ src, alt }: { src?: string; alt?: string }) => {
+        if (!src) return null;
+        const resolved = /^(https?:|data:|asset:|blob:)/i.test(src)
+          ? src
+          : convertFileSrc(src);
+        if (!resolved) return null;
+        return (
+          <img
+            src={resolved}
+            alt={alt}
+            onClick={() => setPreviewSrc(resolved)}
+            className="max-h-96 w-full cursor-zoom-in rounded-xl border border-border object-contain my-3"
+          />
+        );
+      },
     }),
-    [],
+    [setPreviewSrc],
   );
 
   // TOC source — draft while editing, final content while viewing
@@ -385,6 +434,112 @@ export function RecordDetail({
 
   const cancelEditContent = useCallback(() => {
     setEditingContent(false);
+  }, []);
+
+  const insertMarkdownAtCursor = useCallback((text: string) => {
+    const textarea = contentRef.current;
+    if (!textarea) return;
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    const draft = contentDraftRef.current;
+    const prefix = draft.slice(0, start);
+    const suffix = draft.slice(end);
+    // Add newlines around the image if we're not at the start of a line.
+    const needsLeadingNewline = prefix.length > 0 && !prefix.endsWith("\n");
+    const needsTrailingNewline = suffix.length > 0 && !suffix.startsWith("\n");
+    const insertion =
+      (needsLeadingNewline ? "\n" : "") +
+      text +
+      (needsTrailingNewline ? "\n" : "");
+    const next = prefix + insertion + suffix;
+    setContentDraft(next);
+    contentDraftRef.current = next;
+    const newCursor = start + insertion.length;
+    requestAnimationFrame(() => {
+      textarea.focus();
+      textarea.selectionStart = textarea.selectionEnd = newCursor;
+    });
+  }, []);
+
+  const addImagePathsToRecord = useCallback(
+    async (paths: string[]) => {
+      if (!record) return;
+      const oldIds = new Set(record.attachments.map((a) => a.id));
+      await addAttachmentsToRecord(record.id, paths);
+      const updated = await getRecordDetail(record.id);
+      const newAttachments = updated.attachments.filter(
+        (a) => !oldIds.has(a.id) && (a.file_type === "image" || a.file_type === "screenshot"),
+      );
+      if (newAttachments.length > 0) {
+        // Store the convertFileSrc URL (http://asset.localhost/...) in the
+        // markdown so ReactMarkdown's default urlTransform doesn't strip it
+        // and the img renderer can display it directly.
+        const markdown = newAttachments
+          .map((a) => `![](${convertFileSrc(a.local_path)})`)
+          .join("\n\n");
+        insertMarkdownAtCursor(markdown);
+      }
+      await selectRecord(record.id);
+    },
+    [record, selectRecord, insertMarkdownAtCursor],
+  );
+
+  const handlePaste = useCallback(
+    async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+      if (!record) return;
+      const items = Array.from(e.clipboardData.items);
+      const imageItem = items.find((it) => it.type.startsWith("image/"));
+      if (!imageItem) return; // let default text paste happen
+      const blob = imageItem.getAsFile();
+      if (!blob) return;
+      e.preventDefault();
+      try {
+        const { rgba, width, height } = await blobToRgba(blob);
+        const tempPath = await saveClipboardImage(
+          Array.from(rgba),
+          width,
+          height,
+        );
+        await addImagePathsToRecord([tempPath]);
+      } catch (error) {
+        console.error("Failed to paste image:", error);
+      }
+    },
+    [record, addImagePathsToRecord],
+  );
+
+  const addImagePathsToRecordRef = useRef(addImagePathsToRecord);
+  useEffect(() => {
+    addImagePathsToRecordRef.current = addImagePathsToRecord;
+  }, [addImagePathsToRecord]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    void listenForFileDrops(async ({ paths }) => {
+      if (!editingContentRef.current) return;
+      const currentRecord = recordRef.current;
+      if (!currentRecord) return;
+      const imagePaths = paths.filter((p) =>
+        /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(p),
+      );
+      if (imagePaths.length === 0) return;
+      try {
+        await addImagePathsToRecordRef.current(imagePaths);
+      } catch (error) {
+        console.error("Failed to drop images:", error);
+      }
+    }).then((fn) => {
+      if (cancelled) {
+        fn();
+      } else {
+        unlisten = fn;
+      }
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
   }, []);
 
   const handleConvertToTask = useCallback(async () => {
@@ -538,6 +693,7 @@ export function RecordDetail({
               ref={contentRef}
               value={contentDraft}
               onChange={(e) => setContentDraft(e.target.value)}
+              onPaste={handlePaste}
               onKeyDown={(e) => {
                 if (e.key === "Escape") {
                   e.preventDefault();
@@ -559,7 +715,7 @@ export function RecordDetail({
               <div className="flex-1 overflow-y-auto overscroll-contain p-5">
                 {contentDraft.trim() ? (
                   <div className="markdown-body" ref={markdownContainerRef}>
-                    <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
+                    <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents} urlTransform={markdownUrlTransform}>
                       {contentDraft}
                     </ReactMarkdown>
                   </div>
@@ -780,7 +936,7 @@ export function RecordDetail({
                 </p>
                 {record.content ? (
                   <div className="markdown-body select-text" ref={markdownContainerRef}>
-                    <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
+                    <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents} urlTransform={markdownUrlTransform}>
                       {record.content}
                     </ReactMarkdown>
                   </div>
@@ -868,25 +1024,6 @@ export function RecordDetail({
                     </div>
                   </div>
                 </section>
-              )}
-
-              {/* 图片嵌入内容 */}
-              {record.attachments
-                .filter((a) => a.file_type === "image" || a.file_type === "screenshot")
-                .length > 0 && (
-                  <section>
-                    <div className="space-y-3">
-                      {record.attachments
-                        .filter((a) => a.file_type === "image" || a.file_type === "screenshot")
-                        .map((att) => (
-                          <InlineImage
-                            key={att.id}
-                            attachment={att}
-                            onClick={(src) => setPreviewSrc(src)}
-                          />
-                        ))}
-                    </div>
-                  </section>
               )}
 
               {/* 非图片附件 */}

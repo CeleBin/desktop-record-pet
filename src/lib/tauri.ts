@@ -42,6 +42,14 @@ export async function addAttachmentsToRecord(
   return invoke<RecordItem>("add_attachments_to_record", { recordId, paths });
 }
 
+export async function saveClipboardImage(
+  rgba: number[],
+  width: number,
+  height: number,
+): Promise<string> {
+  return invoke<string>("save_clipboard_image", { rgba, width, height });
+}
+
 export async function showMainPanel(): Promise<void> {
   return invoke<void>("show_main_panel");
 }
