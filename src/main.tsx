@@ -55,11 +55,18 @@ async function bootstrap() {
   await store.loadSettings();
 
   // Apply the real theme from DB settings before rendering.
+  // Only apply when loadSettings actually returned data (non-empty settings).
+  // If loadSettings() failed (e.g. IPC error in a hidden webview), settings
+  // stays {} and initThemeFromCache() already applied the cached theme —
+  // overriding it with DEFAULT_THEME here would corrupt the shared
+  // localStorage cache and cause cross-window theme inconsistency.
   const { settings } = useSettingsStore.getState();
-  const theme = parseTheme(settings.theme);
-  const mode = parseThemeMode(settings.theme_mode);
-  applyTheme(theme, mode);
-  cacheTheme(theme, mode);
+  if (Object.keys(settings).length > 0) {
+    const theme = parseTheme(settings.theme);
+    const mode = parseThemeMode(settings.theme_mode);
+    applyTheme(theme, mode);
+    cacheTheme(theme, mode);
+  }
 
   ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <React.StrictMode>

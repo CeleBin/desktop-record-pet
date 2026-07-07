@@ -37,6 +37,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         hasLoaded: true,
       });
     } catch (error) {
+      // Log so IPC/DB failures in hidden webviews are visible per-window.
+      console.error("[settings] loadSettings failed:", error);
       set({
         loading: false,
         hasLoaded: true,

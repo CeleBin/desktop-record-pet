@@ -43,16 +43,21 @@ function ThemeManager() {
   }, [loadSettings]);
 
   // Re-apply theme whenever theme/theme_mode settings change.
-  // Skip until settings have loaded — initThemeFromCache() (called in main.tsx)
-  // already applied the cached theme synchronously at startup to avoid FOUC.
-  // Running with empty settings would override the cache with the default theme.
+  // Skip until settings have loaded AND are non-empty — initThemeFromCache()
+  // (called in main.tsx) already applied the cached theme synchronously at
+  // startup to avoid FOUC. Running with empty settings (loadSettings failed or
+  // in-flight retry cleared the store) would override the cache with the
+  // default theme and corrupt the shared localStorage cache, causing
+  // cross-window theme inconsistency.
+  const settingsLoaded = Object.keys(settings).length > 0;
   useEffect(() => {
     if (!hasLoaded) return;
+    if (!settingsLoaded) return;
     const theme = parseTheme(settings.theme);
     const mode = parseThemeMode(settings.theme_mode);
     applyTheme(theme, mode);
     cacheTheme(theme, mode);
-  }, [settings.theme, settings.theme_mode, hasLoaded]);
+  }, [settings.theme, settings.theme_mode, hasLoaded, settingsLoaded]);
 
   return null;
 }
