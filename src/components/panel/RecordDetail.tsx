@@ -10,6 +10,8 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { listenForFileDrops } from "../../lib/dragDrop";
+import { useEditorPreviewResize } from "../../lib/useEditorPreviewResize";
+import { useTocResize } from "../../lib/useTocResize";
 
 import { addAttachmentsToRecord, getRecordDetail, saveClipboardImage, setRecordTags, triggerAiAnalysis } from "../../lib/tauri";
 import { useRecordsStore } from "../../store/records";
@@ -159,6 +161,14 @@ export function RecordDetail({
   const [aiError, setAiError] = useState<string | null>(null);
   //全屏预览窗口
   const [previewSrc, setPreviewSrc] = useState<string | null>(null);
+
+  // ── Editor / preview split ratio (persisted, proportional resize) ──
+  const { ratio: editorRatio, startResize: startEditorResize, resetRatio: resetEditorRatio } =
+    useEditorPreviewResize();
+
+  // ── TOC rail width (persisted, clamped px resize) ──
+  const { width: tocWidth, startResize: startTocResize, resetWidth: resetTocWidth } =
+    useTocResize();
 
   const { selectRecord } = useRecordsStore();
   const allTags = useTagsStore((s) => s.tags);
@@ -830,23 +840,41 @@ export function RecordDetail({
               }}
               placeholder="使用 Markdown 编写…  自动保存已开启 · Ctrl+Enter 立即保存 · Esc 完成"
               className={`${
-                showPreview ? "flex-1 border-r border-border" : "w-full"
+                showPreview ? "border-r border-border" : "w-full"
               } resize-none bg-surface/60
                 px-5 py-4 text-sm leading-6 text-text outline-none
                 font-mono placeholder:text-text-muted`}
+              style={
+                showPreview
+                  ? { flex: `${editorRatio} 1 0%` }
+                  : undefined
+              }
             />
             {showPreview && (
-              <div className="flex-1 overflow-y-auto overscroll-contain p-5">
-                {contentDraft.trim() ? (
-                  <div className="markdown-body" ref={markdownContainerRef}>
-                    <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents} urlTransform={markdownUrlTransform}>
-                      {contentDraft}
-                    </ReactMarkdown>
-                  </div>
-                ) : (
-                  <p className="text-sm italic text-text0">实时预览…</p>
-                )}
-              </div>
+              <>
+                <div
+                  className="col-resize-handle shrink-0"
+                  onPointerDown={startEditorResize}
+                  onDoubleClick={resetEditorRatio}
+                  role="separator"
+                  aria-orientation="vertical"
+                  aria-label="调整编辑器与预览宽度"
+                />
+                <div
+                  className="overflow-y-auto overscroll-contain p-5"
+                  style={{ flex: `${1 - editorRatio} 1 0%` }}
+                >
+                  {contentDraft.trim() ? (
+                    <div className="markdown-body" ref={markdownContainerRef}>
+                      <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents} urlTransform={markdownUrlTransform}>
+                        {contentDraft}
+                      </ReactMarkdown>
+                    </div>
+                  ) : (
+                    <p className="text-sm italic text-text0">实时预览…</p>
+                  )}
+                </div>
+              </>
             )}
           </div>
         ) : (
@@ -1313,9 +1341,24 @@ export function RecordDetail({
           </div>
         )}
 
+        {/* ── TOC resize handle ── */}
+        {toc.length > 0 && (
+          <div
+            className="col-resize-handle shrink-0"
+            onPointerDown={startTocResize}
+            onDoubleClick={resetTocWidth}
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="调整目录宽度"
+          />
+        )}
+
         {/* ── TOC right rail ── */}
         {toc.length > 0 && (
-          <aside className="w-[180px] shrink-0 overflow-y-auto border-l border-border bg-bg/30 px-3 py-4">
+          <aside
+            className="shrink-0 overflow-y-auto border-l border-border bg-bg/30 px-3 py-4"
+            style={{ width: tocWidth }}
+          >
             <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.2em] text-text0">
               目录
             </p>

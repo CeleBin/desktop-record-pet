@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { useColumnResize } from "../../lib/useColumnResize";
 import { useRecordsStore } from "../../store/records";
 import { initTagsListener, useTagsStore } from "../../store/tags";
 import { useTasksStore } from "../../store/tasks";
@@ -30,6 +31,9 @@ export function MainPanel() {
   const { convertRecordToTask, updateStatus, fetchTasks } = useTasksStore();
 
   const { fetchTags: fetchTagsStore } = useTagsStore();
+
+  // ── Resizable column widths (persisted to localStorage) ──
+  const { widths, startResize, resetColumn } = useColumnResize();
 
   // ── Type filter (multi-select: 笔记 + 待办, both selected = all) ──
   const [selectedTypes, setSelectedTypes] = useState<Set<RecordType>>(
@@ -176,7 +180,10 @@ export function MainPanel() {
   return (
     <div className="flex h-screen overflow-hidden bg-bg text-text">
       {/* ── Left: Navigation sidebar ── */}
-      <aside className="w-[200px] shrink-0 border-r border-border bg-bg/50">
+      <aside
+        className="shrink-0 border-r border-border bg-bg/50"
+        style={{ width: widths.nav }}
+      >
         <Navigation
           selectedTypes={selectedTypes}
           onToggleTypeFilter={toggleTypeFilter}
@@ -194,8 +201,21 @@ export function MainPanel() {
         />
       </aside>
 
+      {/* ── Resize handle: nav ↔ list ── */}
+      <div
+        className="col-resize-handle shrink-0"
+        onPointerDown={startResize("nav")}
+        onDoubleClick={() => resetColumn("nav")}
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="调整导航栏宽度"
+      />
+
       {/* ── Middle: Record list or Settings ── */}
-      <section className="flex w-[360px] shrink-0 flex-col border-r border-border bg-bg/30">
+      <section
+        className="flex shrink-0 flex-col border-r border-border bg-bg/30"
+        style={{ width: widths.list }}
+      >
         {showSettings ? (
           <SettingsPanel onClose={() => setShowSettings(false)} />
         ) : (
@@ -209,6 +229,16 @@ export function MainPanel() {
           />
         )}
       </section>
+
+      {/* ── Resize handle: list ↔ detail ── */}
+      <div
+        className="col-resize-handle shrink-0"
+        onPointerDown={startResize("list")}
+        onDoubleClick={() => resetColumn("list")}
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="调整列表宽度"
+      />
 
       {/* ── Right: Record detail ── */}
       <section className="flex min-w-0 flex-1 flex-col bg-bg/20">

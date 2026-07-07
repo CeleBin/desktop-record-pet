@@ -348,3 +348,30 @@ textarea,
 select {
   font: inherit;
 }
+
+/* ════════════════════════════════════════════════════════════════════
+   Column resize handle — MainPanel
+   Invisible by default; reveals a thin accent line on hover / active.
+   Dragging state is reflected via body[style] cursor lock from the hook.
+   ════════════════════════════════════════════════════════════════════ */
+.col-resize-handle {
+  position: relative;
+  width: 4px;
+  cursor: col-resize;
+  background: transparent;
+  transition: background-color 120ms ease;
+  z-index: 5;
+}
+
+.col-resize-handle::before {
+  content: "";
+  position: absolute;
+  /* Widen the hit area without thickening the visible line. */
+  inset: 0 -3px;
+}
+
+.col-resize-handle:hover,
+.col-resize-handle:active {
+  background-color: var(--primary);
+  opacity: 0.35;
+}
