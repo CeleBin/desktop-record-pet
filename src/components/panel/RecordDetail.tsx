@@ -257,6 +257,62 @@ export function RecordDetail({
     editingContentRef.current = editingContent;
   }, [editingContent]);
 
+  // ── Auto-save infrastructure ──────────────────────────────────────
+  // The auto-save system works as follows:
+  // 1. While editing, a debounced effect watches `contentDraft` / `titleDraft`.
+  //    When they diverge from the last persisted value, a pending save is
+  //    recorded in a ref and a 1.2s timer is started.
+  // 2. If the timer fires, the pending save is flushed to the backend.
+  // 3. If the user switches records, navigates away (unmount), or manually
+  //    clicks 保存/完成, the pending save is flushed immediately so no edits
+  //    are lost.
+  // `draftRecordIdRef` tracks which record the current draft belongs to —
+  // this prevents a stale draft from being saved onto the wrong record after
+  // the user switches selection.
+
+  // The record id the current draft belongs to (null = no active draft).
+  const draftRecordIdRef = useRef<string | null>(null);
+  // Pending content save awaiting debounce flush or explicit flush.
+  const pendingContentSaveRef = useRef<{ recordId: string; content: string } | null>(null);
+  // Last content successfully persisted (trimmed). Prevents redundant saves
+  // and feedback loops.
+  const lastSavedContentRef = useRef<string>("");
+
+  // Mirror titleDraft for use in async flush callbacks.
+  const titleDraftRef = useRef("");
+  useEffect(() => {
+    titleDraftRef.current = titleDraft;
+  }, [titleDraft]);
+  const pendingTitleSaveRef = useRef<{ recordId: string; title: string } | null>(null);
+  const lastSavedTitleRef = useRef<string>("");
+
+  // Flush a single pending content save. Reads from ref → safe to call from
+  // any effect cleanup or callback without stale-closure issues.
+  const flushContentSave = useCallback(() => {
+    const pending = pendingContentSaveRef.current;
+    if (!pending) return;
+    pendingContentSaveRef.current = null;
+    const trimmed = pending.content.trim();
+    if (trimmed === lastSavedContentRef.current.trim()) return;
+    lastSavedContentRef.current = trimmed;
+    void onUpdate(pending.recordId, {
+      content: trimmed.length > 0 ? trimmed : null,
+    });
+  }, [onUpdate]);
+
+  // Flush a single pending title save.
+  const flushTitleSave = useCallback(() => {
+    const pending = pendingTitleSaveRef.current;
+    if (!pending) return;
+    pendingTitleSaveRef.current = null;
+    const trimmed = pending.title.trim();
+    if (trimmed === lastSavedTitleRef.current.trim()) return;
+    lastSavedTitleRef.current = trimmed;
+    void onUpdate(pending.recordId, {
+      title: trimmed.length > 0 ? trimmed : null,
+    });
+  }, [onUpdate]);
+
   // Points at whichever markdown container is currently rendered (view body or
   // edit preview). Used by the TOC to locate heading elements for scroll jumps.
   const markdownContainerRef = useRef<HTMLDivElement>(null);
@@ -375,11 +431,66 @@ export function RecordDetail({
   const tocSource = editingContent ? contentDraft : (record?.content ?? "");
   const toc = useMemo(() => extractToc(tocSource), [tocSource]);
 
-  // Reset editing state when record changes
+  // Keep lastSaved* refs in sync with the record from the server.
   useEffect(() => {
+    lastSavedContentRef.current = record?.content ?? "";
+    lastSavedTitleRef.current = record?.title ?? "";
+  }, [record?.id, record?.content, record?.title]);
+
+  // Debounced auto-save for content while editing.
+  useEffect(() => {
+    if (!editingContent || !record) return;
+    // Only auto-save if the draft belongs to the currently selected record.
+    if (draftRecordIdRef.current !== record.id) return;
+    const draft = contentDraft;
+    if (draft.trim() === lastSavedContentRef.current.trim()) {
+      pendingContentSaveRef.current = null;
+      return;
+    }
+    pendingContentSaveRef.current = { recordId: record.id, content: draft };
+    const timer = setTimeout(() => {
+      flushContentSave();
+    }, 1200);
+    return () => clearTimeout(timer);
+  }, [editingContent, contentDraft, record, flushContentSave]);
+
+  // Debounced auto-save for title while editing.
+  useEffect(() => {
+    if (!editingTitle || !record) return;
+    if (draftRecordIdRef.current !== record.id) return;
+    const draft = titleDraft;
+    if (draft.trim() === lastSavedTitleRef.current.trim()) {
+      pendingTitleSaveRef.current = null;
+      return;
+    }
+    pendingTitleSaveRef.current = { recordId: record.id, title: draft };
+    const timer = setTimeout(() => {
+      flushTitleSave();
+    }, 800);
+    return () => clearTimeout(timer);
+  }, [editingTitle, titleDraft, record, flushTitleSave]);
+
+  // When the selected record changes, flush any pending draft for the OLD
+  // record before resetting editing state. Also invalidate the draft so the
+  // auto-save effect doesn't fire against the new record with stale content.
+  useEffect(() => {
+    flushContentSave();
+    flushTitleSave();
+    draftRecordIdRef.current = null;
+    pendingContentSaveRef.current = null;
+    pendingTitleSaveRef.current = null;
     setEditingTitle(false);
     setEditingContent(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [record?.id]);
+
+  // Flush pending saves on unmount (e.g. navigating to settings / closing panel)
+  useEffect(() => {
+    return () => {
+      flushContentSave();
+      flushTitleSave();
+    };
+  }, [flushContentSave, flushTitleSave]);
 
   // Focus when entering edit mode
   useEffect(() => {
@@ -397,6 +508,7 @@ export function RecordDetail({
   }, [editingContent]);
 
   const startEditTitle = useCallback(() => {
+    draftRecordIdRef.current = record?.id ?? null;
     if (!record?.title) {
       setTitleDraft("");
     } else {
@@ -406,6 +518,7 @@ export function RecordDetail({
   }, [record]);
 
   const startEditContent = useCallback(() => {
+    draftRecordIdRef.current = record?.id ?? null;
     if (!record?.content) {
       setContentDraft("");
     } else {
@@ -418,23 +531,34 @@ export function RecordDetail({
     if (!record) return;
     setEditingTitle(false);
     const trimmed = titleDraft.trim();
-    if (trimmed === (record.title ?? "")) return;
-    await onUpdate(record.id, { title: trimmed.length > 0 ? trimmed : null });
+    if (trimmed === lastSavedTitleRef.current.trim()) return;
+    pendingTitleSaveRef.current = null;
+    await onUpdate(record.id, {
+      title: trimmed.length > 0 ? trimmed : null,
+    });
+    lastSavedTitleRef.current = trimmed;
   }, [record, titleDraft, onUpdate]);
 
   const saveContent = useCallback(async () => {
     if (!record) return;
-    setEditingContent(false);
     const trimmed = contentDraft.trim();
-    if (trimmed === (record.content ?? "")) return;
-    await onUpdate(record.id, {
-      content: trimmed.length > 0 ? trimmed : null,
-    });
+    if (trimmed !== lastSavedContentRef.current.trim()) {
+      pendingContentSaveRef.current = null;
+      await onUpdate(record.id, {
+        content: trimmed.length > 0 ? trimmed : null,
+      });
+      lastSavedContentRef.current = trimmed;
+    }
+    setEditingContent(false);
   }, [record, contentDraft, onUpdate]);
 
-  const cancelEditContent = useCallback(() => {
+  // Exit edit mode. Any pending auto-save is flushed first so no edits are
+  // lost. With auto-save enabled this is effectively "done editing" rather
+  // than "discard".
+  const finishEditContent = useCallback(() => {
+    flushContentSave();
     setEditingContent(false);
-  }, []);
+  }, [flushContentSave]);
 
   const insertMarkdownAtCursor = useCallback((text: string) => {
     const textarea = contentRef.current;
@@ -597,7 +721,7 @@ export function RecordDetail({
     );
   }
 
-  if (loading) {
+  if (loading && !editingContent) {
     return (
       <div className="flex h-full items-center justify-center">
         <div className="h-5 w-5 animate-spin rounded-full border-2 border-secondary/30 border-t-secondary" />
@@ -697,14 +821,14 @@ export function RecordDetail({
               onKeyDown={(e) => {
                 if (e.key === "Escape") {
                   e.preventDefault();
-                  cancelEditContent();
+                  finishEditContent();
                 }
                 if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
                   e.preventDefault();
                   void saveContent();
                 }
               }}
-              placeholder="使用 Markdown 编写…  Ctrl+Enter 保存 / Esc 取消"
+              placeholder="使用 Markdown 编写…  自动保存已开启 · Ctrl+Enter 立即保存 · Esc 完成"
               className={`${
                 showPreview ? "flex-1 border-r border-border" : "w-full"
               } resize-none bg-surface/60
@@ -1230,11 +1354,11 @@ export function RecordDetail({
             </button>
             <button
               type="button"
-              onClick={cancelEditContent}
+              onClick={finishEditContent}
               className="inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5
                 text-xs font-medium text-text-muted transition hover:bg-white/5 hover:text-text"
             >
-              取消
+              完成
             </button>
             <button
               type="button"
@@ -1255,7 +1379,7 @@ export function RecordDetail({
             </button>
             <div className="flex-1" />
             <span className="text-[10px] text-text-muted">
-              Ctrl+Enter 保存 · Esc 取消
+              自动保存已开启 · Ctrl+Enter 立即保存 · Esc 完成
             </span>
           </div>
         </div>

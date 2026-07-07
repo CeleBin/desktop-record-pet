@@ -92,18 +92,16 @@ export const useRecordsStore = create<RecordsState>((set, get) => ({
     }
   },
   async updateRecord(id, update) {
-    set({ loading: true, error: null });
+    set({ error: null });
     try {
       const updated = await updateRecordCommand(id, update);
       set((state) => ({
         records: state.records.map((record) =>
           record.id === id ? { ...record, ...updated } : record,
         ),
-        loading: false,
       }));
     } catch (error) {
       set({
-        loading: false,
         error: error instanceof Error ? error.message : String(error),
       });
     }
