@@ -47,6 +47,8 @@ export function PetMenu({ onClose, onOpenPanel }: PetMenuProps) {
     <div
       ref={menuRef}
       className="absolute inset-0 z-50 flex flex-col overflow-hidden rounded-2xl border border-border bg-surface/95 shadow-2xl shadow-black/60 backdrop-blur-2xl"
+      onMouseDown={(e) => e.stopPropagation()}
+      onMouseUp={(e) => e.stopPropagation()}
     >
       {/* Open panel */}
       <button
