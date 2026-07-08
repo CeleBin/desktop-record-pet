@@ -11,6 +11,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { listenForFileDrops } from "../../lib/dragDrop";
 import { useEditorPreviewResize } from "../../lib/useEditorPreviewResize";
+import { useEditorPreviewSyncScroll } from "../../lib/useEditorPreviewSyncScroll";
 import { useTocResize } from "../../lib/useTocResize";
 
 import { addAttachmentsToRecord, getRecordDetail, saveClipboardImage, setRecordTags, triggerAiAnalysis } from "../../lib/tauri";
@@ -165,6 +166,15 @@ export function RecordDetail({
   // ── Editor / preview split ratio (persisted, proportional resize) ──
   const { ratio: editorRatio, startResize: startEditorResize, resetRatio: resetEditorRatio } =
     useEditorPreviewResize();
+
+  // ── Editor / preview scroll sync (toggled, proportional) ──
+  // Only active while editing AND the preview pane is visible.
+  const {
+    syncScroll,
+    toggle: toggleSyncScroll,
+    editorRef: syncEditorRef,
+    previewRef: syncPreviewRef,
+  } = useEditorPreviewSyncScroll(editingContent && showPreview);
 
   // ── TOC rail width (persisted, clamped px resize) ──
   const { width: tocWidth, startResize: startTocResize, resetWidth: resetTocWidth } =
@@ -824,7 +834,10 @@ export function RecordDetail({
           /* ── Focus edit view: split editor + live preview ── */
           <div className="flex min-w-0 flex-1">
             <textarea
-              ref={contentRef}
+              ref={(el) => {
+                contentRef.current = el;
+                syncEditorRef.current = el;
+              }}
               value={contentDraft}
               onChange={(e) => setContentDraft(e.target.value)}
               onPaste={handlePaste}
@@ -861,6 +874,7 @@ export function RecordDetail({
                   aria-label="调整编辑器与预览宽度"
                 />
                 <div
+                  ref={syncPreviewRef}
                   className="overflow-y-auto overscroll-contain p-5"
                   style={{ flex: `${1 - editorRatio} 1 0%` }}
                 >
@@ -1420,6 +1434,25 @@ export function RecordDetail({
               </svg>
               {showPreview ? "预览中" : "预览"}
             </button>
+            {showPreview && (
+              <button
+                type="button"
+                onClick={toggleSyncScroll}
+                title={syncScroll ? "关闭同步滚动" : "开启同步滚动"}
+                aria-pressed={syncScroll}
+                className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5
+                  text-xs font-medium transition ${
+                    syncScroll
+                      ? "bg-secondary/10 text-secondary hover:bg-secondary/20"
+                      : "text-text-muted hover:bg-white/5 hover:text-text"
+                  }`}
+              >
+                <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M7 10l5-5 5 5M7 14l5 5 5-5" />
+                </svg>
+                {syncScroll ? "同步中" : "同步"}
+              </button>
+            )}
             <div className="flex-1" />
             <span className="text-[10px] text-text-muted">
               自动保存已开启 · Ctrl+Enter 立即保存 · Esc 完成
