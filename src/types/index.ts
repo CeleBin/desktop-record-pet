@@ -180,6 +180,7 @@ export interface RecordFilter {
   statusFilter?: RecordStatus;
   searchQuery?: string;
   tagIds?: string[];
+  viewKey?: string;
   limit?: number;
   offset?: number;
 }

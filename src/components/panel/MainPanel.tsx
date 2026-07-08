@@ -26,6 +26,7 @@ export function MainPanel() {
     selectRecord,
     updateRecord,
     deleteRecord,
+    reorderRecords,
   } = useRecordsStore();
 
   const { convertRecordToTask, updateStatus, fetchTasks } = useTasksStore();
@@ -96,8 +97,9 @@ export function MainPanel() {
       statusFilter: activeStatus ?? undefined,
       searchQuery: debouncedQuery.length > 0 ? debouncedQuery : undefined,
       tagIds: activeTagIds.length > 0 ? activeTagIds : undefined,
+      viewKey: viewMode !== "all" ? viewMode : undefined,
     });
-  }, [typeFilter, activeStatus, debouncedQuery, activeTagIds, fetchRecords]);
+  }, [typeFilter, activeStatus, debouncedQuery, activeTagIds, viewMode, fetchRecords]);
 
   // Fetch tasks on mount
   useEffect(() => {
@@ -147,6 +149,14 @@ export function MainPanel() {
       void deleteRecord(id);
     },
     [deleteRecord],
+  );
+
+  const handleReorder = useCallback(
+    (activeId: string, overId: string) => {
+      if (viewMode === "all") return;
+      reorderRecords(viewMode, activeId, overId);
+    },
+    [viewMode, reorderRecords],
   );
 
   const handleUpdate = useCallback(
@@ -226,6 +236,7 @@ export function MainPanel() {
             viewMode={viewMode}
             onSelect={handleSelect}
             onDelete={handleDelete}
+            onReorder={handleReorder}
           />
         )}
       </section>

@@ -113,6 +113,18 @@ export async function reorderTasks(order: { task_id: string; sort_order: number 
 }
 
 /**
+ * Batch-update record sort order for drag-and-drop reordering in a specific view.
+ * @param viewKey "notes" or "tasks" — which view's sort space to update
+ * @param order Array of { record_id, sort_order } pairs
+ */
+export async function reorderRecords(
+  viewKey: string,
+  order: { record_id: string; sort_order: number }[],
+): Promise<void> {
+  return invoke<void>("reorder_records", { viewKey, order });
+}
+
+/**
  * 更新待办任务的截止日期。
  *
  * 前端传纯日期字符串 "YYYY-MM-DD"，这里补上 `T00:00:00Z` 使其符合 RFC 3339

@@ -26,6 +26,14 @@ pub struct TaskSortOrder {
     pub sort_order: i64,
 }
 
+/// A single item in a batch record reorder request: maps a record ID to its
+/// new sort position within a specific view (notes/tasks).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecordSortOrder {
+    pub record_id: String,
+    pub sort_order: i64,
+}
+
 pub const DATA_CHANGED_EVENT: &str = "data-changed";
 pub const SETTINGS_CHANGED_EVENT: &str = "settings-changed";
 
@@ -519,6 +527,26 @@ pub fn reorder_tasks(database: State<'_, Database>, order: Vec<TaskSortOrder>) -
     let conn = database.conn.lock()?;
     let order_tuples: Vec<(String, i64)> = order.iter().map(|o| (o.task_id.clone(), o.sort_order)).collect();
     db::reorder_tasks(&conn, &order_tuples)
+}
+
+/// Reorder records within a single view (notes/tasks) by updating their
+/// per-view `sort_order` values.
+///
+/// Accepts a `view_key` ("notes" or "tasks") and a list of
+/// `{ record_id, sort_order }` objects. Batch-updates each record's
+/// sort_order for that view in a single transaction.
+#[tauri::command]
+pub fn reorder_records(
+    database: State<'_, Database>,
+    view_key: String,
+    order: Vec<RecordSortOrder>,
+) -> AppResult<()> {
+    let conn = database.conn.lock()?;
+    let order_tuples: Vec<(String, i64)> = order
+        .iter()
+        .map(|o| (o.record_id.clone(), o.sort_order))
+        .collect();
+    db::reorder_records(&conn, &view_key, &order_tuples)
 }
 
 // ── Folder commands ─────────────────────────────────────────────

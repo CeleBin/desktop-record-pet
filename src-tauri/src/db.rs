@@ -151,6 +151,14 @@ pub fn run_migrations(conn: &Connection) -> AppResult<()> {
             FOREIGN KEY (record_id) REFERENCES records(id) ON DELETE CASCADE,
             FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE CASCADE
         );
+
+        CREATE TABLE IF NOT EXISTS record_sort_orders (
+            view_key TEXT NOT NULL,
+            record_id TEXT NOT NULL,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (view_key, record_id),
+            FOREIGN KEY (record_id) REFERENCES records(id) ON DELETE CASCADE
+        );
         "#,
     )?;
 
@@ -207,6 +215,19 @@ pub fn insert_record(conn: &Connection, request: CreateRecordRequest) -> AppResu
             record.updated_at.to_rfc3339(),
         ],
     )?;
+
+    // Place new record at top of its type-view's sort order.
+    // view_key uses plural form: note -> "notes", task -> "tasks".
+    if let Some(view_key) = match record.record_type {
+        RecordType::Note => Some("notes"),
+        RecordType::Task => Some("tasks"),
+    } {
+        conn.execute(
+            "INSERT INTO record_sort_orders (view_key, record_id, sort_order)
+             VALUES (?1, ?2, (SELECT COALESCE(MIN(sort_order), 1) - 1 FROM record_sort_orders WHERE view_key = ?1))",
+            params![view_key, record.id],
+        )?;
+    }
 
     Ok(record)
 }
@@ -748,10 +769,30 @@ pub fn list_records_filtered(
         None => return list_records(conn),
     };
 
-    let mut sql = String::from(
-        "SELECT r.id, r.type, r.title, r.content, r.source, r.status, r.created_at, r.updated_at FROM records r WHERE 1=1",
-    );
     let mut param_values: Vec<String> = Vec::new();
+
+    // If a view_key is provided (notes/tasks single-type view), LEFT JOIN the
+    // per-view sort order table so results can be ordered by user-defined
+    // drag position. When view_key is None ("all" view), skip the join and
+    // fall back to created_at ordering.
+    let has_view_key = filter
+        .view_key
+        .as_ref()
+        .map(|vk| !vk.is_empty())
+        .unwrap_or(false);
+
+    // Build SQL in correct clause order: SELECT ... FROM ... [LEFT JOIN ...] WHERE 1=1 [AND ...]
+    let mut sql = String::from(
+        "SELECT r.id, r.type, r.title, r.content, r.source, r.status, r.created_at, r.updated_at FROM records r",
+    );
+    if has_view_key {
+        param_values.push(filter.view_key.as_ref().unwrap().clone());
+        sql.push_str(&format!(
+            " LEFT JOIN record_sort_orders rso ON rso.record_id = r.id AND rso.view_key = ?{}",
+            param_values.len()
+        ));
+    }
+    sql.push_str(" WHERE 1=1");
 
     if let Some(t) = &filter.type_filter {
         param_values.push(t.as_str().to_string());
@@ -778,7 +819,13 @@ pub fn list_records_filtered(
         param_values.push(tag_id.clone());
     }
 
-    sql.push_str(" ORDER BY datetime(r.created_at) DESC, r.rowid DESC");
+    if has_view_key {
+        sql.push_str(
+            " ORDER BY COALESCE(rso.sort_order, 0), datetime(r.created_at) DESC, r.rowid DESC",
+        );
+    } else {
+        sql.push_str(" ORDER BY datetime(r.created_at) DESC, r.rowid DESC");
+    }
 
     if let Some(limit) = filter.limit {
         sql.push_str(&format!(" LIMIT {limit}"));
@@ -985,6 +1032,28 @@ pub fn reorder_tasks(conn: &Connection, order: &[(String, i64)]) -> AppResult<()
         conn.execute(
             "UPDATE tasks SET sort_order = ?2 WHERE id = ?1",
             params![task_id, sort_order],
+        )?;
+    }
+    conn.execute_batch("COMMIT")?;
+    Ok(())
+}
+
+/// Batch-update the sort order of records within a single view (notes/tasks).
+///
+/// `view_key` is "notes" or "tasks". `order` is a list of
+/// `(record_id, new_sort_order)` pairs. Uses INSERT OR REPLACE so records
+/// that don't yet have a sort_order row for this view are inserted rather
+/// than silently dropped. Atomic via a single transaction.
+pub fn reorder_records(
+    conn: &Connection,
+    view_key: &str,
+    order: &[(String, i64)],
+) -> AppResult<()> {
+    conn.execute_batch("BEGIN")?;
+    for (record_id, sort_order) in order {
+        conn.execute(
+            "INSERT OR REPLACE INTO record_sort_orders (view_key, record_id, sort_order) VALUES (?1, ?2, ?3)",
+            params![view_key, record_id, sort_order],
         )?;
     }
     conn.execute_batch("COMMIT")?;

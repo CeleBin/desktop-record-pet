@@ -216,6 +216,7 @@ pub fn run() {
             commands::remove_task,
             commands::list_unfinished_tasks,
             commands::reorder_tasks,
+            commands::reorder_records,
             // Folder category commands
             commands::list_folders,
             commands::create_folder,

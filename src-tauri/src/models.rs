@@ -532,6 +532,11 @@ pub struct RecordFilter {
     pub offset: Option<i64>,
     #[serde(default, rename = "tagIds")]
     pub tag_ids: Option<Vec<String>>,
+    /// When set to "notes" or "tasks", the listing joins the per-view sort
+    /// order table and returns records ordered by user-defined drag position.
+    /// When None (the "all" view), records are ordered by created_at desc.
+    #[serde(default, rename = "viewKey")]
+    pub view_key: Option<String>,
 }
 
 /// Lightweight filter for listing tasks.
