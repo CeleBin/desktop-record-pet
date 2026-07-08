@@ -297,6 +297,10 @@ export function RecordDetail({
   // Last content successfully persisted (trimmed). Prevents redundant saves
   // and feedback loops.
   const lastSavedContentRef = useRef<string>("");
+  // Content as it was when the current edit session started. Used by
+  // finishEditContent ("取消") to revert any auto-saved intermediate versions
+  // back to the pre-edit content.
+  const editStartContentRef = useRef<string>("");
 
   // Mirror titleDraft for use in async flush callbacks.
   const titleDraftRef = useRef("");
@@ -316,7 +320,7 @@ export function RecordDetail({
     if (trimmed === lastSavedContentRef.current.trim()) return;
     lastSavedContentRef.current = trimmed;
     void onUpdate(pending.recordId, {
-      content: trimmed.length > 0 ? trimmed : null,
+      content: trimmed,
     });
   }, [onUpdate]);
 
@@ -329,7 +333,7 @@ export function RecordDetail({
     if (trimmed === lastSavedTitleRef.current.trim()) return;
     lastSavedTitleRef.current = trimmed;
     void onUpdate(pending.recordId, {
-      title: trimmed.length > 0 ? trimmed : null,
+      title: trimmed,
     });
   }, [onUpdate]);
 
@@ -539,6 +543,8 @@ export function RecordDetail({
 
   const startEditContent = useCallback(() => {
     draftRecordIdRef.current = record?.id ?? null;
+    const original = record?.content ?? "";
+    editStartContentRef.current = original;
     if (!record?.content) {
       setContentDraft("");
     } else {
@@ -554,7 +560,7 @@ export function RecordDetail({
     if (trimmed === lastSavedTitleRef.current.trim()) return;
     pendingTitleSaveRef.current = null;
     await onUpdate(record.id, {
-      title: trimmed.length > 0 ? trimmed : null,
+      title: trimmed,
     });
     lastSavedTitleRef.current = trimmed;
   }, [record, titleDraft, onUpdate]);
@@ -565,20 +571,40 @@ export function RecordDetail({
     if (trimmed !== lastSavedContentRef.current.trim()) {
       pendingContentSaveRef.current = null;
       await onUpdate(record.id, {
-        content: trimmed.length > 0 ? trimmed : null,
+        content: trimmed,
       });
       lastSavedContentRef.current = trimmed;
     }
     setEditingContent(false);
   }, [record, contentDraft, onUpdate]);
 
-  // Exit edit mode. Any pending auto-save is flushed first so no edits are
-  // lost. With auto-save enabled this is effectively "done editing" rather
-  // than "discard".
+  // Exit edit mode, discarding ALL changes made during this edit session.
+  // "取消" acts as a true cancel: any pending auto-save is dropped, and if
+  // auto-save already persisted an intermediate version that differs from the
+  // content at edit-start, we revert via onUpdate so the record returns to its
+  // pre-edit state.
   const finishEditContent = useCallback(() => {
-    flushContentSave();
+    if (!record) {
+      setEditingContent(false);
+      return;
+    }
+    const original = editStartContentRef.current;
+    // Drop any pending auto-save so it can't fire after we cancel.
+    pendingContentSaveRef.current = null;
+    draftRecordIdRef.current = null;
+    // If auto-save already wrote a version different from edit-start, revert.
+    const persisted = lastSavedContentRef.current.trim();
+    if (persisted !== original.trim()) {
+      lastSavedContentRef.current = original;
+      // Pass the string directly (even if empty) so Rust deserializes to
+      // Some("...") / Some("") and db.update_record overwrites the column.
+      // Passing null → None → Option::or falls back to current → no clear.
+      void onUpdate(record.id, {
+        content: original,
+      });
+    }
     setEditingContent(false);
-  }, [flushContentSave]);
+  }, [record, onUpdate]);
 
   const insertMarkdownAtCursor = useCallback((text: string) => {
     const textarea = contentRef.current;
@@ -851,7 +877,7 @@ export function RecordDetail({
                   void saveContent();
                 }
               }}
-              placeholder="使用 Markdown 编写…  自动保存已开启 · Ctrl+Enter 立即保存 · Esc 完成"
+              placeholder="使用 Markdown 编写…  自动保存已开启 · Ctrl+Enter 立即保存 · Esc 取消"
               className={`${
                 showPreview ? "border-r border-border" : "w-full"
               } resize-none bg-surface/60
@@ -1412,10 +1438,11 @@ export function RecordDetail({
             <button
               type="button"
               onClick={finishEditContent}
+              title="丢弃本次编辑改动并退出"
               className="inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5
                 text-xs font-medium text-text-muted transition hover:bg-white/5 hover:text-text"
             >
-              完成
+              取消
             </button>
             <button
               type="button"
@@ -1455,7 +1482,7 @@ export function RecordDetail({
             )}
             <div className="flex-1" />
             <span className="text-[10px] text-text-muted">
-              自动保存已开启 · Ctrl+Enter 立即保存 · Esc 完成
+              自动保存已开启 · Ctrl+Enter 立即保存 · Esc 取消
             </span>
           </div>
         </div>
