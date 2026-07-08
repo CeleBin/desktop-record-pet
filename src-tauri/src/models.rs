@@ -9,9 +9,6 @@ use serde::{Deserialize, Serialize};
 pub enum RecordType {
     Note,
     Task,
-    Experience,
-    Issue,
-    FileNote,
 }
 
 impl Default for RecordType {
@@ -25,18 +22,12 @@ impl RecordType {
         match self {
             Self::Note => "note",
             Self::Task => "task",
-            Self::Experience => "experience",
-            Self::Issue => "issue",
-            Self::FileNote => "file-note",
         }
     }
 
     pub fn parse(value: &str) -> Self {
         match value {
             "task" => Self::Task,
-            "experience" => Self::Experience,
-            "issue" => Self::Issue,
-            "file-note" => Self::FileNote,
             _ => Self::Note,
         }
     }
@@ -539,6 +530,8 @@ pub struct RecordFilter {
     pub search_query: Option<String>,
     pub limit: Option<i64>,
     pub offset: Option<i64>,
+    #[serde(default, rename = "tagIds")]
+    pub tag_ids: Option<Vec<String>>,
 }
 
 /// Lightweight filter for listing tasks.
@@ -584,6 +577,15 @@ pub struct Folder {
     pub updated_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Tag {
+    pub id: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
 /// Full record payload returned by list-records / get-record-detail.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecordWithRelations {
@@ -602,6 +604,7 @@ pub struct RecordWithRelations {
     pub attachment_links: Vec<RecordAttachmentLink>,
     #[serde(rename = "aiResults")]
     pub ai_results: Vec<AiResult>,
+    pub tags: Vec<Tag>,
 }
 
 impl RecordWithRelations {
@@ -611,6 +614,7 @@ impl RecordWithRelations {
         attachments: Vec<Attachment>,
         attachment_links: Vec<RecordAttachmentLink>,
         ai_results: Vec<AiResult>,
+        tags: Vec<Tag>,
     ) -> Self {
         Self {
             id: record.id,
@@ -625,6 +629,7 @@ impl RecordWithRelations {
             attachments,
             attachment_links,
             ai_results,
+            tags,
         }
     }
 
@@ -643,6 +648,7 @@ impl RecordWithRelations {
             attachments: vec![],
             attachment_links: vec![],
             ai_results: vec![],
+            tags: vec![],
         }
     }
 }

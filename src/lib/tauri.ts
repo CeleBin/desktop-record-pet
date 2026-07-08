@@ -14,6 +14,7 @@ import type {
   RecordWithRelations,
   SettingsEntry,
   SetShortcutResult,
+  Tag,
   UnfinishedTaskItem,
   TaskFilter,
   TaskItem,
@@ -39,6 +40,14 @@ export async function addAttachmentsToRecord(
   paths: string[],
 ): Promise<RecordItem> {
   return invoke<RecordItem>("add_attachments_to_record", { recordId, paths });
+}
+
+export async function saveClipboardImage(
+  rgba: number[],
+  width: number,
+  height: number,
+): Promise<string> {
+  return invoke<string>("save_clipboard_image", { rgba, width, height });
 }
 
 export async function showMainPanel(): Promise<void> {
@@ -244,4 +253,37 @@ export async function reorderFolders(
   order: { id: string; sort_order: number }[],
 ): Promise<void> {
   return invoke<void>("reorder_folders", { order });
+}
+
+// ── Tags ─────────────────────────────────────────────────────────────
+
+export async function listTags(): Promise<Tag[]> {
+  return invoke<Tag[]>("list_tags");
+}
+
+export async function createTag(name: string, color: string | null): Promise<Tag> {
+  return invoke<Tag>("create_tag", { name, color });
+}
+
+export async function updateTag(
+  id: string,
+  name?: string,
+  color?: string | null,
+): Promise<Tag> {
+  return invoke<Tag>("update_tag", { id, name, color });
+}
+
+export async function deleteTag(id: string): Promise<void> {
+  return invoke<void>("delete_tag", { id });
+}
+
+export async function setRecordTags(
+  recordId: string,
+  tagIds: string[],
+): Promise<void> {
+  return invoke<void>("set_record_tags", { recordId, tagIds });
+}
+
+export async function listRecordTags(recordId: string): Promise<Tag[]> {
+  return invoke<Tag[]>("list_record_tags", { recordId });
 }

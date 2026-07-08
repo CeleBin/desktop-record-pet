@@ -9,11 +9,14 @@ import {
 import { convertFileSrc } from "@tauri-apps/api/core";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { listenForFileDrops } from "../../lib/dragDrop";
+import { useEditorPreviewResize } from "../../lib/useEditorPreviewResize";
+import { useTocResize } from "../../lib/useTocResize";
 
-import { triggerAiAnalysis } from "../../lib/tauri";
+import { addAttachmentsToRecord, getRecordDetail, saveClipboardImage, setRecordTags, triggerAiAnalysis } from "../../lib/tauri";
 import { useRecordsStore } from "../../store/records";
+import { useTagsStore } from "../../store/tags";
 import type {
-  AttachmentItem,
   RecordWithRelations,
   TaskStatus,
   UpdateRecordRequest,
@@ -31,9 +34,6 @@ interface RecordDetailProps {
 const TYPE_LABELS: Record<string, string> = {
   note: "笔记",
   task: "待办",
-  experience: "经验",
-  issue: "问题",
-  "file-note": "文件",
 };
 
 const STATUS_LABELS: Record<string, string> = {
@@ -71,23 +71,47 @@ function formatDateTime(iso: string): string {
   }
 }
 
-function InlineImage({
-  attachment,
-  onClick,
-}: {
-  attachment: AttachmentItem;
-  onClick: (src: string) => void;
-}) {
-  const src = convertFileSrc(attachment.local_path);
-  return (
-    <img
-      src={src}
-      alt="attachment"
-      className="max-h-96 w-full rounded-xl border border-border object-contain
-        cursor-pointer transition hover:brightness-110"
-      onClick={() => onClick(src)}
-    />
-  );
+/**
+ * Custom URL transform for ReactMarkdown. Allows standard web protocols and
+ * Tauri asset URLs through, converts local filesystem paths (Windows `C:\…`
+ * or `C:/…`) to Tauri asset URLs via convertFileSrc, and strips everything
+ * else (security: prevents javascript: URLs etc.).
+ */
+const markdownUrlTransform = (url: string): string => {
+  if (/^(https?:|data:|blob:|asset:|mailto:|tel:)/i.test(url)) {
+    return url;
+  }
+  if (/^[a-zA-Z]:[\\/]/.test(url)) {
+    return convertFileSrc(url);
+  }
+  return "";
+};
+
+/** Convert an image Blob to raw RGBA pixel data + dimensions via a canvas. */
+function blobToRgba(blob: Blob): Promise<{ rgba: Uint8Array; width: number; height: number }> {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(blob);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const canvas = document.createElement("canvas");
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) {
+        reject(new Error("Failed to get 2d canvas context"));
+        return;
+      }
+      ctx.drawImage(img, 0, 0);
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      resolve({ rgba: new Uint8Array(imageData.data.buffer), width: canvas.width, height: canvas.height });
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("Failed to load pasted image"));
+    };
+    img.src = url;
+  });
 }
 
 // ── Markdown helpers ────────────────────────────────────────────────
@@ -128,6 +152,7 @@ export function RecordDetail({
 }: RecordDetailProps) {
   const [editingTitle, setEditingTitle] = useState(false);
   const [editingContent, setEditingContent] = useState(false);
+  const [showPreview, setShowPreview] = useState(true);
   const [titleDraft, setTitleDraft] = useState("");
   const [contentDraft, setContentDraft] = useState("");
   const [converting, setConverting] = useState(false);
@@ -137,10 +162,167 @@ export function RecordDetail({
   //全屏预览窗口
   const [previewSrc, setPreviewSrc] = useState<string | null>(null);
 
+  // ── Editor / preview split ratio (persisted, proportional resize) ──
+  const { ratio: editorRatio, startResize: startEditorResize, resetRatio: resetEditorRatio } =
+    useEditorPreviewResize();
+
+  // ── TOC rail width (persisted, clamped px resize) ──
+  const { width: tocWidth, startResize: startTocResize, resetWidth: resetTocWidth } =
+    useTocResize();
+
   const { selectRecord } = useRecordsStore();
+  const allTags = useTagsStore((s) => s.tags);
+  const createTag = useTagsStore((s) => s.createTag);
+
+  // ── Tag management ──
+  const [showTagPopover, setShowTagPopover] = useState(false);
+  const [newTagName, setNewTagName] = useState("");
+  const [newTagColor, setNewTagColor] = useState("#a78bfa");
+  const tagPopoverRef = useRef<HTMLDivElement>(null);
+  const TAG_PRESET_COLORS = [
+    "#a78bfa", "#fbbf24", "#34d399", "#fb7185",
+    "#38bdf8", "#fb923c", "#e879f9", "#2dd4bf",
+  ];
+
+  // Close tag popover on outside click
+  useEffect(() => {
+    if (!showTagPopover) return;
+    const handler = (e: MouseEvent) => {
+      if (tagPopoverRef.current && !tagPopoverRef.current.contains(e.target as Node)) {
+        setShowTagPopover(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [showTagPopover]);
+
+  const recordTagIds = useMemo(
+    () => new Set(record?.tags.map((t) => t.id) ?? []),
+    [record?.tags],
+  );
+
+  const availableTags = useMemo(
+    () => allTags.filter((t) => !recordTagIds.has(t.id)),
+    [allTags, recordTagIds],
+  );
+
+  const handleRemoveTag = useCallback(
+    async (tagId: string) => {
+      if (!record) return;
+      const newIds = (record.tags ?? [])
+        .filter((t) => t.id !== tagId)
+        .map((t) => t.id);
+      try {
+        await setRecordTags(record.id, newIds);
+        await selectRecord(record.id);
+      } catch {
+        // error handled elsewhere
+      }
+    },
+    [record, selectRecord],
+  );
+
+  const handleAddTag = useCallback(
+    async (tagId: string) => {
+      if (!record) return;
+      const newIds = [...(record.tags ?? []).map((t) => t.id), tagId];
+      try {
+        await setRecordTags(record.id, newIds);
+        await selectRecord(record.id);
+        setShowTagPopover(false);
+      } catch {
+        // error handled elsewhere
+      }
+    },
+    [record, selectRecord],
+  );
+
+  const handleCreateAndAddTag = useCallback(async () => {
+    if (!record || !newTagName.trim()) return;
+    try {
+      const tag = await createTag(newTagName.trim(), newTagColor);
+      setNewTagName("");
+      await handleAddTag(tag.id);
+    } catch {
+      // error handled by store
+    }
+  }, [record, newTagName, newTagColor, createTag, handleAddTag]);
 
   const titleRef = useRef<HTMLInputElement>(null);
   const contentRef = useRef<HTMLTextAreaElement>(null);
+  // Mirrors contentDraft for use inside async callbacks (paste/drop) where
+  // the closure would otherwise capture a stale value.
+  const contentDraftRef = useRef("");
+  useEffect(() => {
+    contentDraftRef.current = contentDraft;
+  }, [contentDraft]);
+
+  // Mirrors record + editingContent for the window-level drag-drop listener.
+  const recordRef = useRef(record);
+  useEffect(() => {
+    recordRef.current = record;
+  }, [record]);
+  const editingContentRef = useRef(editingContent);
+  useEffect(() => {
+    editingContentRef.current = editingContent;
+  }, [editingContent]);
+
+  // ── Auto-save infrastructure ──────────────────────────────────────
+  // The auto-save system works as follows:
+  // 1. While editing, a debounced effect watches `contentDraft` / `titleDraft`.
+  //    When they diverge from the last persisted value, a pending save is
+  //    recorded in a ref and a 1.2s timer is started.
+  // 2. If the timer fires, the pending save is flushed to the backend.
+  // 3. If the user switches records, navigates away (unmount), or manually
+  //    clicks 保存/完成, the pending save is flushed immediately so no edits
+  //    are lost.
+  // `draftRecordIdRef` tracks which record the current draft belongs to —
+  // this prevents a stale draft from being saved onto the wrong record after
+  // the user switches selection.
+
+  // The record id the current draft belongs to (null = no active draft).
+  const draftRecordIdRef = useRef<string | null>(null);
+  // Pending content save awaiting debounce flush or explicit flush.
+  const pendingContentSaveRef = useRef<{ recordId: string; content: string } | null>(null);
+  // Last content successfully persisted (trimmed). Prevents redundant saves
+  // and feedback loops.
+  const lastSavedContentRef = useRef<string>("");
+
+  // Mirror titleDraft for use in async flush callbacks.
+  const titleDraftRef = useRef("");
+  useEffect(() => {
+    titleDraftRef.current = titleDraft;
+  }, [titleDraft]);
+  const pendingTitleSaveRef = useRef<{ recordId: string; title: string } | null>(null);
+  const lastSavedTitleRef = useRef<string>("");
+
+  // Flush a single pending content save. Reads from ref → safe to call from
+  // any effect cleanup or callback without stale-closure issues.
+  const flushContentSave = useCallback(() => {
+    const pending = pendingContentSaveRef.current;
+    if (!pending) return;
+    pendingContentSaveRef.current = null;
+    const trimmed = pending.content.trim();
+    if (trimmed === lastSavedContentRef.current.trim()) return;
+    lastSavedContentRef.current = trimmed;
+    void onUpdate(pending.recordId, {
+      content: trimmed.length > 0 ? trimmed : null,
+    });
+  }, [onUpdate]);
+
+  // Flush a single pending title save.
+  const flushTitleSave = useCallback(() => {
+    const pending = pendingTitleSaveRef.current;
+    if (!pending) return;
+    pendingTitleSaveRef.current = null;
+    const trimmed = pending.title.trim();
+    if (trimmed === lastSavedTitleRef.current.trim()) return;
+    lastSavedTitleRef.current = trimmed;
+    void onUpdate(pending.recordId, {
+      title: trimmed.length > 0 ? trimmed : null,
+    });
+  }, [onUpdate]);
+
   // Points at whichever markdown container is currently rendered (view body or
   // edit preview). Used by the TOC to locate heading elements for scroll jumps.
   const markdownContainerRef = useRef<HTMLDivElement>(null);
@@ -236,26 +418,89 @@ export function RecordDetail({
         <td className="border border-border px-3 py-1.5 text-text-muted">{children}</td>
       ),
       hr: () => <hr className="border-border my-6" />,
-      img: ({ src, alt }: { src?: string; alt?: string }) => (
-        <img
-          src={src}
-          alt={alt}
-          className="max-h-96 w-full rounded-xl border border-border object-contain my-3"
-        />
-      ),
+      img: ({ src, alt }: { src?: string; alt?: string }) => {
+        if (!src) return null;
+        const resolved = /^(https?:|data:|asset:|blob:)/i.test(src)
+          ? src
+          : convertFileSrc(src);
+        if (!resolved) return null;
+        return (
+          <img
+            src={resolved}
+            alt={alt}
+            onClick={() => setPreviewSrc(resolved)}
+            className="max-h-96 w-full cursor-zoom-in rounded-xl border border-border object-contain my-3"
+          />
+        );
+      },
     }),
-    [],
+    [setPreviewSrc],
   );
 
   // TOC source — draft while editing, final content while viewing
   const tocSource = editingContent ? contentDraft : (record?.content ?? "");
   const toc = useMemo(() => extractToc(tocSource), [tocSource]);
 
-  // Reset editing state when record changes
+  // Keep lastSaved* refs in sync with the record from the server.
   useEffect(() => {
+    lastSavedContentRef.current = record?.content ?? "";
+    lastSavedTitleRef.current = record?.title ?? "";
+  }, [record?.id, record?.content, record?.title]);
+
+  // Debounced auto-save for content while editing.
+  useEffect(() => {
+    if (!editingContent || !record) return;
+    // Only auto-save if the draft belongs to the currently selected record.
+    if (draftRecordIdRef.current !== record.id) return;
+    const draft = contentDraft;
+    if (draft.trim() === lastSavedContentRef.current.trim()) {
+      pendingContentSaveRef.current = null;
+      return;
+    }
+    pendingContentSaveRef.current = { recordId: record.id, content: draft };
+    const timer = setTimeout(() => {
+      flushContentSave();
+    }, 1200);
+    return () => clearTimeout(timer);
+  }, [editingContent, contentDraft, record, flushContentSave]);
+
+  // Debounced auto-save for title while editing.
+  useEffect(() => {
+    if (!editingTitle || !record) return;
+    if (draftRecordIdRef.current !== record.id) return;
+    const draft = titleDraft;
+    if (draft.trim() === lastSavedTitleRef.current.trim()) {
+      pendingTitleSaveRef.current = null;
+      return;
+    }
+    pendingTitleSaveRef.current = { recordId: record.id, title: draft };
+    const timer = setTimeout(() => {
+      flushTitleSave();
+    }, 800);
+    return () => clearTimeout(timer);
+  }, [editingTitle, titleDraft, record, flushTitleSave]);
+
+  // When the selected record changes, flush any pending draft for the OLD
+  // record before resetting editing state. Also invalidate the draft so the
+  // auto-save effect doesn't fire against the new record with stale content.
+  useEffect(() => {
+    flushContentSave();
+    flushTitleSave();
+    draftRecordIdRef.current = null;
+    pendingContentSaveRef.current = null;
+    pendingTitleSaveRef.current = null;
     setEditingTitle(false);
     setEditingContent(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [record?.id]);
+
+  // Flush pending saves on unmount (e.g. navigating to settings / closing panel)
+  useEffect(() => {
+    return () => {
+      flushContentSave();
+      flushTitleSave();
+    };
+  }, [flushContentSave, flushTitleSave]);
 
   // Focus when entering edit mode
   useEffect(() => {
@@ -273,6 +518,7 @@ export function RecordDetail({
   }, [editingContent]);
 
   const startEditTitle = useCallback(() => {
+    draftRecordIdRef.current = record?.id ?? null;
     if (!record?.title) {
       setTitleDraft("");
     } else {
@@ -282,6 +528,7 @@ export function RecordDetail({
   }, [record]);
 
   const startEditContent = useCallback(() => {
+    draftRecordIdRef.current = record?.id ?? null;
     if (!record?.content) {
       setContentDraft("");
     } else {
@@ -294,22 +541,139 @@ export function RecordDetail({
     if (!record) return;
     setEditingTitle(false);
     const trimmed = titleDraft.trim();
-    if (trimmed === (record.title ?? "")) return;
-    await onUpdate(record.id, { title: trimmed.length > 0 ? trimmed : null });
+    if (trimmed === lastSavedTitleRef.current.trim()) return;
+    pendingTitleSaveRef.current = null;
+    await onUpdate(record.id, {
+      title: trimmed.length > 0 ? trimmed : null,
+    });
+    lastSavedTitleRef.current = trimmed;
   }, [record, titleDraft, onUpdate]);
 
   const saveContent = useCallback(async () => {
     if (!record) return;
-    setEditingContent(false);
     const trimmed = contentDraft.trim();
-    if (trimmed === (record.content ?? "")) return;
-    await onUpdate(record.id, {
-      content: trimmed.length > 0 ? trimmed : null,
-    });
+    if (trimmed !== lastSavedContentRef.current.trim()) {
+      pendingContentSaveRef.current = null;
+      await onUpdate(record.id, {
+        content: trimmed.length > 0 ? trimmed : null,
+      });
+      lastSavedContentRef.current = trimmed;
+    }
+    setEditingContent(false);
   }, [record, contentDraft, onUpdate]);
 
-  const cancelEditContent = useCallback(() => {
+  // Exit edit mode. Any pending auto-save is flushed first so no edits are
+  // lost. With auto-save enabled this is effectively "done editing" rather
+  // than "discard".
+  const finishEditContent = useCallback(() => {
+    flushContentSave();
     setEditingContent(false);
+  }, [flushContentSave]);
+
+  const insertMarkdownAtCursor = useCallback((text: string) => {
+    const textarea = contentRef.current;
+    if (!textarea) return;
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    const draft = contentDraftRef.current;
+    const prefix = draft.slice(0, start);
+    const suffix = draft.slice(end);
+    // Add newlines around the image if we're not at the start of a line.
+    const needsLeadingNewline = prefix.length > 0 && !prefix.endsWith("\n");
+    const needsTrailingNewline = suffix.length > 0 && !suffix.startsWith("\n");
+    const insertion =
+      (needsLeadingNewline ? "\n" : "") +
+      text +
+      (needsTrailingNewline ? "\n" : "");
+    const next = prefix + insertion + suffix;
+    setContentDraft(next);
+    contentDraftRef.current = next;
+    const newCursor = start + insertion.length;
+    requestAnimationFrame(() => {
+      textarea.focus();
+      textarea.selectionStart = textarea.selectionEnd = newCursor;
+    });
+  }, []);
+
+  const addImagePathsToRecord = useCallback(
+    async (paths: string[]) => {
+      if (!record) return;
+      const oldIds = new Set(record.attachments.map((a) => a.id));
+      await addAttachmentsToRecord(record.id, paths);
+      const updated = await getRecordDetail(record.id);
+      const newAttachments = updated.attachments.filter(
+        (a) => !oldIds.has(a.id) && (a.file_type === "image" || a.file_type === "screenshot"),
+      );
+      if (newAttachments.length > 0) {
+        // Store the convertFileSrc URL (http://asset.localhost/...) in the
+        // markdown so ReactMarkdown's default urlTransform doesn't strip it
+        // and the img renderer can display it directly.
+        const markdown = newAttachments
+          .map((a) => `![](${convertFileSrc(a.local_path)})`)
+          .join("\n\n");
+        insertMarkdownAtCursor(markdown);
+      }
+      await selectRecord(record.id);
+    },
+    [record, selectRecord, insertMarkdownAtCursor],
+  );
+
+  const handlePaste = useCallback(
+    async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+      if (!record) return;
+      const items = Array.from(e.clipboardData.items);
+      const imageItem = items.find((it) => it.type.startsWith("image/"));
+      if (!imageItem) return; // let default text paste happen
+      const blob = imageItem.getAsFile();
+      if (!blob) return;
+      e.preventDefault();
+      try {
+        const { rgba, width, height } = await blobToRgba(blob);
+        const tempPath = await saveClipboardImage(
+          Array.from(rgba),
+          width,
+          height,
+        );
+        await addImagePathsToRecord([tempPath]);
+      } catch (error) {
+        console.error("Failed to paste image:", error);
+      }
+    },
+    [record, addImagePathsToRecord],
+  );
+
+  const addImagePathsToRecordRef = useRef(addImagePathsToRecord);
+  useEffect(() => {
+    addImagePathsToRecordRef.current = addImagePathsToRecord;
+  }, [addImagePathsToRecord]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    void listenForFileDrops(async ({ paths }) => {
+      if (!editingContentRef.current) return;
+      const currentRecord = recordRef.current;
+      if (!currentRecord) return;
+      const imagePaths = paths.filter((p) =>
+        /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(p),
+      );
+      if (imagePaths.length === 0) return;
+      try {
+        await addImagePathsToRecordRef.current(imagePaths);
+      } catch (error) {
+        console.error("Failed to drop images:", error);
+      }
+    }).then((fn) => {
+      if (cancelled) {
+        fn();
+      } else {
+        unlisten = fn;
+      }
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
   }, []);
 
   const handleConvertToTask = useCallback(async () => {
@@ -367,7 +731,7 @@ export function RecordDetail({
     );
   }
 
-  if (loading) {
+  if (loading && !editingContent) {
     return (
       <div className="flex h-full items-center justify-center">
         <div className="h-5 w-5 animate-spin rounded-full border-2 border-secondary/30 border-t-secondary" />
@@ -380,15 +744,77 @@ export function RecordDetail({
   return (
     <div className="flex h-full flex-col overflow-hidden">
       {/* Header */}
-      <div className="shrink-0 border-b border-border px-5 py-4">
+      <div className="shrink-0 border-b border-border px-5 py-3">
         <div className="flex items-center gap-2">
-          <span className="text-[10px] font-medium uppercase tracking-[0.2em] text-text0">
-            详情
-          </span>
-          <span className="text-text-muted">·</span>
-          <span className="text-[10px] text-text0">
-            {formatDateTime(record.created_at)}
-          </span>
+          {!editingContent && (
+            <button
+              type="button"
+              onClick={startEditContent}
+              className="inline-flex items-center gap-1 rounded-full bg-secondary/15 px-2.5 py-1
+                text-[11px] font-medium text-secondary transition hover:bg-secondary/25"
+            >
+              <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931zm0 0L19.5 7.125" />
+              </svg>
+              编辑
+            </button>
+          )}
+
+          {!editingContent && !hasTask && (
+            <button
+              type="button"
+              onClick={() => void handleConvertToTask()}
+              disabled={converting}
+              className="inline-flex items-center gap-1.5 rounded-full bg-secondary/10 px-3 py-1
+                text-xs font-medium text-secondary transition hover:bg-secondary/20
+                disabled:opacity-50"
+            >
+              {converting ? (
+                <span className="inline-block h-3 w-3 animate-spin rounded-full border border-secondary/30 border-t-secondary" />
+              ) : (
+                <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+                </svg>
+              )}
+              转为待办
+            </button>
+          )}
+
+          {!editingContent && (
+            <button
+              type="button"
+              onClick={() => void handleTriggerAi()}
+              disabled={aiAnalyzing}
+              className="inline-flex items-center gap-1.5 rounded-full px-3 py-1
+                text-xs font-medium text-violet-300 transition
+                hover:bg-violet-400/15 disabled:opacity-50"
+            >
+              {aiAnalyzing ? (
+                <span className="inline-block h-3 w-3 animate-spin rounded-full border border-violet-400/30 border-t-violet-400" />
+              ) : (
+                <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z" />
+                </svg>
+              )}
+              {aiAnalyzing ? "分析中…" : "AI 分析"}
+            </button>
+          )}
+
+          <div className="flex-1" />
+
+          {!editingContent && (
+            <button
+              type="button"
+              onClick={() => onDelete(record.id)}
+              className="inline-flex items-center gap-1 rounded-full px-2.5 py-1
+                text-xs text-text0 transition hover:bg-danger/10 hover:text-danger"
+            >
+              <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+              </svg>
+              删除
+            </button>
+          )}
         </div>
       </div>
 
@@ -401,32 +827,55 @@ export function RecordDetail({
               ref={contentRef}
               value={contentDraft}
               onChange={(e) => setContentDraft(e.target.value)}
+              onPaste={handlePaste}
               onKeyDown={(e) => {
                 if (e.key === "Escape") {
                   e.preventDefault();
-                  cancelEditContent();
+                  finishEditContent();
                 }
                 if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
                   e.preventDefault();
                   void saveContent();
                 }
               }}
-              placeholder="使用 Markdown 编写…  Ctrl+Enter 保存 / Esc 取消"
-              className="flex-1 resize-none border-r border-border bg-surface/60
+              placeholder="使用 Markdown 编写…  自动保存已开启 · Ctrl+Enter 立即保存 · Esc 完成"
+              className={`${
+                showPreview ? "border-r border-border" : "w-full"
+              } resize-none bg-surface/60
                 px-5 py-4 text-sm leading-6 text-text outline-none
-                font-mono placeholder:text-text-muted"
+                font-mono placeholder:text-text-muted`}
+              style={
+                showPreview
+                  ? { flex: `${editorRatio} 1 0%` }
+                  : undefined
+              }
             />
-            <div className="flex-1 overflow-y-auto overscroll-contain p-5">
-              {contentDraft.trim() ? (
-                <div className="markdown-body" ref={markdownContainerRef}>
-                  <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
-                    {contentDraft}
-                  </ReactMarkdown>
+            {showPreview && (
+              <>
+                <div
+                  className="col-resize-handle shrink-0"
+                  onPointerDown={startEditorResize}
+                  onDoubleClick={resetEditorRatio}
+                  role="separator"
+                  aria-orientation="vertical"
+                  aria-label="调整编辑器与预览宽度"
+                />
+                <div
+                  className="overflow-y-auto overscroll-contain p-5"
+                  style={{ flex: `${1 - editorRatio} 1 0%` }}
+                >
+                  {contentDraft.trim() ? (
+                    <div className="markdown-body" ref={markdownContainerRef}>
+                      <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents} urlTransform={markdownUrlTransform}>
+                        {contentDraft}
+                      </ReactMarkdown>
+                    </div>
+                  ) : (
+                    <p className="text-sm italic text-text0">实时预览…</p>
+                  )}
                 </div>
-              ) : (
-                <p className="text-sm italic text-text0">实时预览…</p>
-              )}
-            </div>
+              </>
+            )}
           </div>
         ) : (
           /* ── View mode: scrollable body ── */
@@ -456,20 +905,23 @@ export function RecordDetail({
                       focus:border-secondary/40 focus:ring-2 focus:ring-secondary/20"
                   />
                 ) : (
-                  <button
-                    type="button"
-                    onClick={startEditTitle}
-                    className="group w-full text-left"
-                  >
-                    <h2 className="text-lg font-medium leading-7 text-text transition group-hover:text-secondary">
+                  <div className="group flex items-start gap-2">
+                    <h2 className="flex-1 text-lg font-medium leading-7 text-text select-text">
                       {record.title || (
                         <span className="italic text-text0">无标题</span>
                       )}
                     </h2>
-                    <span className="mt-0.5 block text-[10px] text-text-muted opacity-0 transition group-hover:opacity-100">
-                      点击编辑
-                    </span>
-                  </button>
+                    <button
+                      type="button"
+                      onClick={startEditTitle}
+                      title="编辑标题"
+                      className="mt-1 shrink-0 rounded-lg p-1 text-text-muted opacity-0 transition hover:bg-white/5 hover:text-text focus:opacity-100 group-hover:opacity-100"
+                    >
+                      <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931zm0 0L19.5 7.125" />
+                      </svg>
+                    </button>
+                  </div>
                 )}
               </section>
 
@@ -477,11 +929,7 @@ export function RecordDetail({
               <div className="flex flex-wrap gap-2">
                 <span className="inline-flex items-center gap-1 rounded-full bg-white/5 px-2.5 py-1 text-[11px] text-text">
                   <span className={`inline-block h-1.5 w-1.5 rounded-full ${
-                    record.type === "note" ? "bg-text-muted"
-                    : record.type === "task" ? "bg-secondary"
-                    : record.type === "experience" ? "bg-primary"
-                    : record.type === "issue" ? "bg-danger"
-                    : "bg-sky-400"
+                    record.type === "note" ? "bg-text-muted" : "bg-secondary"
                   }`} />
                   {TYPE_LABELS[record.type] ?? record.type}
                 </span>
@@ -493,24 +941,156 @@ export function RecordDetail({
                 </span>
               </div>
 
+              {/* Tags */}
+              <section>
+                <p className="mb-1.5 text-[10px] font-medium uppercase tracking-[0.2em] text-text0">
+                  标签
+                </p>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {record.tags && record.tags.length > 0
+                    ? record.tags.map((tag) => {
+                        const hasColor = !!tag.color;
+                        return (
+                          <span
+                            key={tag.id}
+                            className={`
+                              inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px]
+                              ${hasColor ? "" : "bg-white/5 text-text"}
+                            `}
+                          style={
+                            hasColor
+                              ? {
+                                  backgroundColor: `${tag.color!}1a`,
+                                  color: tag.color!,
+                                }
+                              : undefined
+                          }
+                        >
+                          {tag.name}
+                          <button
+                            type="button"
+                            onClick={() => void handleRemoveTag(tag.id)}
+                            className="ml-0.5 rounded-full p-0.5 opacity-60 transition hover:opacity-100"
+                          >
+                            <svg className="h-2.5 w-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                            </svg>
+                          </button>
+                        </span>
+                      );
+                        })
+                      : null}
+                  {/* Add tag button */}
+                  <div className="relative">
+                    <button
+                      type="button"
+                      onClick={() => setShowTagPopover((prev) => !prev)}
+                      className="inline-flex items-center gap-0.5 rounded-full border border-dashed border-white/15 px-2 py-0.5 text-[11px] text-text-muted transition hover:border-white/30 hover:text-text"
+                    >
+                      <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+                      </svg>
+                      添加
+                    </button>
+
+                    {showTagPopover && (
+                      <div
+                        ref={tagPopoverRef}
+                        className="absolute left-0 z-50 mt-1 w-56 rounded-xl border border-border bg-surface/95 p-3 shadow-2xl backdrop-blur-xl"
+                      >
+                        {availableTags.length > 0 && (
+                          <div className="mb-2">
+                            <p className="mb-1.5 text-[10px] font-medium text-text-muted">
+                              已有标签
+                            </p>
+                            <div className="flex flex-wrap gap-1">
+                              {availableTags.map((tag) => {
+                                const hasColor = !!tag.color;
+                                return (
+                                  <button
+                                    key={tag.id}
+                                    type="button"
+                                    onClick={() => void handleAddTag(tag.id)}
+                                    className={`
+                                      rounded-full px-2 py-0.5 text-[10px] font-medium transition
+                                      ${hasColor ? "" : "bg-white/5 text-text-muted hover:bg-white/10 hover:text-text"}
+                                    `}
+                                  style={
+                                        hasColor
+                                          ? {
+                                              backgroundColor: `${tag.color!}1a`,
+                                              color: tag.color!,
+                                            }
+                                          : undefined
+                                      }
+                                    >
+                                      {tag.name}
+                                    </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+
+                        <p className="mb-1.5 text-[10px] font-medium text-text-muted">
+                          新建标签
+                        </p>
+                        <input
+                          type="text"
+                          value={newTagName}
+                          onChange={(e) => setNewTagName(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              void handleCreateAndAddTag();
+                            }
+                            if (e.key === "Escape") {
+                              setShowTagPopover(false);
+                            }
+                          }}
+                          placeholder="输入名称…"
+                          className="mb-2 w-full rounded-lg border border-border bg-white/5 px-2.5 py-1.5 text-xs text-text placeholder-text-muted outline-none transition focus:border-secondary/40 focus:ring-2 focus:ring-secondary/20"
+                          autoFocus
+                        />
+                        <div className="mb-2 flex gap-1.5">
+                          {TAG_PRESET_COLORS.map((color) => (
+                            <button
+                              key={color}
+                              type="button"
+                              onClick={() => setNewTagColor(color)}
+                              className={`h-4 w-4 rounded-full transition-all duration-150 ${
+                                newTagColor === color
+                                  ? "ring-2 ring-white ring-offset-1 ring-offset-surface/95"
+                                  : "ring-1 ring-white/10"
+                              }`}
+                              style={{ backgroundColor: color }}
+                            />
+                          ))}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => void handleCreateAndAddTag()}
+                          disabled={!newTagName.trim()}
+                          className="w-full rounded-lg bg-secondary/15 px-3 py-1.5 text-xs font-medium text-secondary transition hover:bg-secondary/25 disabled:opacity-40"
+                        >
+                          创建并添加
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </section>
+
               {/* Content */}
               <section>
                 <p className="mb-1.5 text-[10px] font-medium uppercase tracking-[0.2em] text-text0">
                   内容
                 </p>
                 {record.content ? (
-                  <div
-                    onClick={startEditContent}
-                    className="group cursor-pointer"
-                  >
-                    <div className="markdown-body transition group-hover:text-text" ref={markdownContainerRef}>
-                      <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
-                        {record.content}
-                      </ReactMarkdown>
-                    </div>
-                    <span className="mt-1 block text-[10px] text-text-muted opacity-0 transition group-hover:opacity-100">
-                      点击编辑
-                    </span>
+                  <div className="markdown-body select-text" ref={markdownContainerRef}>
+                    <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents} urlTransform={markdownUrlTransform}>
+                      {record.content}
+                    </ReactMarkdown>
                   </div>
                 ) : (
                   <button
@@ -519,11 +1099,8 @@ export function RecordDetail({
                     className="group w-full text-left"
                   >
                     <p className="text-sm italic leading-6 text-text0">
-                      无内容
+                      无内容，点击添加
                     </p>
-                    <span className="mt-0.5 block text-[10px] text-text-muted opacity-0 transition group-hover:opacity-100">
-                      点击编辑
-                    </span>
                   </button>
                 )}
               </section>
@@ -599,25 +1176,6 @@ export function RecordDetail({
                     </div>
                   </div>
                 </section>
-              )}
-
-              {/* 图片嵌入内容 */}
-              {record.attachments
-                .filter((a) => a.file_type === "image" || a.file_type === "screenshot")
-                .length > 0 && (
-                  <section>
-                    <div className="space-y-3">
-                      {record.attachments
-                        .filter((a) => a.file_type === "image" || a.file_type === "screenshot")
-                        .map((att) => (
-                          <InlineImage
-                            key={att.id}
-                            attachment={att}
-                            onClick={(src) => setPreviewSrc(src)}
-                          />
-                        ))}
-                    </div>
-                  </section>
               )}
 
               {/* 非图片附件 */}
@@ -783,9 +1341,24 @@ export function RecordDetail({
           </div>
         )}
 
+        {/* ── TOC resize handle ── */}
+        {toc.length > 0 && (
+          <div
+            className="col-resize-handle shrink-0"
+            onPointerDown={startTocResize}
+            onDoubleClick={resetTocWidth}
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="调整目录宽度"
+          />
+        )}
+
         {/* ── TOC right rail ── */}
         {toc.length > 0 && (
-          <aside className="w-[180px] shrink-0 overflow-y-auto border-l border-border bg-bg/30 px-3 py-4">
+          <aside
+            className="shrink-0 overflow-y-auto border-l border-border bg-bg/30 px-3 py-4"
+            style={{ width: tocWidth }}
+          >
             <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.2em] text-text0">
               目录
             </p>
@@ -808,7 +1381,7 @@ export function RecordDetail({
       </div>
 
       {/* Action bar */}
-      {editingContent ? (
+      {editingContent && (
         <div className="shrink-0 border-t border-border px-5 py-3">
           <div className="flex items-center gap-2">
             <button
@@ -824,73 +1397,33 @@ export function RecordDetail({
             </button>
             <button
               type="button"
-              onClick={cancelEditContent}
+              onClick={finishEditContent}
               className="inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5
                 text-xs font-medium text-text-muted transition hover:bg-white/5 hover:text-text"
             >
-              取消
+              完成
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowPreview((prev) => !prev)}
+              title={showPreview ? "关闭预览" : "开启预览"}
+              className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5
+                text-xs font-medium transition ${
+                  showPreview
+                    ? "bg-secondary/10 text-secondary hover:bg-secondary/20"
+                    : "text-text-muted hover:bg-white/5 hover:text-text"
+                }`}
+            >
+              <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" />
+                <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+              </svg>
+              {showPreview ? "预览中" : "预览"}
             </button>
             <div className="flex-1" />
             <span className="text-[10px] text-text-muted">
-              Ctrl+Enter 保存 · Esc 取消
+              自动保存已开启 · Ctrl+Enter 立即保存 · Esc 完成
             </span>
-          </div>
-        </div>
-      ) : (
-        <div className="shrink-0 border-t border-border px-5 py-3">
-          <div className="flex items-center gap-2">
-            {!hasTask && (
-              <button
-                type="button"
-                onClick={() => void handleConvertToTask()}
-                disabled={converting}
-                className="inline-flex items-center gap-1.5 rounded-full bg-secondary/10 px-3.5 py-1.5
-                  text-xs font-medium text-secondary transition hover:bg-secondary/20
-                  disabled:opacity-50"
-              >
-                {converting ? (
-                  <span className="inline-block h-3 w-3 animate-spin rounded-full border border-secondary/30 border-t-secondary" />
-                ) : (
-                  <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
-                  </svg>
-                )}
-                转为待办
-              </button>
-            )}
-
-            {/* AI analysis trigger */}
-            <button
-              type="button"
-              onClick={() => void handleTriggerAi()}
-              disabled={aiAnalyzing}
-              className="inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5
-                text-xs font-medium text-violet-300 transition
-                hover:bg-violet-400/15 disabled:opacity-50"
-            >
-              {aiAnalyzing ? (
-                <span className="inline-block h-3 w-3 animate-spin rounded-full border border-violet-400/30 border-t-violet-400" />
-              ) : (
-                <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z" />
-                </svg>
-              )}
-              {aiAnalyzing ? "分析中…" : "AI 分析"}
-            </button>
-
-            <div className="flex-1" />
-
-            <button
-              type="button"
-              onClick={() => onDelete(record.id)}
-              className="inline-flex items-center gap-1 rounded-full px-3 py-1.5
-                text-xs text-text0 transition hover:bg-danger/10 hover:text-danger"
-            >
-              <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-              </svg>
-              删除
-            </button>
           </div>
         </div>
       )}

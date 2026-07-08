@@ -198,6 +198,7 @@ pub fn run() {
             commands::show_window,
             commands::import_files,
             commands::import_clipboard_image,
+            commands::save_clipboard_image,
             commands::add_attachments_to_record,
             commands::capture_screenshot,
             commands::save_screenshot_record,
@@ -222,6 +223,13 @@ pub fn run() {
             commands::delete_folder,
             commands::move_task_to_folder,
             commands::reorder_folders,
+            // Tag commands
+            commands::create_tag,
+            commands::list_tags,
+            commands::update_tag,
+            commands::delete_tag,
+            commands::set_record_tags,
+            commands::list_record_tags,
             // Task 9: pet window & tray
             commands::get_pet_position,
             commands::set_pet_position,

@@ -5,185 +5,286 @@
    Apply via: <html data-theme="midnight-amber" data-mode="dark">
    ════════════════════════════════════════════════════════════════════ */
 
-/* ── Midnight Amber ── */
+/* ── Midnight Amber (午夜琥珀): 深夜终端 + 暖金金属光泽 ── */
 :root[data-theme="midnight-amber"][data-mode="dark"] {
-  --bg: #020617;
-  --surface: #0f172a;
-  --surface-2: #1e293b;
-  --primary: #fbbf24;
-  --primary-fg: #020617;
-  --secondary: #34d399;
-  --danger: #fb7185;
-  --text: #f1f5f9;
-  --text-muted: #64748b;
-  --border: rgba(255, 255, 255, 0.08);
-  --pet-from: rgba(251, 191, 36, 0.9);
-  --pet-to: rgba(180, 83, 9, 0.4);
-  --pet-glow: rgba(245, 158, 11, 0.5);
+  --bg: #060b18;
+  --surface: #0e1525;
+  --surface-2: #192238;
+  --surface-3: #232b3c;
+  --primary: #f0b84d;
+  --primary-fg: #060b18;
+  --secondary: #4a9a8a;
+  --accent: #c48a4a;
+  --danger: #d46a6a;
+  --text: #d6dce5;
+  --text-strong: #eef2f7;
+  --text-muted: #7a8396;
+  --text0: rgba(122, 131, 150, 0.4);
+  --border: rgba(240, 184, 77, 0.10);
+  --pet-from: rgba(240, 184, 77, 0.92);
+  --pet-to: rgba(180, 110, 25, 0.35);
+  --pet-glow: rgba(240, 184, 77, 0.55);
+  --shadow-glow: 0 8px 32px rgba(240, 184, 77, 0.15);
+  --grain-opacity: 0.04;
+  --radius-shape: 4px;
+  --font-display: "JetBrains Mono", ui-monospace, monospace;
+  --font-body: "IBM Plex Sans", system-ui, sans-serif;
 }
 :root[data-theme="midnight-amber"][data-mode="light"] {
-  --bg: #fffbeb;
-  --surface: #ffffff;
-  --surface-2: #fef3c7;
-  --primary: #d97706;
+  --bg: #f5eee0;
+  --surface: #fcf8f0;
+  --surface-2: #f0e6d0;
+  --surface-3: #e8dcc0;
+  --primary: #8a6a20;
   --primary-fg: #ffffff;
-  --secondary: #059669;
-  --danger: #e11d48;
-  --text: #1c1917;
-  --text-muted: #78716c;
-  --border: rgba(0, 0, 0, 0.08);
-  --pet-from: rgba(251, 191, 36, 0.9);
-  --pet-to: rgba(180, 83, 9, 0.4);
-  --pet-glow: rgba(245, 158, 11, 0.5);
+  --secondary: #4a8a7a;
+  --accent: #9a7a4a;
+  --danger: #c4554a;
+  --text: #2d2418;
+  --text-strong: #1a140e;
+  --text-muted: #7a6a55;
+  --text0: rgba(122, 106, 85, 0.4);
+  --border: rgba(138, 106, 32, 0.10);
+  --pet-from: rgba(138, 106, 32, 0.90);
+  --pet-to: rgba(110, 80, 20, 0.35);
+  --pet-glow: rgba(138, 106, 32, 0.50);
+  --shadow-glow: 0 8px 32px rgba(138, 106, 32, 0.12);
+  --grain-opacity: 0.04;
+  --radius-shape: 4px;
+  --font-display: "JetBrains Mono", ui-monospace, monospace;
+  --font-body: "IBM Plex Sans", system-ui, sans-serif;
 }
 
-/* ── Sakura Mist ── */
+/* ── Sakura Mist (樱花薄雾): 编辑杂志感 + 柔粉 ── */
 :root[data-theme="sakura-mist"][data-mode="light"] {
-  --bg: #fdf2f8;
-  --surface: #ffffff;
-  --surface-2: #fce7f3;
-  --primary: #ec4899;
-  --primary-fg: #ffffff;
-  --secondary: #a78bfa;
-  --danger: #f43f5e;
-  --text: #500724;
-  --text-muted: #9d7888;
-  --border: rgba(157, 23, 77, 0.1);
-  --pet-from: rgba(244, 114, 182, 0.9);
-  --pet-to: rgba(190, 24, 93, 0.4);
-  --pet-glow: rgba(236, 72, 153, 0.5);
+  --bg: #faf4ef;
+  --surface: #fefcf9;
+  --surface-2: #f5e4df;
+  --surface-3: #ecd5cf;
+  --primary: #b83e5e;
+  --primary-fg: #fefcf9;
+  --secondary: #6a7a8a;
+  --accent: #d4a040;
+  --danger: #b53a4a;
+  --text: #2a1a18;
+  --text-strong: #1a0a14;
+  --text-muted: #8a7a78;
+  --text0: rgba(138, 122, 120, 0.4);
+  --border: rgba(184, 62, 94, 0.08);
+  --pet-from: rgba(184, 62, 94, 0.90);
+  --pet-to: rgba(140, 40, 65, 0.35);
+  --pet-glow: rgba(184, 62, 94, 0.50);
+  --shadow-glow: 0 8px 32px rgba(184, 62, 94, 0.12);
+  --grain-opacity: 0.05;
+  --radius-shape: 12px;
+  --font-display: "Playfair Display", Georgia, serif;
+  --font-body: "Nunito Sans", system-ui, sans-serif;
 }
 :root[data-theme="sakura-mist"][data-mode="dark"] {
-  --bg: #1a0a14;
-  --surface: #2a1220;
-  --surface-2: #3a1a2c;
-  --primary: #f472b6;
-  --primary-fg: #1a0a14;
-  --secondary: #c4b5fd;
-  --danger: #fb7185;
-  --text: #fce7f3;
-  --text-muted: #9d7888;
-  --border: rgba(255, 255, 255, 0.08);
-  --pet-from: rgba(244, 114, 182, 0.9);
-  --pet-to: rgba(190, 24, 93, 0.4);
-  --pet-glow: rgba(236, 72, 153, 0.5);
+  --bg: #160812;
+  --surface: #24101e;
+  --surface-2: #301a28;
+  --surface-3: #3c2432;
+  --primary: #d45a7a;
+  --primary-fg: #160812;
+  --secondary: #5a7a8a;
+  --accent: #c49a40;
+  --danger: #d45a5a;
+  --text: #e8d8d4;
+  --text-strong: #faf0ec;
+  --text-muted: #9a8280;
+  --text0: rgba(154, 130, 128, 0.4);
+  --border: rgba(212, 90, 122, 0.15);
+  --pet-from: rgba(212, 90, 122, 0.92);
+  --pet-to: rgba(150, 45, 75, 0.35);
+  --pet-glow: rgba(212, 90, 122, 0.55);
+  --shadow-glow: 0 8px 32px rgba(212, 90, 122, 0.15);
+  --grain-opacity: 0.05;
+  --radius-shape: 12px;
+  --font-display: "Playfair Display", Georgia, serif;
+  --font-body: "Nunito Sans", system-ui, sans-serif;
 }
 
-/* ── Matcha Morning ── */
+/* ── Matcha Morning (抹茶清晨): 有机自然 + 和纸质感 ── */
 :root[data-theme="matcha-morning"][data-mode="light"] {
-  --bg: #f0fdf4;
-  --surface: #ffffff;
-  --surface-2: #dcfce7;
-  --primary: #10b981;
-  --primary-fg: #ffffff;
-  --secondary: #f59e0b;
-  --danger: #ef4444;
-  --text: #052e16;
-  --text-muted: #6b7280;
-  --border: rgba(6, 78, 59, 0.1);
-  --pet-from: rgba(52, 211, 153, 0.9);
-  --pet-to: rgba(6, 95, 70, 0.4);
-  --pet-glow: rgba(16, 185, 129, 0.5);
+  --bg: #f5efe0;
+  --surface: #fcf8f0;
+  --surface-2: #ece4d0;
+  --surface-3: #ddd4bd;
+  --primary: #5e6e3e;
+  --primary-fg: #fcf8f0;
+  --secondary: #8a7a5a;
+  --accent: #c47a3a;
+  --danger: #b55a4a;
+  --text: #2a2a1a;
+  --text-strong: #1a1a10;
+  --text-muted: #7a7a60;
+  --text0: rgba(122, 122, 96, 0.4);
+  --border: rgba(94, 110, 62, 0.10);
+  --pet-from: rgba(94, 110, 62, 0.90);
+  --pet-to: rgba(65, 80, 40, 0.35);
+  --pet-glow: rgba(94, 110, 62, 0.50);
+  --shadow-glow: 0 8px 32px rgba(94, 110, 62, 0.12);
+  --grain-opacity: 0.06;
+  --radius-shape: 10px;
+  --font-display: "Fraunces", Georgia, serif;
+  --font-body: "DM Sans", system-ui, sans-serif;
 }
 :root[data-theme="matcha-morning"][data-mode="dark"] {
-  --bg: #0a1a0f;
-  --surface: #122018;
-  --surface-2: #1a2d22;
-  --primary: #34d399;
-  --primary-fg: #0a1a0f;
-  --secondary: #fbbf24;
-  --danger: #f87171;
-  --text: #d1fae5;
-  --text-muted: #6b7280;
-  --border: rgba(255, 255, 255, 0.08);
-  --pet-from: rgba(52, 211, 153, 0.9);
-  --pet-to: rgba(6, 95, 70, 0.4);
-  --pet-glow: rgba(16, 185, 129, 0.5);
+  --bg: #0a180e;
+  --surface: #142418;
+  --surface-2: #1e3022;
+  --surface-3: #2a3d2c;
+  --primary: #8aa56a;
+  --primary-fg: #0a180e;
+  --secondary: #7a6a4a;
+  --accent: #d48a3a;
+  --danger: #c46a5a;
+  --text: #d8e0c8;
+  --text-strong: #f0f4e8;
+  --text-muted: #7a8a6a;
+  --text0: rgba(122, 138, 106, 0.4);
+  --border: rgba(138, 165, 106, 0.12);
+  --pet-from: rgba(138, 165, 106, 0.92);
+  --pet-to: rgba(75, 100, 45, 0.35);
+  --pet-glow: rgba(138, 165, 106, 0.55);
+  --shadow-glow: 0 8px 32px rgba(138, 165, 106, 0.15);
+  --grain-opacity: 0.06;
+  --radius-shape: 10px;
+  --font-display: "Fraunces", Georgia, serif;
+  --font-body: "DM Sans", system-ui, sans-serif;
 }
 
-/* ── Lavender Dream ── */
+/* ── Lavender Dream (薰衣草梦境): 梦幻虹彩 + 软发光 ── */
 :root[data-theme="lavender-dream"][data-mode="light"] {
-  --bg: #faf5ff;
-  --surface: #ffffff;
-  --surface-2: #f3e8ff;
-  --primary: #8b5cf6;
-  --primary-fg: #ffffff;
-  --secondary: #06b6d4;
-  --danger: #f43f5e;
-  --text: #2e1065;
-  --text-muted: #8b7da3;
-  --border: rgba(76, 29, 149, 0.1);
-  --pet-from: rgba(167, 139, 250, 0.9);
-  --pet-to: rgba(91, 33, 182, 0.4);
-  --pet-glow: rgba(139, 92, 246, 0.5);
+  --bg: #f4ecf1;
+  --surface: #fcf6f8;
+  --surface-2: #ece0e8;
+  --surface-3: #e0d4e4;
+  --primary: #6d4da8;
+  --primary-fg: #fcf6f8;
+  --secondary: #4a8a9a;
+  --accent: #c49ad4;
+  --danger: #b05a7a;
+  --text: #2a1a38;
+  --text-strong: #1a0e28;
+  --text-muted: #7a6a8a;
+  --text0: rgba(122, 106, 138, 0.4);
+  --border: rgba(109, 77, 168, 0.07);
+  --pet-from: rgba(109, 77, 168, 0.90);
+  --pet-to: rgba(75, 45, 130, 0.35);
+  --pet-glow: rgba(109, 77, 168, 0.50);
+  --shadow-glow: 0 8px 32px rgba(109, 77, 168, 0.12);
+  --grain-opacity: 0.02;
+  --radius-shape: 16px;
+  --font-display: "Cormorant Garamond", Georgia, serif;
+  --font-body: "Quicksand", system-ui, sans-serif;
 }
 :root[data-theme="lavender-dream"][data-mode="dark"] {
-  --bg: #140a1f;
-  --surface: #1f1230;
-  --surface-2: #2a1a40;
-  --primary: #a78bfa;
-  --primary-fg: #140a1f;
-  --secondary: #22d3ee;
-  --danger: #fb7185;
-  --text: #ede9fe;
-  --text-muted: #8b7da3;
-  --border: rgba(255, 255, 255, 0.08);
-  --pet-from: rgba(167, 139, 250, 0.9);
-  --pet-to: rgba(91, 33, 182, 0.4);
-  --pet-glow: rgba(139, 92, 246, 0.5);
+  --bg: #120818;
+  --surface: #1c1028;
+  --surface-2: #2a1a3a;
+  --surface-3: #382848;
+  --primary: #9a7ad4;
+  --primary-fg: #120818;
+  --secondary: #4a9aaa;
+  --accent: #c49ad4;
+  --danger: #c46a8a;
+  --text: #e0d4e8;
+  --text-strong: #f4ecf8;
+  --text-muted: #8a7a9a;
+  --text0: rgba(138, 122, 154, 0.4);
+  --border: rgba(154, 122, 212, 0.12);
+  --pet-from: rgba(154, 122, 212, 0.92);
+  --pet-to: rgba(90, 60, 150, 0.35);
+  --pet-glow: rgba(154, 122, 212, 0.55);
+  --shadow-glow: 0 8px 32px rgba(154, 122, 212, 0.15);
+  --grain-opacity: 0.02;
+  --radius-shape: 16px;
+  --font-display: "Cormorant Garamond", Georgia, serif;
+  --font-body: "Quicksand", system-ui, sans-serif;
 }
 
-/* ── Sunset Warm ── */
+/* ── Sunset Warm (暮色暖阳): 暖色粗野 + 赤陶
+   Distinct from Midnight Amber: leans into orange/coral sunset tones
+   (Midnight Amber is gold-on-navy; Sunset Warm is orange-on-warm-brown). ── */
 :root[data-theme="sunset-warm"][data-mode="light"] {
-  --bg: #fffbeb;
-  --surface: #ffffff;
-  --surface-2: #fef3c7;
-  --primary: #f59e0b;
+  --bg: #f5ede4;
+  --surface: #fcf5ee;
+  --surface-2: #ece0d0;
+  --surface-3: #e0d0bc;
+  --primary: #aa5020;
   --primary-fg: #ffffff;
-  --secondary: #ef4444;
-  --danger: #dc2626;
-  --text: #451a03;
-  --text-muted: #a8956b;
-  --border: rgba(120, 53, 15, 0.1);
-  --pet-from: rgba(251, 191, 36, 0.9);
-  --pet-to: rgba(180, 83, 9, 0.4);
-  --pet-glow: rgba(245, 158, 11, 0.5);
+  --secondary: #6a5a4a;
+  --accent: #d48a5a;
+  --danger: #b54a3a;
+  --text: #2a1e14;
+  --text-strong: #1a100a;
+  --text-muted: #7a6a55;
+  --text0: rgba(122, 106, 85, 0.4);
+  --border: rgba(170, 80, 32, 0.08);
+  --pet-from: rgba(170, 80, 32, 0.90);
+  --pet-to: rgba(130, 55, 20, 0.35);
+  --pet-glow: rgba(170, 80, 32, 0.50);
+  --shadow-glow: 0 8px 32px rgba(170, 80, 32, 0.12);
+  --grain-opacity: 0.07;
+  --radius-shape: 2px;
+  --font-display: "Archivo Black", system-ui, sans-serif;
+  --font-body: "Work Sans", system-ui, sans-serif;
 }
 :root[data-theme="sunset-warm"][data-mode="dark"] {
-  --bg: #1a0f00;
-  --surface: #261a0a;
-  --surface-2: #332410;
-  --primary: #fbbf24;
-  --primary-fg: #1a0f00;
-  --secondary: #f87171;
-  --danger: #ef4444;
-  --text: #fef3c7;
-  --text-muted: #a8956b;
-  --border: rgba(255, 255, 255, 0.08);
-  --pet-from: rgba(251, 191, 36, 0.9);
-  --pet-to: rgba(180, 83, 9, 0.4);
-  --pet-glow: rgba(245, 158, 11, 0.5);
+  --bg: #180c06;
+  --surface: #261610;
+  --surface-2: #34221a;
+  --surface-3: #423020;
+  --primary: #c75d29;
+  --primary-fg: #180c06;
+  --secondary: #5a4a3a;
+  --accent: #d48a5a;
+  --danger: #c45a4a;
+  --text: #e0d0c0;
+  --text-strong: #f0e4d8;
+  --text-muted: #8a7a6a;
+  --text0: rgba(138, 122, 106, 0.4);
+  --border: rgba(199, 93, 41, 0.14);
+  --pet-from: rgba(199, 93, 41, 0.92);
+  --pet-to: rgba(130, 50, 18, 0.35);
+  --pet-glow: rgba(199, 93, 41, 0.55);
+  --shadow-glow: 0 8px 32px rgba(199, 93, 41, 0.15);
+  --grain-opacity: 0.07;
+  --radius-shape: 2px;
+  --font-display: "Archivo Black", system-ui, sans-serif;
+  --font-body: "Work Sans", system-ui, sans-serif;
 }
 
 /* ════════════════════════════════════════════════════════════════════
    Fallback (no data-* attributes yet) — mirrors midnight-amber/dark
    ════════════════════════════════════════════════════════════════════ */
 :root {
-  --bg: #020617;
-  --surface: #0f172a;
-  --surface-2: #1e293b;
-  --primary: #fbbf24;
-  --primary-fg: #020617;
-  --secondary: #34d399;
-  --danger: #fb7185;
-  --text: #f1f5f9;
-  --text-muted: #64748b;
-  --border: rgba(255, 255, 255, 0.08);
-  --pet-from: rgba(251, 191, 36, 0.9);
-  --pet-to: rgba(180, 83, 9, 0.4);
-  --pet-glow: rgba(245, 158, 11, 0.5);
+  --bg: #060b18;
+  --surface: #0e1525;
+  --surface-2: #192238;
+  --surface-3: #232b3c;
+  --primary: #f0b84d;
+  --primary-fg: #060b18;
+  --secondary: #4a9a8a;
+  --accent: #c48a4a;
+  --danger: #d46a6a;
+  --text: #d6dce5;
+  --text-strong: #eef2f7;
+  --text-muted: #7a8396;
+  --text0: rgba(122, 131, 150, 0.4);
+  --border: rgba(240, 184, 77, 0.10);
+  --pet-from: rgba(240, 184, 77, 0.92);
+  --pet-to: rgba(180, 110, 25, 0.35);
+  --pet-glow: rgba(240, 184, 77, 0.55);
+  --shadow-glow: 0 8px 32px rgba(240, 184, 77, 0.15);
+  --grain-opacity: 0.04;
+  --radius-shape: 4px;
+  --font-display: "JetBrains Mono", ui-monospace, monospace;
+  --font-body: "IBM Plex Sans", system-ui, sans-serif;
 
-  font-family: Inter, "Segoe UI", sans-serif;
+  font-family: var(--font-body, "IBM Plex Sans", system-ui, sans-serif);
   line-height: 1.5;
   font-weight: 400;
   color: var(--text);
@@ -197,21 +298,40 @@
 
 /* ════════════════════════════════════════════════════════════════════
    Tailwind v4 bridge — expose tokens as utilities:
-   bg-bg, bg-surface, bg-surface-2, bg-primary, bg-secondary, bg-danger,
-   text-text, text-text-muted, text-primary, text-secondary, text-danger,
-   border-border, bg-primary/10, etc. (opacity modifiers work)
+   bg-bg, bg-surface, bg-surface-2, bg-surface-3, bg-primary, bg-secondary,
+   bg-accent, bg-danger, text-text, text-text-strong, text-text0, text-text-muted,
+   text-primary, text-secondary, text-danger, border-border, bg-primary/10, etc.
    ════════════════════════════════════════════════════════════════════ */
 @theme inline {
   --color-bg: var(--bg);
   --color-surface: var(--surface);
   --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
   --color-primary: var(--primary);
   --color-primary-fg: var(--primary-fg);
   --color-secondary: var(--secondary);
+  --color-accent: var(--accent);
   --color-danger: var(--danger);
   --color-text: var(--text);
+  --color-text-strong: var(--text-strong);
+  --color-text0: var(--text0);
   --color-text-muted: var(--text-muted);
   --color-border: var(--border);
+  --font-display: var(--font-display);
+  --font-body: var(--font-body);
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   Global typography — theme-aware font-family from CSS variables
+   ════════════════════════════════════════════════════════════════════ */
+body {
+  font-family: var(--font-body);
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-display);
+  font-weight: 700;
+  letter-spacing: -0.01em;
 }
 
 html,
@@ -227,4 +347,31 @@ input,
 textarea,
 select {
   font: inherit;
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   Column resize handle — MainPanel
+   Invisible by default; reveals a thin accent line on hover / active.
+   Dragging state is reflected via body[style] cursor lock from the hook.
+   ════════════════════════════════════════════════════════════════════ */
+.col-resize-handle {
+  position: relative;
+  width: 4px;
+  cursor: col-resize;
+  background: transparent;
+  transition: background-color 120ms ease;
+  z-index: 5;
+}
+
+.col-resize-handle::before {
+  content: "";
+  position: absolute;
+  /* Widen the hit area without thickening the visible line. */
+  inset: 0 -3px;
+}
+
+.col-resize-handle:hover,
+.col-resize-handle:active {
+  background-color: var(--primary);
+  opacity: 0.35;
 }

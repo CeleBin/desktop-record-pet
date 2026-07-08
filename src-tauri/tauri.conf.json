@@ -29,8 +29,9 @@
         "title": "Quick Input",
         "url": "/?window=quick-input",
         "width": 420,
-        "height": 180,
+        "height": 240,
         "decorations": false,
+        "transparent": true,
         "alwaysOnTop": true,
         "resizable": false,
         "visible": false,
@@ -64,9 +65,10 @@
         "title": "Desktop Record Pet",
         "url": "/?window=main-panel",
         "width": 1280,
-        "height": 860,
+        "height": 720,
         "minWidth": 960,
-        "minHeight": 640,
+        "minHeight": 600,
+        "center": true,
         "visible": false
       },
       {

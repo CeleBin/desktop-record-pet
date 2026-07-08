@@ -38,6 +38,9 @@ pub fn show_main_panel(app: &AppHandle) -> AppResult<()> {
         .show()
         .map_err(|error| AppError::State(error.to_string()))?;
     window
+        .unminimize()
+        .map_err(|error| AppError::State(error.to_string()))?;
+    window
         .set_focus()
         .map_err(|error| AppError::State(error.to_string()))?;
     Ok(())
@@ -96,6 +99,9 @@ pub fn show_window(app: &AppHandle, label: &str) -> AppResult<()> {
     let window = get_window(app, label)?;
     window
         .show()
+        .map_err(|error| AppError::State(error.to_string()))?;
+    window
+        .unminimize()
         .map_err(|error| AppError::State(error.to_string()))?;
     window
         .set_focus()

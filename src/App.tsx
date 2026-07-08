@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { listen } from "@tauri-apps/api/event";
 
 import { MainPanel } from "./components/panel/MainPanel";
 import { PetShell } from "./components/pet/PetShell";
@@ -14,9 +15,13 @@ import {
   parseThemeMode,
 } from "./lib/theme";
 
+/** Event broadcast by the Rust backend whenever a setting changes. */
+const SETTINGS_CHANGED_EVENT = "settings-changed";
+
 /** Subscribes to settings store and re-applies theme when theme/theme_mode changes. */
 function ThemeManager() {
   const settings = useSettingsStore((s) => s.settings);
+  const hasLoaded = useSettingsStore((s) => s.hasLoaded);
   const loadSettings = useSettingsStore((s) => s.loadSettings);
 
   // Load settings on mount (each window loads independently)
@@ -24,13 +29,35 @@ function ThemeManager() {
     void loadSettings();
   }, [loadSettings]);
 
-  // Re-apply theme whenever theme/theme_mode settings change
+  // Cross-window sync: when another window changes a setting, reload so this
+  // window's theme / overlay prefs stay in step. Without this, the todo-overlay
+  // (and pet / quick-input / supplement-box) windows never pick up theme changes
+  // made in the main-panel's Settings panel.
   useEffect(() => {
+    const unlistenPromise = listen(SETTINGS_CHANGED_EVENT, () => {
+      void loadSettings();
+    });
+    return () => {
+      void unlistenPromise.then((unlisten) => unlisten());
+    };
+  }, [loadSettings]);
+
+  // Re-apply theme whenever theme/theme_mode settings change.
+  // Skip until settings have loaded AND are non-empty — initThemeFromCache()
+  // (called in main.tsx) already applied the cached theme synchronously at
+  // startup to avoid FOUC. Running with empty settings (loadSettings failed or
+  // in-flight retry cleared the store) would override the cache with the
+  // default theme and corrupt the shared localStorage cache, causing
+  // cross-window theme inconsistency.
+  const settingsLoaded = Object.keys(settings).length > 0;
+  useEffect(() => {
+    if (!hasLoaded) return;
+    if (!settingsLoaded) return;
     const theme = parseTheme(settings.theme);
     const mode = parseThemeMode(settings.theme_mode);
     applyTheme(theme, mode);
     cacheTheme(theme, mode);
-  }, [settings.theme, settings.theme_mode]);
+  }, [settings.theme, settings.theme_mode, hasLoaded, settingsLoaded]);
 
   return null;
 }

@@ -1,4 +1,4 @@
-export type RecordType = "note" | "task" | "experience" | "issue" | "file-note";
+export type RecordType = "note" | "task";
 export type RecordSource =
   | "quick-text"
   | "built-in-screenshot"
@@ -106,6 +106,7 @@ export interface RecordWithRelations extends RecordItem {
   attachments: AttachmentItem[];
   attachment_links?: RecordAttachmentLink[];
   ai_results?: AiResultItem[];
+  tags: Tag[];
 }
 
 export interface CreateRecordRequest {
@@ -167,10 +168,18 @@ export interface CreateAiResultRequest {
   sensitivity_flag?: string | null;
 }
 
+export interface Tag {
+  id: string;
+  name: string;
+  color: string | null;
+  created_at: string;
+}
+
 export interface RecordFilter {
-  type_filter?: RecordType;
-  status_filter?: RecordStatus;
-  search_query?: string;
+  typeFilter?: RecordType;
+  statusFilter?: RecordStatus;
+  searchQuery?: string;
+  tagIds?: string[];
   limit?: number;
   offset?: number;
 }

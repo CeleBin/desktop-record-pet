@@ -10,6 +10,7 @@ import {
 interface SettingsState {
   settings: Record<string, string>;
   loading: boolean;
+  hasLoaded: boolean;
   error: string | null;
   shortcutErrors: Record<string, string>;
   loadSettings: () => Promise<void>;
@@ -23,6 +24,7 @@ interface SettingsState {
 export const useSettingsStore = create<SettingsState>((set, get) => ({
   settings: {},
   loading: false,
+  hasLoaded: false,
   error: null,
   shortcutErrors: {},
   async loadSettings() {
@@ -32,10 +34,14 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       set({
         settings: Object.fromEntries(entries.map((entry) => [entry.key, entry.value])),
         loading: false,
+        hasLoaded: true,
       });
     } catch (error) {
+      // Log so IPC/DB failures in hidden webviews are visible per-window.
+      console.error("[settings] loadSettings failed:", error);
       set({
         loading: false,
+        hasLoaded: true,
         error: error instanceof Error ? error.message : String(error),
       });
     }

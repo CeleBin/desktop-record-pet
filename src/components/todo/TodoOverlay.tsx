@@ -23,11 +23,12 @@ import { LogicalSize } from "@tauri-apps/api/dpi";
 // dnd-kit：拖拽排序核心 + 传感器
 import {
   DndContext,
-  closestCenter,
+  rectIntersection,
   PointerSensor,
   useSensor,
   useSensors,
   useDroppable,
+  type CollisionDetection,
   type DragEndEvent,
 } from "@dnd-kit/core";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
@@ -122,6 +123,39 @@ export function TodoOverlay() {
     }),
   );
 
+  // ── 自定义碰撞检测 ──
+  // 目标行为：
+  //   - 拖入「另一个分类」的矩形范围 → 直接把该 folder 作为 over（松手即跨分类移动）
+  //   - 拖在「同一分类」内 → 退化为任务级碰撞，用于同分类内排序
+  // 实现：先用 rectIntersection 拿到所有与拖拽矩形相交的 droppable，
+  //       若其中存在「与 active 所属分类不同的 folder/uncategorized」则优先返回它，
+  //       否则返回原始任务级碰撞结果。
+  const collisionDetection: CollisionDetection = useCallback(
+    (args) => {
+      const collisions = rectIntersection(args);
+      const activeId = String(args.active.id);
+      const activeItem = items.find((i) => i.task_id === activeId);
+      const activeFolderKey = activeItem?.folder_id ?? "__uncategorized__";
+
+      // 找到第一个「跨分类」的 folder droppable
+      const crossFolder = collisions.find((c) => {
+        const id = String(c.id);
+        if (id === "__uncategorized__") {
+          return activeFolderKey !== "__uncategorized__";
+        }
+        if (id.startsWith("folder-")) {
+          return id.replace("folder-", "") !== activeFolderKey;
+        }
+        return false;
+      });
+      if (crossFolder) {
+        return [crossFolder];
+      }
+      return collisions;
+    },
+    [items],
+  );
+
   // ── 拖拽结束回调 ──
   // 判断目标：如果是分类 droppable → 移动任务到该分类；否则 → 同列表内排序
   const handleDragEnd = useCallback(
@@ -152,9 +186,22 @@ export function TodoOverlay() {
         return;
       }
 
-      // 同列表内排序
+      // 拖到某个任务上：跨分类则移动到该任务所属分类，同分类则排序
       if (active.id !== over.id) {
-        reorderItems(activeId, overId);
+        const activeItem = items.find((i) => i.task_id === activeId);
+        const overItem = items.find((i) => i.task_id === overId);
+        if (
+          activeItem &&
+          overItem &&
+          activeItem.folder_id !== overItem.folder_id
+        ) {
+          // 跨分类：移动到目标任务所在的分类（含未分类 null）
+          void moveTask(activeId, overItem.folder_id);
+          void fetchItems();
+        } else {
+          // 同分类内排序
+          reorderItems(activeId, overId);
+        }
       }
     },
     [items, moveTask, fetchItems, reorderItems],
@@ -388,7 +435,9 @@ export function TodoOverlay() {
       */}
       <div
         className="pointer-events-none absolute inset-0 backdrop-blur-xl"
-        style={{ backgroundColor: `rgba(2, 6, 23, ${overlayBgOpacity})` }}
+        style={{
+          backgroundColor: `color-mix(in srgb, var(--bg) ${overlayBgOpacity * 100}%, transparent)`,
+        }}
       />
 
       {/* ── 内容层（完全不透明，文字和控件保持清晰可读） ── */}
@@ -627,7 +676,7 @@ export function TodoOverlay() {
           ) : (
             /* ── 任务列表（按分类分组，可拖拽排序） ── */
             /* DndContext + SortableContext 提供拖拽排序能力 */
-            <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+            <DndContext sensors={sensors} collisionDetection={collisionDetection} onDragEnd={handleDragEnd}>
               <SortableContext items={items.map((i) => i.task_id)} strategy={verticalListSortingStrategy}>
                 <div className="divide-y divide-white/[3%]">
                   {/* 有分类的任务 — 按文件夹 sort_order 排列，始终显示所有分类 */}

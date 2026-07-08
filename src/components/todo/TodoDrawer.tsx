@@ -160,10 +160,12 @@ export function TodoDrawer({
   // ── 事件处理函数 ──
 
   /**
-   * 进入标题编辑模式：将当前标题填入草稿，然后显示 input。
+   * 进入标题编辑模式：将当前显示的标题填入草稿，然后显示 input。
+   * 注意：当 record_title 为空时，列表/详情展示会回退到 record_content 作为标题预览，
+   * 因此这里同样需要回退到 record_content，否则用户点击编辑后会看到空输入框，被迫重新输入。
    */
   const startEditTitle = useCallback(() => {
-    setTitleDraft(item?.record_title ?? "");
+    setTitleDraft(item?.record_title || item?.record_content || "");
     setEditingTitle(true);
   }, [item]);
 
@@ -178,12 +180,22 @@ export function TodoDrawer({
   /**
    * 保存标题：退出编辑模式，去除首尾空格后如果变化则调用 onUpdateTitle。
    * 触发时机：blur / Enter 键。
+   *
+   * 跳过保存的情况：
+   *   1. 草稿与原 record_title 一致；
+   *   2. record_title 为空且草稿与 record_content 一致（草稿来自内容回退，用户未做实际修改），
+   *      避免把内容原样落库为标题。
    */
   const saveTitle = useCallback(async () => {
     if (!item) return;
     setEditingTitle(false);
     const trimmed = titleDraft.trim();
-    if (trimmed === (item.record_title ?? "")) return;
+    const currentTitle = item.record_title ?? "";
+    if (trimmed === currentTitle) return;
+    if (!currentTitle) {
+      const contentFallback = item.record_content?.trim() ?? "";
+      if (trimmed === contentFallback) return;
+    }
     await onUpdateTitle(item.record_id, trimmed);
   }, [item, titleDraft, onUpdateTitle]);
 

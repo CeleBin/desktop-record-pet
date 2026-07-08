@@ -12,7 +12,7 @@ use crate::models::{
     AiResult, AiTriggerMode, AttachmentRole, AttachmentType, ClipboardImageRequest,
     CreateAiResultRequest, CreateAttachmentRequest, CreateRecordRequest, CreateTaskRequest, Folder,
     ImportFilesRequest, Record, RecordFilter, RecordSource, RecordType, RecordWithRelations,
-    SettingsEntry, Task, TaskFilter, TaskStatus, UnfinishedTaskItem, UpdateRecordRequest,
+    SettingsEntry, Tag, Task, TaskFilter, TaskStatus, UnfinishedTaskItem, UpdateRecordRequest,
 };
 use crate::screenshot;
 use crate::windows;
@@ -27,9 +27,17 @@ pub struct TaskSortOrder {
 }
 
 pub const DATA_CHANGED_EVENT: &str = "data-changed";
+pub const SETTINGS_CHANGED_EVENT: &str = "settings-changed";
 
 fn emit_data_changed(app: &AppHandle) -> AppResult<()> {
     app.emit(DATA_CHANGED_EVENT, ())
+        .map_err(|error| AppError::State(error.to_string()))
+}
+
+/// Broadcast a settings change so every window can reload its settings
+/// store (keeps theme / shortcuts / overlay prefs in sync across windows).
+fn emit_settings_changed(app: &AppHandle) -> AppResult<()> {
+    app.emit(SETTINGS_CHANGED_EVENT, ())
         .map_err(|error| AppError::State(error.to_string()))
 }
 
@@ -49,8 +57,6 @@ fn import_files_impl(
         CreateRecordRequest {
             record_type: Some(if request.create_as_task {
                 RecordType::Task
-            } else if attachment_ids.len() == 1 {
-                RecordType::FileNote
             } else {
                 RecordType::Note
             }),
@@ -151,6 +157,25 @@ pub fn import_clipboard_image(
     };
     emit_data_changed(&app)?;
     Ok(record)
+}
+
+#[tauri::command]
+pub fn save_clipboard_image(
+    rgba: Vec<u8>,
+    width: u32,
+    height: u32,
+) -> AppResult<String> {
+    let image = RgbaImage::from_raw(width, height, rgba).ok_or_else(|| {
+        AppError::Validation("clipboard image buffer does not match width/height".into())
+    })?;
+
+    let temp_dir = std::env::temp_dir();
+    fs::create_dir_all(&temp_dir)?;
+    let file_path = temp_dir.join(format!("drp-clip-{}.png", uuid::Uuid::new_v4()));
+    image
+        .save(&file_path)
+        .map_err(|error| AppError::Io(error.to_string()))?;
+    Ok(file_path.to_string_lossy().into_owned())
 }
 
 #[tauri::command]
@@ -293,11 +318,19 @@ pub fn list_records(
     filter: Option<RecordFilter>,
 ) -> AppResult<Vec<RecordWithRelations>> {
     let conn = database.conn.lock()?;
-    let records = db::list_records_filtered(&conn, filter.as_ref())?;
-    // Return minimal relations for list view
+    let tag_ids = filter.as_ref()
+        .and_then(|f| f.tag_ids.clone())
+        .unwrap_or_default();
+    let records = db::list_records_filtered(&conn, filter.as_ref(), &tag_ids)?;
+    // Fetch the related task for each record so the list view can render
+    // task status badges immediately without waiting for a click to load
+    // the full detail. Attachments / AI results / tags stay lazy.
     let result: Vec<RecordWithRelations> = records
         .into_iter()
-        .map(RecordWithRelations::from_record_minimal)
+        .map(|record| {
+            let task = db::get_task_for_record(&conn, &record.id).unwrap_or(None);
+            RecordWithRelations::from_record(record, task, vec![], vec![], vec![], vec![])
+        })
         .collect();
     Ok(result)
 }
@@ -569,6 +602,116 @@ pub fn reorder_folders(database: State<'_, Database>, order: Vec<FolderSortOrder
     db::reorder_folders(&conn, &order_tuples)
 }
 
+// ── Tag commands ─────────────────────────────────────────────────
+
+#[tauri::command]
+pub fn create_tag(
+    app: AppHandle,
+    database: State<'_, Database>,
+    name: String,
+    color: Option<String>,
+) -> Result<Tag, String> {
+    if name.trim().is_empty() {
+        return Err("tag name is required".to_string());
+    }
+    let tag = database
+        .conn
+        .lock()
+        .map_err(|e| e.to_string())
+        .and_then(|conn| db::create_tag(&conn, name.trim(), color.as_deref()).map_err(|e| e.to_string()))?;
+    emit_data_changed(&app).map_err(|e| e.to_string())?;
+    Ok(tag)
+}
+
+#[tauri::command]
+pub fn list_tags(database: State<'_, Database>) -> Result<Vec<Tag>, String> {
+    database
+        .conn
+        .lock()
+        .map_err(|e| e.to_string())
+        .and_then(|conn| db::list_tags(&conn).map_err(|e| e.to_string()))
+}
+
+#[tauri::command]
+pub fn update_tag(
+    app: AppHandle,
+    database: State<'_, Database>,
+    id: String,
+    name: Option<String>,
+    color: Option<Option<String>>,
+) -> Result<Tag, String> {
+    if id.trim().is_empty() {
+        return Err("tag id is required".to_string());
+    }
+    let tag = database
+        .conn
+        .lock()
+        .map_err(|e| e.to_string())
+        .and_then(|conn| {
+            db::update_tag(
+                &conn,
+                &id,
+                name.as_deref(),
+                color.as_ref().map(|c| c.as_deref()),
+            )
+            .map_err(|e| e.to_string())
+        })?;
+    emit_data_changed(&app).map_err(|e| e.to_string())?;
+    Ok(tag)
+}
+
+#[tauri::command]
+pub fn delete_tag(
+    app: AppHandle,
+    database: State<'_, Database>,
+    id: String,
+) -> Result<(), String> {
+    if id.trim().is_empty() {
+        return Err("tag id is required".to_string());
+    }
+    database
+        .conn
+        .lock()
+        .map_err(|e| e.to_string())
+        .and_then(|conn| db::delete_tag(&conn, &id).map_err(|e| e.to_string()))?;
+    emit_data_changed(&app).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn set_record_tags(
+    app: AppHandle,
+    database: State<'_, Database>,
+    record_id: String,
+    tag_ids: Vec<String>,
+) -> Result<(), String> {
+    if record_id.trim().is_empty() {
+        return Err("record id is required".to_string());
+    }
+    database
+        .conn
+        .lock()
+        .map_err(|e| e.to_string())
+        .and_then(|conn| db::set_record_tags(&conn, &record_id, &tag_ids).map_err(|e| e.to_string()))?;
+    emit_data_changed(&app).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn list_record_tags(
+    database: State<'_, Database>,
+    record_id: String,
+) -> Result<Vec<Tag>, String> {
+    if record_id.trim().is_empty() {
+        return Err("record id is required".to_string());
+    }
+    database
+        .conn
+        .lock()
+        .map_err(|e| e.to_string())
+        .and_then(|conn| db::list_record_tags(&conn, &record_id).map_err(|e| e.to_string()))
+}
+
 // ── Task 9: pet window commands ──────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -627,6 +770,7 @@ pub fn get_all_settings(database: State<'_, Database>) -> AppResult<Vec<Settings
 /// Upsert a single setting by key/value.
 #[tauri::command]
 pub fn update_setting(
+    app: AppHandle,
     database: State<'_, Database>,
     key: String,
     value: String,
@@ -636,14 +780,17 @@ pub fn update_setting(
     }
     let conn = database.conn.lock()?;
     db::set_setting(&conn, &key, &value)?;
+    emit_settings_changed(&app)?;
     Ok(())
 }
 
 /// Delete all settings entries.
 #[tauri::command]
-pub fn reset_settings(database: State<'_, Database>) -> AppResult<()> {
+pub fn reset_settings(app: AppHandle, database: State<'_, Database>) -> AppResult<()> {
     let conn = database.conn.lock()?;
-    db::delete_all_settings(&conn)
+    db::delete_all_settings(&conn)?;
+    emit_settings_changed(&app)?;
+    Ok(())
 }
 
 // ── Editable global shortcuts ───────────────────────────────────────
@@ -695,6 +842,7 @@ pub fn set_shortcut(
                     }
                     // Persist to DB and update in-memory state.
                     persist_and_update(&database, &shortcut_state, "quick_capture_shortcut", &accelerator);
+                    let _ = emit_settings_changed(&app);
                     SetShortcutResult { ok: true, error: None }
                 }
                 Err(e) => SetShortcutResult {
@@ -723,6 +871,7 @@ pub fn set_shortcut(
                         let _ = app.global_shortcut().unregister(old);
                     }
                     persist_and_update(&database, &shortcut_state, "screenshot_shortcut", &accelerator);
+                    let _ = emit_settings_changed(&app);
                     SetShortcutResult { ok: true, error: None }
                 }
                 Err(e) => SetShortcutResult {
@@ -949,20 +1098,47 @@ pub async fn request_ai_enhancement(
     // Step 6: Persist as an AiResult
     let ai_result = {
         let conn = database.conn.lock()?;
-        db::insert_ai_result(
+        let result = db::insert_ai_result(
             &conn,
             CreateAiResultRequest {
-                record_id,
+                record_id: record_id.clone(),
                 trigger_mode: AiTriggerMode::Manual,
                 model_provider: Some("anthropic".into()),
                 model_name: Some("claude-opus-4-7".into()),
                 summary,
-                tags,
+                tags: tags.clone(),
                 suggested_tasks,
                 research_result,
                 sensitivity_flag,
             },
-        )?
+        )?;
+
+        // Auto-promote AI tags to user-managed tags
+        if let Some(ref tags_csv) = tags {
+            let tag_names: Vec<String> = tags_csv
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+            if !tag_names.is_empty() {
+                let mut tag_ids: Vec<String> = Vec::new();
+                for name in &tag_names {
+                    match db::find_or_create_tag_by_name(&conn, name) {
+                        Ok(tag) => tag_ids.push(tag.id),
+                        Err(e) => {
+                            eprintln!("Failed to find/create tag '{}': {}", name, e);
+                        }
+                    }
+                }
+                if !tag_ids.is_empty() {
+                    if let Err(e) = db::link_tags_to_record(&conn, &record_id, &tag_ids) {
+                        eprintln!("Failed to link tags to record: {}", e);
+                    }
+                }
+            }
+        }
+
+        result
     };
 
     Ok(ai_result)
