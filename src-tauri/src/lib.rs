@@ -1,3 +1,4 @@
+mod ai;
 mod commands;
 mod db;
 mod errors;
@@ -240,6 +241,8 @@ pub fn run() {
             commands::update_setting,
             commands::reset_settings,
             commands::create_ai_result,
+            commands::run_ai_task,
+            commands::trigger_ai_analysis,
             commands::request_ai_enhancement,
             // Editable global shortcuts
             commands::set_shortcut,

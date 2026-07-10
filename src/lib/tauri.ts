@@ -1,6 +1,7 @@
 ﻿import { invoke } from "@tauri-apps/api/core";
 
 import type {
+  AiTaskRunItem,
   AiResultItem,
   ClipboardImageRequest,
   CreateAiResultRequest,
@@ -12,6 +13,7 @@ import type {
   RecordFilter,
   RecordItem,
   RecordWithRelations,
+  RunAiTaskRequest,
   SettingsEntry,
   SetShortcutResult,
   Tag,
@@ -20,6 +22,21 @@ import type {
   TaskItem,
   UpdateRecordRequest,
 } from "../types";
+
+type ApiRecordWithRelations = RecordWithRelations & {
+  attachmentLinks?: RecordWithRelations["attachment_links"];
+  aiResults?: RecordWithRelations["ai_results"];
+  knowledgeTopics?: RecordWithRelations["knowledge_topics"];
+};
+
+function normalizeRecordWithRelations(record: ApiRecordWithRelations): RecordWithRelations {
+  return {
+    ...record,
+    attachment_links: record.attachment_links ?? record.attachmentLinks ?? [],
+    ai_results: record.ai_results ?? record.aiResults ?? [],
+    knowledge_topics: record.knowledge_topics ?? record.knowledgeTopics ?? [],
+  };
+}
 
 export async function createRecord(request: CreateRecordRequest): Promise<RecordItem> {
   return invoke<RecordItem>("create_record", { request });
@@ -63,11 +80,13 @@ export async function hideWindow(label: string): Promise<void> {
 }
 
 export async function listRecords(filter?: RecordFilter): Promise<RecordWithRelations[]> {
-  return invoke<RecordWithRelations[]>("list_records", { filter });
+  const records = await invoke<ApiRecordWithRelations[]>("list_records", { filter });
+  return records.map(normalizeRecordWithRelations);
 }
 
 export async function getRecordDetail(id: string): Promise<RecordWithRelations> {
-  return invoke<RecordWithRelations>("get_record_detail", { id });
+  const record = await invoke<ApiRecordWithRelations>("get_record_detail", { id });
+  return normalizeRecordWithRelations(record);
 }
 
 export async function updateRecord(
@@ -212,6 +231,12 @@ export async function triggerAiAnalysis(
   triggerMode: string = "manual",
 ): Promise<AiResultItem> {
   return invoke<AiResultItem>("trigger_ai_analysis", { recordId, triggerMode });
+}
+
+export async function runAiTask(
+  request: RunAiTaskRequest,
+): Promise<AiTaskRunItem> {
+  return invoke<AiTaskRunItem>("run_ai_task", { request });
 }
 
 // ── Pet position (backend in parallel) ──────────────────────────────

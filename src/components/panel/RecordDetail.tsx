@@ -14,10 +14,12 @@ import { useEditorPreviewResize } from "../../lib/useEditorPreviewResize";
 import { useEditorPreviewSyncScroll } from "../../lib/useEditorPreviewSyncScroll";
 import { useTocResize } from "../../lib/useTocResize";
 
-import { addAttachmentsToRecord, getRecordDetail, saveClipboardImage, setRecordTags, triggerAiAnalysis } from "../../lib/tauri";
+import { addAttachmentsToRecord, getRecordDetail, runAiTask, saveClipboardImage, setRecordTags } from "../../lib/tauri";
 import { useRecordsStore } from "../../store/records";
 import { useTagsStore } from "../../store/tags";
 import type {
+  AiResultItem,
+  LearningAnalysisResult,
   RecordWithRelations,
   TaskStatus,
   UpdateRecordRequest,
@@ -57,6 +59,57 @@ const TASK_STATUS_OPTIONS: { label: string; value: TaskStatus; activeClasses: st
   { label: "已取消", value: "cancelled", activeClasses: "bg-text-muted/20 text-text-muted ring-1 ring-text-muted/20", dot: "bg-text-muted" },
 ];
 
+const KNOWLEDGE_STATUS_LABELS: Record<string, string> = {
+  candidate: "待确认",
+  understanding: "初步理解",
+  mastered: "已掌握",
+  awareness: "待确认",
+  rejected: "不是知识点",
+};
+
+const LEARNING_CONFIRM_ACTIONS = [
+  {
+    label: "我能复述",
+    signal: "restatement" as const,
+    content: "用户已经能用自己的话复述这个知识点。",
+  },
+  {
+    label: "我能应用",
+    signal: "application" as const,
+    content: "用户已经能把这个知识应用到实际问题。",
+  },
+  {
+    label: "写入为初步理解",
+    signal: "user_requested_memory" as const,
+    content: "用户主动要求把这个知识写入记忆。",
+  },
+  {
+    label: "不是知识点",
+    signal: "not_knowledge_point" as const,
+    content: "用户认为这个候选项不应该作为知识点记录。",
+  },
+] satisfies Array<{
+  label: string;
+  signal: "user_requested_memory" | "restatement" | "application" | "not_knowledge_point";
+  content: string;
+}>;
+
+interface EffectiveKnowledgeTopic {
+  key: string;
+  topicId: string | null;
+  name: string;
+  rawStatus: string;
+  masteryLevel: string;
+  summary: string;
+  evidenceText: string;
+  canPromote: boolean;
+}
+
+interface PersistedLearningAnalysisEntry {
+  ai: AiResultItem;
+  result: LearningAnalysisResult;
+}
+
 function formatDateTime(iso: string): string {
   try {
     const d = new Date(iso);
@@ -69,6 +122,49 @@ function formatDateTime(iso: string): string {
     });
   } catch {
     return iso;
+  }
+}
+
+function normalizeTopicName(name: string): string {
+  return name.trim().toLocaleLowerCase();
+}
+
+function isLearningAnalysisResult(value: unknown): value is LearningAnalysisResult {
+  if (!value || typeof value !== "object") return false;
+
+  const candidate = value as Record<string, unknown>;
+  if (typeof candidate.summary !== "string") return false;
+  if (!Array.isArray(candidate.knowledge_points)) return false;
+  if (!Array.isArray(candidate.questions_for_user)) return false;
+  if (!Array.isArray(candidate.suggested_memory_updates)) return false;
+
+  return candidate.knowledge_points.every((point) => {
+    if (!point || typeof point !== "object") return false;
+    const item = point as Record<string, unknown>;
+    return (
+      typeof item.name === "string"
+      && typeof item.confidence === "number"
+      && typeof item.example_from_note === "string"
+    );
+  }) && candidate.questions_for_user.every((question) => typeof question === "string")
+    && candidate.suggested_memory_updates.every((update) => {
+      if (!update || typeof update !== "object") return false;
+      const item = update as Record<string, unknown>;
+      return (
+        typeof item.topic === "string"
+        && typeof item.mastery_level === "string"
+        && typeof item.evidence === "string"
+      );
+    });
+}
+
+function parseLearningAnalysisResult(raw: string | null | undefined): LearningAnalysisResult | null {
+  if (!raw) return null;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return isLearningAnalysisResult(parsed) ? parsed : null;
+  } catch {
+    return null;
   }
 }
 
@@ -159,9 +255,12 @@ export function RecordDetail({
   const [converting, setConverting] = useState(false);
   const [updatingStatus, setUpdatingStatus] = useState(false);
   const [aiAnalyzing, setAiAnalyzing] = useState(false);
+  const [promotingTopicIds, setPromotingTopicIds] = useState<string[]>([]);
   const [aiError, setAiError] = useState<string | null>(null);
+  const [latestAiResult, setLatestAiResult] = useState<LearningAnalysisResult | null>(null);
   //全屏预览窗口
   const [previewSrc, setPreviewSrc] = useState<string | null>(null);
+  const aiSectionRef = useRef<HTMLElement | null>(null);
 
   // ── Editor / preview split ratio (persisted, proportional resize) ──
   const { ratio: editorRatio, startResize: startEditorResize, resetRatio: resetEditorRatio } =
@@ -180,7 +279,7 @@ export function RecordDetail({
   const { width: tocWidth, startResize: startTocResize, resetWidth: resetTocWidth } =
     useTocResize();
 
-  const { selectRecord } = useRecordsStore();
+  const { selectRecord, hydrateRecord } = useRecordsStore();
   const allTags = useTagsStore((s) => s.tags);
   const createTag = useTagsStore((s) => s.createTag);
 
@@ -210,6 +309,52 @@ export function RecordDetail({
     () => new Set(record?.tags.map((t) => t.id) ?? []),
     [record?.tags],
   );
+
+  const effectiveKnowledgeTopics = useMemo<EffectiveKnowledgeTopic[]>(
+    () => (record?.knowledge_topics ?? []).map((topic) => ({
+      key: `${topic.topic_id}-${topic.updated_at}`,
+      topicId: topic.topic_id,
+      name: topic.name,
+      rawStatus: topic.mastery_level,
+      masteryLevel: KNOWLEDGE_STATUS_LABELS[topic.mastery_level] ?? topic.mastery_level,
+      summary: topic.summary,
+      evidenceText: topic.evidence_text,
+      canPromote: topic.mastery_level === "candidate",
+    })),
+    [record?.knowledge_topics],
+  );
+
+  const knowledgeTopicByName = useMemo(() => {
+    const map = new Map<string, EffectiveKnowledgeTopic>();
+    effectiveKnowledgeTopics.forEach((topic) => {
+      map.set(normalizeTopicName(topic.name), topic);
+    });
+    return map;
+  }, [effectiveKnowledgeTopics]);
+
+  const { persistedLearningAnalysisEntries, legacyAiResults } = useMemo(() => {
+    const entries: PersistedLearningAnalysisEntry[] = [];
+    const legacy: AiResultItem[] = [];
+
+    for (const ai of record?.ai_results ?? []) {
+      const parsed = parseLearningAnalysisResult(ai.research_result);
+      if (parsed) {
+        entries.push({ ai, result: parsed });
+      } else {
+        legacy.push(ai);
+      }
+    }
+
+    return {
+      persistedLearningAnalysisEntries: entries,
+      legacyAiResults: legacy,
+    };
+  }, [record?.ai_results]);
+
+  const visibleLatestAiResult = useMemo(() => {
+    if (!latestAiResult) return null;
+    return persistedLearningAnalysisEntries.length === 0 ? latestAiResult : null;
+  }, [latestAiResult, persistedLearningAnalysisEntries.length]);
 
   const availableTags = useMemo(
     () => allTags.filter((t) => !recordTagIds.has(t.id)),
@@ -741,15 +886,215 @@ export function RecordDetail({
     setAiAnalyzing(true);
     setAiError(null);
     try {
-      await triggerAiAnalysis(record.id, "manual");
-      // Re-fetch detail to get fresh ai_results
-      await selectRecord(record.id);
+      const taskRun = await runAiTask({
+        taskType: "learning_analysis",
+        payload: {
+          recordId: record.id,
+          includeRelatedTasks: true,
+          interactionMode: "prepare",
+        },
+      });
+
+      if (taskRun.result_json) {
+        const parsed = parseLearningAnalysisResult(taskRun.result_json);
+        setLatestAiResult(parsed);
+      } else {
+        setLatestAiResult(null);
+      }
+
+      // Re-fetch detail to get fresh ai_results, but hydrate directly so the
+      // current detail pane updates immediately without relying on selection churn.
+      const updated = await getRecordDetail(record.id);
+      hydrateRecord(updated);
+      requestAnimationFrame(() => {
+        aiSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
     } catch (error) {
       setAiError(error instanceof Error ? error.message : String(error));
     } finally {
       setAiAnalyzing(false);
     }
-  }, [record, aiAnalyzing, selectRecord]);
+  }, [record, aiAnalyzing, hydrateRecord]);
+
+  const handleConfirmTopic = useCallback(async (
+    topicId: string,
+    sourceSignal: "user_requested_memory" | "restatement" | "application" | "not_knowledge_point",
+    content: string,
+  ) => {
+    if (!record || !topicId) return;
+    setPromotingTopicIds((current) => [...current, topicId]);
+    setAiError(null);
+    try {
+      await runAiTask({
+        taskType: "learning_conversation",
+        payload: {
+          topicId,
+          sourceRecordId: record.id,
+          messages: [
+            {
+              role: "user",
+              content,
+            },
+          ],
+          sourceSignals: [sourceSignal],
+        },
+      });
+
+      const updated = await getRecordDetail(record.id);
+      hydrateRecord(updated);
+    } catch (error) {
+      setAiError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setPromotingTopicIds((current) => current.filter((id) => id !== topicId));
+    }
+  }, [record, hydrateRecord]);
+
+  const renderLearningAnalysisCard = (
+    result: LearningAnalysisResult,
+    keyPrefix: string,
+    ai?: AiResultItem,
+  ): ReactNode => (
+    <div className="overflow-hidden rounded-xl border border-primary/18 bg-primary/[4%]">
+      <div className="px-4 py-3">
+        <div className="flex items-start gap-3">
+          <div className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-primary/10">
+            <svg className="h-3 w-3 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z" />
+            </svg>
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="mb-1 text-[11px] font-medium text-primary">
+              本次学习分析
+            </p>
+            <p className="text-xs leading-6 text-text">
+              {result.summary}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {result.knowledge_points.length > 0 && (
+        <div className="border-t border-primary/10 px-4 py-3">
+          <p className="mb-2 text-[11px] font-medium text-primary">
+            识别出的知识点
+          </p>
+          <div className="space-y-2">
+            {result.knowledge_points.map((point, index) => (
+              <div key={`${keyPrefix}-point-${point.name}-${index}`} className="rounded-lg bg-surface/40 px-3 py-2">
+                <div className="flex items-center gap-2">
+                  <p className="text-xs font-medium text-text">{point.name}</p>
+                  <span className="text-[10px] text-text-muted">
+                    置信度 {Math.round(point.confidence * 100)}%
+                  </span>
+                </div>
+                <p className="mt-1 text-[11px] leading-5 text-text-muted">
+                  {point.example_from_note}
+                </p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {result.questions_for_user.length > 0 && (
+        <div className="border-t border-primary/10 px-4 py-3">
+          <p className="mb-2 text-[11px] font-medium text-primary">
+            建议继续追问
+          </p>
+          <ul className="space-y-1">
+            {result.questions_for_user.map((question, index) => (
+              <li key={`${keyPrefix}-question-${index}`} className="flex items-start gap-2 text-xs leading-5 text-text-muted">
+                <span className="mt-[5px] inline-block h-1 w-1 shrink-0 rounded-full bg-primary/50" />
+                {question}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {result.suggested_memory_updates.length > 0 && (
+        <div className="border-t border-primary/10 px-4 py-3">
+          <p className="mb-2 text-[11px] font-medium text-primary">
+            本次识别的候选知识
+          </p>
+          <p className="mb-2 text-[11px] leading-5 text-text-muted">
+            这些内容会先作为待确认候选项，后续需要通过宠物对话再决定是否进入用户知识记忆。
+          </p>
+          <div className="space-y-2">
+            {result.suggested_memory_updates.map((update, index) => {
+              const matchedTopic = knowledgeTopicByName.get(normalizeTopicName(update.topic));
+              const promotableTopicId = matchedTopic?.canPromote ? matchedTopic.topicId : null;
+              const isPromoting = !!promotableTopicId
+                && promotingTopicIds.includes(promotableTopicId);
+              return (
+                <div key={`${keyPrefix}-memory-${update.topic}-${index}`} className="rounded-lg bg-surface/40 px-3 py-2">
+                  <div className="flex items-center gap-2">
+                    <p className="text-xs font-medium text-text">{update.topic}</p>
+                    <span className="text-[10px] text-text-muted">
+                      {matchedTopic?.masteryLevel ?? KNOWLEDGE_STATUS_LABELS[update.mastery_level] ?? "待确认"}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-[11px] leading-5 text-text-muted">
+                    {update.evidence}
+                  </p>
+                  {promotableTopicId && (
+                    <div className="mt-3">
+                      <p className="mb-2 text-[11px] leading-5 text-text-muted">
+                        请选择如何处理这个候选知识：
+                      </p>
+                      <div className="flex flex-wrap gap-2">
+                        {LEARNING_CONFIRM_ACTIONS.map((action) => (
+                          <button
+                            key={`${promotableTopicId}-${action.signal}`}
+                            type="button"
+                            onClick={() => void handleConfirmTopic(
+                              promotableTopicId,
+                              action.signal,
+                              action.content,
+                            )}
+                            disabled={isPromoting}
+                            className="inline-flex items-center gap-1.5 rounded-full bg-secondary/15 px-3 py-1.5 text-[11px] font-medium text-secondary transition hover:bg-secondary/25 disabled:opacity-50"
+                          >
+                            {isPromoting ? (
+                              <span className="inline-block h-3 w-3 animate-spin rounded-full border border-secondary/40 border-t-secondary" />
+                            ) : null}
+                            {action.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {ai && (
+        <div className="border-t border-primary/10 px-4 py-2">
+          <div className="flex items-center gap-3 text-[10px] text-text0">
+            {ai.model_name && <span>{ai.model_name}</span>}
+            <span className="text-text-muted">·</span>
+            <span>
+              {ai.trigger_mode === "auto"
+                ? "自动分析"
+                : ai.trigger_mode === "smart"
+                  ? "智能分析"
+                  : "手动分析"}
+            </span>
+            <span className="text-text-muted">·</span>
+            <span>{formatDateTime(ai.created_at)}</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+
+  useEffect(() => {
+    setLatestAiResult(null);
+    setAiError(null);
+  }, [record?.id]);
 
   // Empty state
   if (!record) {
@@ -1245,13 +1590,23 @@ export function RecordDetail({
               )}
 
               {/* AI Results */}
-              {record.ai_results && record.ai_results.length > 0 && (
-                <section>
+              {(visibleLatestAiResult || persistedLearningAnalysisEntries.length > 0 || legacyAiResults.length > 0) && (
+                <section ref={aiSectionRef}>
                   <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.2em] text-text0">
                     AI 分析
                   </p>
                   <div className="space-y-3">
-                    {record.ai_results.map((ai) => (
+                    {visibleLatestAiResult && (
+                      <>{renderLearningAnalysisCard(visibleLatestAiResult, "latest")}</>
+                    )}
+
+                    {persistedLearningAnalysisEntries.map(({ ai, result }) => (
+                      <div key={ai.id}>
+                        {renderLearningAnalysisCard(result, ai.id, ai)}
+                      </div>
+                    ))}
+
+                    {legacyAiResults.map((ai) => (
                       <div
                         key={ai.id}
                         className="overflow-hidden rounded-xl border border-violet-400/12 bg-violet-400/[3%]"
@@ -1352,6 +1707,51 @@ export function RecordDetail({
                                 }
                               })()}
                             </span>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              )}
+
+              {effectiveKnowledgeTopics.length > 0 && (
+                <section>
+                  <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.2em] text-text0">
+                    待确认知识状态
+                  </p>
+                  <p className="mb-3 text-[11px] leading-5 text-text-muted">
+                    这里展示的是从当前记录中沉淀出的候选知识或阶段性状态，不等同于已经确认的用户知识记忆。
+                  </p>
+                  <div className="space-y-3">
+                    {effectiveKnowledgeTopics.map((topic) => (
+                      <div
+                        key={topic.key}
+                        className="overflow-hidden rounded-xl border border-secondary/15 bg-secondary/[4%]"
+                      >
+                        <div className="px-4 py-3">
+                          <div className="flex items-start gap-3">
+                            <div className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-secondary/12">
+                              <svg className="h-3 w-3 text-secondary" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6l4 2m4-2a8 8 0 11-16 0 8 8 0 0116 0z" />
+                              </svg>
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-2">
+                                <p className="text-xs font-medium text-secondary">
+                                  {topic.name}
+                                </p>
+                                <span className="text-[10px] text-text-muted">
+                                  {topic.masteryLevel}
+                                </span>
+                              </div>
+                              <p className="mt-1 text-xs leading-6 text-text">
+                                {topic.summary}
+                              </p>
+                              <p className="mt-2 text-[11px] leading-5 text-text-muted">
+                                证据：{topic.evidenceText}
+                              </p>
+                            </div>
                           </div>
                         </div>
                       </div>

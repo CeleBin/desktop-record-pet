@@ -87,6 +87,7 @@ const SETTING_DEFS: Record<string, SettingDef> = {
     type: "select",
     options: [
       { label: "Claude", value: "claude" },
+      { label: "Opencode Zen", value: "opencode" },
       { label: "OpenAI", value: "openai" },
     ],
     category: "ai",
@@ -96,6 +97,13 @@ const SETTING_DEFS: Record<string, SettingDef> = {
     description: "使用的 AI 模型名称",
     type: "text",
     placeholder: "claude-sonnet-4-20250514",
+    category: "ai",
+  },
+  ai_model_variant: {
+    label: "模型变体",
+    description: "按任务区分的模型变体或预设名称",
+    type: "text",
+    placeholder: "default / deepseek-v4-flash-free",
     category: "ai",
   },
   ai_auto_analyze: {
@@ -110,6 +118,13 @@ const SETTING_DEFS: Record<string, SettingDef> = {
     type: "text",
     mask: true,
     placeholder: "sk-…",
+    category: "ai",
+  },
+  ai_base_url: {
+    label: "AI Base URL",
+    description: "自定义模型服务地址；可填根地址，后端会按 provider 补全接口路径",
+    type: "text",
+    placeholder: "https://opencode.ai/zen/v1",
     category: "ai",
   },
   reminder_channel: {

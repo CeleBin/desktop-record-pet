@@ -11,6 +11,10 @@ export type TaskPriority = "low" | "medium" | "high";
 export type AttachmentType = "image" | "screenshot" | "file";
 export type AttachmentRole = "main" | "reference";
 export type AiTriggerMode = "manual" | "auto" | "smart";
+export type AiTaskType =
+  | "learning_analysis"
+  | "learning_conversation"
+  | "weekly_report";
 export type ReminderChannel = "pet-bubble" | "system-notification";
 export type ReminderStatus = "pending" | "triggered" | "cancelled";
 export type JobStatus = "pending" | "running" | "success" | "failed";
@@ -87,6 +91,101 @@ export interface AiResultItem {
   created_at: string;
 }
 
+export interface LearningAnalysisPayload {
+  recordId: string;
+  includeRelatedTasks: boolean;
+  interactionMode: string;
+}
+
+export interface WeeklyReportPayload {
+  dateRange: {
+    start: string;
+    end: string;
+  };
+  includeTasks: boolean;
+  includeNotes: boolean;
+  tone: string;
+}
+
+export interface LearningKnowledgePoint {
+  name: string;
+  confidence: number;
+  example_from_note: string;
+}
+
+export interface SuggestedMemoryUpdate {
+  topic: string;
+  mastery_level: string;
+  evidence: string;
+}
+
+export interface LearningConversationMessage {
+  role: string;
+  content: string;
+}
+
+export interface LearningConversationPayload {
+  topicId: string;
+  sourceRecordId: string;
+  dialogSessionId?: string | null;
+  messages: LearningConversationMessage[];
+  sourceSignals: string[];
+}
+
+export interface RecordKnowledgeTopicItem {
+  topic_id: string;
+  name: string;
+  summary: string;
+  mastery_level: string;
+  evidence_text: string;
+  updated_at: string;
+}
+
+export interface LearningAnalysisResult {
+  knowledge_points: LearningKnowledgePoint[];
+  questions_for_user: string[];
+  suggested_memory_updates: SuggestedMemoryUpdate[];
+  summary: string;
+}
+
+export interface WeeklyReportResult {
+  summary: string;
+  completed_work: string[];
+  in_progress: string[];
+  risks: string[];
+  next_steps: string[];
+}
+
+export interface LearningConversationResult {
+  topic: string;
+  decision: string;
+  reason: string;
+  memory_write?: {
+    status: string;
+    evidence_type: string;
+  } | null;
+  next_action: string;
+}
+
+export interface RunAiTaskRequest {
+  taskType: AiTaskType;
+  payload: Record<string, unknown>;
+}
+
+export interface AiTaskRunItem {
+  id: string;
+  task_type: AiTaskType;
+  source_record_id: string | null;
+  status: string;
+  model_provider: string | null;
+  model_name: string | null;
+  model_variant: string | null;
+  input_snapshot: string;
+  result_json: string | null;
+  error_message: string | null;
+  created_at: string;
+}
+
 export interface ReminderItem {
   id: string;
   record_id: string;
@@ -106,6 +205,7 @@ export interface RecordWithRelations extends RecordItem {
   attachments: AttachmentItem[];
   attachment_links?: RecordAttachmentLink[];
   ai_results?: AiResultItem[];
+  knowledge_topics?: RecordKnowledgeTopicItem[];
   tags: Tag[];
 }
 

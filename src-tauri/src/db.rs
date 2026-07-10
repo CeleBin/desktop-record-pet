@@ -12,9 +12,10 @@ use uuid::Uuid;
 
 use crate::errors::{AppError, AppResult};
 use crate::models::{
-    AiResult, AiTriggerMode, Attachment, AttachmentRole, AttachmentType, CreateAiResultRequest,
-    CreateAttachmentRequest, CreateRecordRequest, CreateTaskRequest, Folder, Record,
-    RecordAttachmentLink, RecordFilter, RecordSource, RecordStatus, RecordType,
+    AiResult, AiTaskRun, AiTaskType, AiTriggerMode, Attachment, AttachmentRole, AttachmentType,
+    CreateAiResultRequest, CreateAttachmentRequest, CreateRecordRequest, CreateTaskRequest, Folder,
+    KnowledgeEvidence, KnowledgeTopic, LearningDialogSession, Record, RecordAttachmentLink,
+    RecordFilter, RecordKnowledgeTopic, RecordSource, RecordStatus, RecordType,
     RecordWithRelations, RepeatRule, SettingsEntry, Tag, Task, TaskFilter, TaskPriority,
     TaskStatus, UnfinishedTaskItem, UpdateRecordRequest,
 };
@@ -111,6 +112,53 @@ pub fn run_migrations(conn: &Connection) -> AppResult<()> {
             sensitivity_flag TEXT,
             created_at TEXT NOT NULL,
             FOREIGN KEY(record_id) REFERENCES records(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS ai_task_runs (
+            id TEXT PRIMARY KEY,
+            task_type TEXT NOT NULL,
+            source_record_id TEXT,
+            status TEXT NOT NULL,
+            model_provider TEXT,
+            model_name TEXT,
+            model_variant TEXT,
+            input_snapshot TEXT NOT NULL,
+            result_json TEXT,
+            error_message TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(source_record_id) REFERENCES records(id) ON DELETE SET NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS knowledge_topics (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+            summary TEXT NOT NULL,
+            mastery_level TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS knowledge_evidence (
+            id TEXT PRIMARY KEY,
+            topic_id TEXT NOT NULL,
+            record_id TEXT NOT NULL,
+            evidence_type TEXT NOT NULL,
+            evidence_text TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(topic_id) REFERENCES knowledge_topics(id) ON DELETE CASCADE,
+            FOREIGN KEY(record_id) REFERENCES records(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS learning_dialog_sessions (
+            id TEXT PRIMARY KEY,
+            topic_id TEXT NOT NULL,
+            source_record_id TEXT NOT NULL,
+            status TEXT NOT NULL,
+            conversation_snapshot TEXT NOT NULL,
+            conclusion_json TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(topic_id) REFERENCES knowledge_topics(id) ON DELETE CASCADE,
+            FOREIGN KEY(source_record_id) REFERENCES records(id) ON DELETE CASCADE
         );
 
         CREATE TABLE IF NOT EXISTS reminders (
@@ -663,6 +711,229 @@ pub fn get_ai_results_for_record(conn: &Connection, record_id: &str) -> AppResul
     Ok(items)
 }
 
+pub fn upsert_knowledge_topic(
+    conn: &Connection,
+    name: &str,
+    summary: &str,
+    mastery_level: &str,
+) -> AppResult<KnowledgeTopic> {
+    let existing = conn
+        .query_row(
+            "SELECT id FROM knowledge_topics WHERE name = ?1 COLLATE NOCASE",
+            params![name],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+
+    let now = Utc::now();
+    let had_existing = existing.is_some();
+    let id = existing.unwrap_or_else(|| Uuid::new_v4().to_string());
+    let created_at = if had_existing {
+        conn.query_row(
+            "SELECT created_at FROM knowledge_topics WHERE id = ?1",
+            params![&id],
+            |row| row.get::<_, String>(0),
+        )?
+    } else {
+        now.to_rfc3339()
+    };
+
+    conn.execute(
+        "INSERT INTO knowledge_topics (id, name, summary, mastery_level, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+         ON CONFLICT(id) DO UPDATE SET
+           name = excluded.name,
+           summary = excluded.summary,
+           mastery_level = excluded.mastery_level,
+           updated_at = excluded.updated_at",
+        params![
+            &id,
+            name,
+            summary,
+            mastery_level,
+            created_at,
+            now.to_rfc3339(),
+        ],
+    )?;
+
+    get_knowledge_topic(conn, &id)
+}
+
+pub fn append_knowledge_evidence(
+    conn: &Connection,
+    topic_id: &str,
+    record_id: &str,
+    evidence_type: &str,
+    evidence_text: &str,
+) -> AppResult<KnowledgeEvidence> {
+    let evidence = KnowledgeEvidence {
+        id: Uuid::new_v4().to_string(),
+        topic_id: topic_id.to_string(),
+        record_id: record_id.to_string(),
+        evidence_type: evidence_type.to_string(),
+        evidence_text: evidence_text.to_string(),
+        created_at: Utc::now(),
+    };
+
+    conn.execute(
+        "INSERT INTO knowledge_evidence (id, topic_id, record_id, evidence_type, evidence_text, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![
+            evidence.id,
+            evidence.topic_id,
+            evidence.record_id,
+            evidence.evidence_type,
+            evidence.evidence_text,
+            evidence.created_at.to_rfc3339(),
+        ],
+    )?;
+
+    Ok(evidence)
+}
+
+pub fn update_knowledge_topic_status(
+    conn: &Connection,
+    topic_id: &str,
+    summary: &str,
+    mastery_level: &str,
+) -> AppResult<KnowledgeTopic> {
+    let now = Utc::now().to_rfc3339();
+    conn.execute(
+        "UPDATE knowledge_topics
+         SET summary = ?2, mastery_level = ?3, updated_at = ?4
+         WHERE id = ?1",
+        params![topic_id, summary, mastery_level, now],
+    )?;
+    get_knowledge_topic(conn, topic_id)
+}
+
+pub fn insert_learning_dialog_session(
+    conn: &Connection,
+    session: LearningDialogSession,
+) -> AppResult<LearningDialogSession> {
+    conn.execute(
+        "INSERT INTO learning_dialog_sessions (
+            id, topic_id, source_record_id, status, conversation_snapshot, conclusion_json, created_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            session.id,
+            session.topic_id,
+            session.source_record_id,
+            session.status,
+            session.conversation_snapshot,
+            session.conclusion_json,
+            session.created_at.to_rfc3339(),
+        ],
+    )?;
+    Ok(session)
+}
+
+pub fn get_learning_dialog_session(
+    conn: &Connection,
+    id: &str,
+) -> AppResult<LearningDialogSession> {
+    conn.query_row(
+        "SELECT id, topic_id, source_record_id, status, conversation_snapshot, conclusion_json, created_at
+         FROM learning_dialog_sessions
+         WHERE id = ?1",
+        params![id],
+        map_learning_dialog_session,
+    )
+    .optional()?
+    .ok_or_else(|| AppError::NotFound(format!("learning_dialog_session {id}")))
+}
+
+pub fn get_knowledge_topic(conn: &Connection, id: &str) -> AppResult<KnowledgeTopic> {
+    conn.query_row(
+        "SELECT id, name, summary, mastery_level, created_at, updated_at FROM knowledge_topics WHERE id = ?1",
+        params![id],
+        map_knowledge_topic,
+    )
+    .optional()?
+    .ok_or_else(|| AppError::NotFound(format!("knowledge_topic {id}")))
+}
+
+pub fn get_knowledge_topics_for_record(
+    conn: &Connection,
+    record_id: &str,
+) -> AppResult<Vec<RecordKnowledgeTopic>> {
+    let mut stmt = conn.prepare(
+        r#"
+        SELECT
+          kt.id,
+          kt.name,
+          kt.summary,
+          kt.mastery_level,
+          ke.evidence_text,
+          kt.updated_at
+        FROM knowledge_topics kt
+        JOIN knowledge_evidence ke
+          ON ke.topic_id = kt.id
+        WHERE ke.record_id = ?1
+          AND ke.created_at = (
+            SELECT MAX(ke2.created_at)
+            FROM knowledge_evidence ke2
+            WHERE ke2.topic_id = kt.id
+              AND ke2.record_id = ?1
+          )
+        ORDER BY datetime(kt.updated_at) DESC, kt.rowid DESC
+        "#,
+    )?;
+    let rows = stmt.query_map(params![record_id], map_record_knowledge_topic)?;
+    let items = rows.collect::<Result<Vec<_>, _>>()?;
+    Ok(items)
+}
+
+pub fn insert_ai_task_run(conn: &Connection, run: AiTaskRun) -> AppResult<AiTaskRun> {
+    conn.execute(
+        "INSERT INTO ai_task_runs (id, task_type, source_record_id, status, model_provider, model_name, model_variant, input_snapshot, result_json, error_message, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        params![
+            run.id,
+            run.task_type.as_str(),
+            run.source_record_id,
+            run.status,
+            run.model_provider,
+            run.model_name,
+            run.model_variant,
+            run.input_snapshot,
+            run.result_json,
+            run.error_message,
+            run.created_at.to_rfc3339(),
+        ],
+    )?;
+
+    Ok(run)
+}
+
+pub fn update_ai_task_run_result(
+    conn: &Connection,
+    id: &str,
+    status: &str,
+    result_json: Option<&str>,
+    error_message: Option<&str>,
+) -> AppResult<AiTaskRun> {
+    conn.execute(
+        "UPDATE ai_task_runs
+         SET status = ?2, result_json = ?3, error_message = ?4
+         WHERE id = ?1",
+        params![id, status, result_json, error_message],
+    )?;
+
+    get_ai_task_run(conn, id)
+}
+
+pub fn get_ai_task_run(conn: &Connection, id: &str) -> AppResult<AiTaskRun> {
+    conn.query_row(
+        "SELECT id, task_type, source_record_id, status, model_provider, model_name, model_variant, input_snapshot, result_json, error_message, created_at
+         FROM ai_task_runs WHERE id = ?1",
+        params![id],
+        map_ai_task_run,
+    )
+    .optional()?
+    .ok_or_else(|| AppError::NotFound(format!("ai_task_run {id}")))
+}
+
 pub fn get_setting(conn: &Connection, key: &str) -> AppResult<Option<SettingsEntry>> {
     conn.query_row(
         "SELECT key, value FROM settings WHERE key = ?1",
@@ -721,8 +992,10 @@ pub fn default_settings() -> Vec<SettingsEntry> {
         SettingsEntry { key: "screenshot_shortcut".into(), value: "Alt+Shift+S".into() },
         SettingsEntry { key: "ai_provider".into(), value: "claude".into() },
         SettingsEntry { key: "ai_model".into(), value: "claude-sonnet-4-20250514".into() },
+        SettingsEntry { key: "ai_model_variant".into(), value: "default".into() },
         SettingsEntry { key: "ai_auto_analyze".into(), value: "false".into() },
         SettingsEntry { key: "ai_api_key".into(), value: "".into() },
+        SettingsEntry { key: "ai_base_url".into(), value: "".into() },
         SettingsEntry { key: "reminder_channel".into(), value: "pet-bubble".into() },
         SettingsEntry { key: "pet_always_on_top".into(), value: "true".into() },
         SettingsEntry { key: "pet_visible".into(), value: "true".into() },
@@ -901,8 +1174,17 @@ pub fn get_record_with_relations(conn: &Connection, id: &str) -> AppResult<Recor
     let attachment_links = get_record_attachments(conn, id)?;
     let attachments = get_attachments_for_record(conn, id)?;
     let ai_results = get_ai_results_for_record(conn, id)?;
+    let knowledge_topics = get_knowledge_topics_for_record(conn, id)?;
     let tags = list_record_tags(conn, id)?;
-    Ok(RecordWithRelations::from_record(record, task, attachments, attachment_links, ai_results, tags))
+    Ok(RecordWithRelations::from_record(
+        record,
+        task,
+        attachments,
+        attachment_links,
+        ai_results,
+        knowledge_topics,
+        tags,
+    ))
 }
 
 /// Create a task for a record with full parameter control.
@@ -1329,6 +1611,56 @@ fn map_ai_result(row: &Row<'_>) -> rusqlite::Result<AiResult> {
     })
 }
 
+fn map_ai_task_run(row: &Row<'_>) -> rusqlite::Result<AiTaskRun> {
+    Ok(AiTaskRun {
+        id: row.get(0)?,
+        task_type: AiTaskType::parse(&row.get::<_, String>(1)?),
+        source_record_id: row.get(2)?,
+        status: row.get(3)?,
+        model_provider: row.get(4)?,
+        model_name: row.get(5)?,
+        model_variant: row.get(6)?,
+        input_snapshot: row.get(7)?,
+        result_json: row.get(8)?,
+        error_message: row.get(9)?,
+        created_at: parse_datetime(&row.get::<_, String>(10)?)?,
+    })
+}
+
+fn map_knowledge_topic(row: &Row<'_>) -> rusqlite::Result<KnowledgeTopic> {
+    Ok(KnowledgeTopic {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        summary: row.get(2)?,
+        mastery_level: row.get(3)?,
+        created_at: parse_datetime(&row.get::<_, String>(4)?)?,
+        updated_at: parse_datetime(&row.get::<_, String>(5)?)?,
+    })
+}
+
+fn map_record_knowledge_topic(row: &Row<'_>) -> rusqlite::Result<RecordKnowledgeTopic> {
+    Ok(RecordKnowledgeTopic {
+        topic_id: row.get(0)?,
+        name: row.get(1)?,
+        summary: row.get(2)?,
+        mastery_level: row.get(3)?,
+        evidence_text: row.get(4)?,
+        updated_at: parse_datetime(&row.get::<_, String>(5)?)?,
+    })
+}
+
+fn map_learning_dialog_session(row: &Row<'_>) -> rusqlite::Result<LearningDialogSession> {
+    Ok(LearningDialogSession {
+        id: row.get(0)?,
+        topic_id: row.get(1)?,
+        source_record_id: row.get(2)?,
+        status: row.get(3)?,
+        conversation_snapshot: row.get(4)?,
+        conclusion_json: row.get(5)?,
+        created_at: parse_datetime(&row.get::<_, String>(6)?)?,
+    })
+}
+
 fn parse_datetime(value: &str) -> rusqlite::Result<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(value)
         .map(|value| value.with_timezone(&Utc))
@@ -1364,12 +1696,12 @@ mod tests {
         let conn = in_memory();
         let count: i64 = conn
             .query_row(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('records','tasks','attachments','record_attachments','ai_results','reminders','settings','tags','record_tags')",
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('records','tasks','attachments','record_attachments','ai_results','ai_task_runs','knowledge_topics','knowledge_evidence','reminders','settings','tags','record_tags')",
                 [],
                 |row| row.get(0),
             )
             .expect("table count");
-        assert_eq!(count, 9);
+        assert_eq!(count, 12);
     }
 
     #[test]
@@ -2062,6 +2394,141 @@ mod tests {
 
         assert_eq!(qc, "Ctrl+Shift+1");
         assert_eq!(ss, "Ctrl+Shift+2");
+    }
+
+    #[test]
+    fn run_migrations_creates_ai_task_runs_table() {
+        let conn = in_memory();
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='ai_task_runs'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query table count");
+
+        assert_eq!(count, 1, "ai_task_runs table should exist after migrations");
+    }
+
+    #[test]
+    fn run_migrations_creates_knowledge_memory_tables() {
+        let conn = in_memory();
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('knowledge_topics', 'knowledge_evidence')",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query table count");
+
+        assert_eq!(count, 2, "knowledge memory tables should exist after migrations");
+    }
+
+    #[test]
+    fn run_migrations_creates_learning_dialog_sessions_table() {
+        let conn = in_memory();
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='learning_dialog_sessions'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query table count");
+
+        assert_eq!(count, 1, "learning dialog session table should exist after migrations");
+    }
+
+    #[test]
+    fn upsert_knowledge_topic_and_fetch_for_record_roundtrips() {
+        let conn = in_memory();
+        let record = insert_record(
+            &conn,
+            CreateRecordRequest {
+                record_type: Some(RecordType::Note),
+                title: Some("memory source".into()),
+                content: Some("span decorator note".into()),
+                source: RecordSource::QuickText,
+                create_as_task: false,
+                attachment_ids: vec![],
+            },
+        )
+        .expect("record");
+
+        let topic = upsert_knowledge_topic(
+            &conn,
+            "Python 装饰器",
+            "已能结合 span 装饰器理解监控场景中的用法",
+            "understanding",
+        )
+        .expect("topic");
+        append_knowledge_evidence(
+            &conn,
+            &topic.id,
+            &record.id,
+            "ai-suggestion",
+            "在应用监控系统笔记中分析过 span 装饰器",
+        )
+        .expect("evidence");
+
+        let topics = get_knowledge_topics_for_record(&conn, &record.id).expect("topics");
+        assert_eq!(topics.len(), 1);
+        assert_eq!(topics[0].name, "Python 装饰器");
+        assert_eq!(topics[0].mastery_level, "understanding");
+        assert_eq!(topics[0].evidence_text, "在应用监控系统笔记中分析过 span 装饰器");
+    }
+
+    #[test]
+    fn get_record_with_relations_includes_knowledge_topics() {
+        let conn = in_memory();
+        let record = insert_record(
+            &conn,
+            CreateRecordRequest {
+                record_type: Some(RecordType::Note),
+                title: Some("okr note".into()),
+                content: Some("KR 定义".into()),
+                source: RecordSource::QuickText,
+                create_as_task: false,
+                attachment_ids: vec![],
+            },
+        )
+        .expect("record");
+
+        let topic = upsert_knowledge_topic(
+            &conn,
+            "OKR 执行理解",
+            "开始形成对 KR 交付形式的判断",
+            "awareness",
+        )
+        .expect("topic");
+        append_knowledge_evidence(
+            &conn,
+            &topic.id,
+            &record.id,
+            "ai-suggestion",
+            "KR 是交付的内容？",
+        )
+        .expect("evidence");
+
+        let detailed = get_record_with_relations(&conn, &record.id).expect("detail");
+        assert_eq!(detailed.knowledge_topics.len(), 1);
+        assert_eq!(detailed.knowledge_topics[0].name, "OKR 执行理解");
+    }
+
+    #[test]
+    fn get_all_settings_with_defaults_includes_ai_model_variant_and_ai_base_url() {
+        let conn = in_memory();
+
+        let settings = get_all_settings_with_defaults(&conn).expect("settings");
+
+        assert!(settings
+            .iter()
+            .any(|entry| entry.key == "ai_model_variant" && entry.value == "default"));
+        assert!(settings
+            .iter()
+            .any(|entry| entry.key == "ai_base_url" && entry.value.is_empty()));
     }
 
     #[test]

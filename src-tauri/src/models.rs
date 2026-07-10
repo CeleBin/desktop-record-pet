@@ -249,6 +249,32 @@ impl AiTriggerMode {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AiTaskType {
+    LearningAnalysis,
+    LearningConversation,
+    WeeklyReport,
+}
+
+impl AiTaskType {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::LearningAnalysis => "learning_analysis",
+            Self::LearningConversation => "learning_conversation",
+            Self::WeeklyReport => "weekly_report",
+        }
+    }
+
+    pub fn parse(value: &str) -> Self {
+        match value {
+            "learning_conversation" => Self::LearningConversation,
+            "weekly_report" => Self::WeeklyReport,
+            _ => Self::LearningAnalysis,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum ReminderChannel {
     PetBubble,
@@ -519,6 +545,124 @@ pub struct CreateAiResultRequest {
     pub sensitivity_flag: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LearningAnalysisPayload {
+    #[serde(rename = "recordId")]
+    pub record_id: String,
+    #[serde(default, rename = "includeRelatedTasks")]
+    pub include_related_tasks: bool,
+    #[serde(rename = "interactionMode")]
+    pub interaction_mode: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WeeklyReportDateRange {
+    pub start: String,
+    pub end: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WeeklyReportPayload {
+    #[serde(rename = "dateRange")]
+    pub date_range: WeeklyReportDateRange,
+    #[serde(default, rename = "includeTasks")]
+    pub include_tasks: bool,
+    #[serde(default, rename = "includeNotes")]
+    pub include_notes: bool,
+    pub tone: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LearningConversationMessage {
+    pub role: String,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LearningConversationPayload {
+    #[serde(rename = "topicId")]
+    pub topic_id: String,
+    #[serde(rename = "sourceRecordId")]
+    pub source_record_id: String,
+    #[serde(rename = "dialogSessionId")]
+    pub dialog_session_id: Option<String>,
+    pub messages: Vec<LearningConversationMessage>,
+    #[serde(default, rename = "sourceSignals")]
+    pub source_signals: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LearningKnowledgePoint {
+    pub name: String,
+    pub confidence: f64,
+    #[serde(rename = "example_from_note")]
+    pub example_from_note: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SuggestedMemoryUpdate {
+    pub topic: String,
+    pub mastery_level: String,
+    pub evidence: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LearningAnalysisResult {
+    pub knowledge_points: Vec<LearningKnowledgePoint>,
+    pub questions_for_user: Vec<String>,
+    pub suggested_memory_updates: Vec<SuggestedMemoryUpdate>,
+    pub summary: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WeeklyReportResult {
+    pub summary: String,
+    pub completed_work: Vec<String>,
+    pub in_progress: Vec<String>,
+    pub risks: Vec<String>,
+    pub next_steps: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LearningConversationResult {
+    pub topic: String,
+    pub decision: String,
+    pub reason: String,
+    #[serde(rename = "memory_write")]
+    pub memory_write: Option<LearningConversationMemoryWrite>,
+    #[serde(rename = "next_action")]
+    pub next_action: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LearningConversationMemoryWrite {
+    pub status: String,
+    #[serde(rename = "evidence_type")]
+    pub evidence_type: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RunAiTaskRequest {
+    #[serde(rename = "taskType")]
+    pub task_type: AiTaskType,
+    pub payload: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AiTaskRun {
+    pub id: String,
+    pub task_type: AiTaskType,
+    pub source_record_id: Option<String>,
+    pub status: String,
+    pub model_provider: Option<String>,
+    pub model_name: Option<String>,
+    pub model_variant: Option<String>,
+    pub input_snapshot: String,
+    pub result_json: Option<String>,
+    pub error_message: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
 /// Lightweight filter for listing records.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct RecordFilter {
@@ -591,6 +735,47 @@ pub struct Tag {
     pub created_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct KnowledgeTopic {
+    pub id: String,
+    pub name: String,
+    pub summary: String,
+    pub mastery_level: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct KnowledgeEvidence {
+    pub id: String,
+    pub topic_id: String,
+    pub record_id: String,
+    pub evidence_type: String,
+    pub evidence_text: String,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LearningDialogSession {
+    pub id: String,
+    pub topic_id: String,
+    pub source_record_id: String,
+    pub status: String,
+    pub conversation_snapshot: String,
+    pub conclusion_json: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RecordKnowledgeTopic {
+    pub topic_id: String,
+    pub name: String,
+    pub summary: String,
+    pub mastery_level: String,
+    pub evidence_text: String,
+    pub updated_at: DateTime<Utc>,
+}
+
 /// Full record payload returned by list-records / get-record-detail.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecordWithRelations {
@@ -609,6 +794,8 @@ pub struct RecordWithRelations {
     pub attachment_links: Vec<RecordAttachmentLink>,
     #[serde(rename = "aiResults")]
     pub ai_results: Vec<AiResult>,
+    #[serde(rename = "knowledgeTopics")]
+    pub knowledge_topics: Vec<RecordKnowledgeTopic>,
     pub tags: Vec<Tag>,
 }
 
@@ -619,6 +806,7 @@ impl RecordWithRelations {
         attachments: Vec<Attachment>,
         attachment_links: Vec<RecordAttachmentLink>,
         ai_results: Vec<AiResult>,
+        knowledge_topics: Vec<RecordKnowledgeTopic>,
         tags: Vec<Tag>,
     ) -> Self {
         Self {
@@ -634,6 +822,7 @@ impl RecordWithRelations {
             attachments,
             attachment_links,
             ai_results,
+            knowledge_topics,
             tags,
         }
     }
@@ -653,7 +842,26 @@ impl RecordWithRelations {
             attachments: vec![],
             attachment_links: vec![],
             ai_results: vec![],
+            knowledge_topics: vec![],
             tags: vec![],
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ai_task_type_roundtrips_learning_and_weekly() {
+        assert_eq!(AiTaskType::LearningAnalysis.as_str(), "learning_analysis");
+        assert_eq!(AiTaskType::LearningConversation.as_str(), "learning_conversation");
+        assert_eq!(AiTaskType::WeeklyReport.as_str(), "weekly_report");
+        assert_eq!(AiTaskType::parse("learning_analysis"), AiTaskType::LearningAnalysis);
+        assert_eq!(
+            AiTaskType::parse("learning_conversation"),
+            AiTaskType::LearningConversation
+        );
+        assert_eq!(AiTaskType::parse("weekly_report"), AiTaskType::WeeklyReport);
     }
 }

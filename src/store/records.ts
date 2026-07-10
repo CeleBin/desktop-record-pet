@@ -16,6 +16,36 @@ import type {
   UpdateRecordRequest,
 } from "../types";
 
+function mergeFetchedRecord(
+  incoming: RecordWithRelations,
+  existing?: RecordWithRelations,
+): RecordWithRelations {
+  if (!existing) {
+    return incoming;
+  }
+
+  return {
+    ...existing,
+    ...incoming,
+    task: incoming.task ?? existing.task ?? null,
+    attachments: incoming.attachments?.length
+      ? incoming.attachments
+      : (existing.attachments ?? []),
+    attachment_links: incoming.attachment_links?.length
+      ? incoming.attachment_links
+      : (existing.attachment_links ?? []),
+    ai_results: incoming.ai_results?.length
+      ? incoming.ai_results
+      : (existing.ai_results ?? []),
+    knowledge_topics: incoming.knowledge_topics?.length
+      ? incoming.knowledge_topics
+      : (existing.knowledge_topics ?? []),
+    tags: incoming.tags?.length
+      ? incoming.tags
+      : (existing.tags ?? []),
+  };
+}
+
 interface RecordsState {
   records: RecordWithRelations[];
   selectedId: string | null;
@@ -40,7 +70,13 @@ export const useRecordsStore = create<RecordsState>((set, get) => ({
     set({ loading: true, error: null });
     try {
       const records = await listRecords(filter);
-      set({ records, loading: false });
+      set((state) => {
+        const existingById = new Map(state.records.map((record) => [record.id, record]));
+        return {
+          records: records.map((record) => mergeFetchedRecord(record, existingById.get(record.id))),
+          loading: false,
+        };
+      });
     } catch (error) {
       set({
         loading: false,

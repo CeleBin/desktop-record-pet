@@ -9,10 +9,11 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
 use crate::db::{self, Database};
 use crate::errors::{AppError, AppResult};
 use crate::models::{
-    AiResult, AiTriggerMode, AttachmentRole, AttachmentType, ClipboardImageRequest,
+    AiResult, AiTaskRun, AttachmentRole, AttachmentType, ClipboardImageRequest,
     CreateAiResultRequest, CreateAttachmentRequest, CreateRecordRequest, CreateTaskRequest, Folder,
     ImportFilesRequest, Record, RecordFilter, RecordSource, RecordType, RecordWithRelations,
-    SettingsEntry, Tag, Task, TaskFilter, TaskStatus, UnfinishedTaskItem, UpdateRecordRequest,
+    RunAiTaskRequest, SettingsEntry, Tag, Task, TaskFilter, TaskStatus, UnfinishedTaskItem,
+    UpdateRecordRequest,
 };
 use crate::screenshot;
 use crate::windows;
@@ -337,7 +338,7 @@ pub fn list_records(
         .into_iter()
         .map(|record| {
             let task = db::get_task_for_record(&conn, &record.id).unwrap_or(None);
-            RecordWithRelations::from_record(record, task, vec![], vec![], vec![], vec![])
+            RecordWithRelations::from_record(record, task, vec![], vec![], vec![], vec![], vec![])
         })
         .collect();
     Ok(result)
@@ -961,9 +962,18 @@ pub fn create_ai_result(
     Ok(result)
 }
 
-/// Read a record + attachments, call Claude via HTTP, store an AiResult, and return it.
-/// The Claude API key must be stored in settings under the key `claude_api_key`.
-/// If the record has image attachments, the first one is sent as optional vision input.
+#[tauri::command]
+pub async fn run_ai_task(
+    app: AppHandle,
+    database: State<'_, Database>,
+    request: RunAiTaskRequest,
+) -> AppResult<AiTaskRun> {
+    let result = crate::ai::run_task(&database, request).await?;
+    emit_data_changed(&app)?;
+    Ok(result)
+}
+
+/// Legacy compatibility path for the old single-record AI analysis command.
 #[tauri::command]
 pub async fn request_ai_enhancement(
     database: State<'_, Database>,
@@ -973,203 +983,34 @@ pub async fn request_ai_enhancement(
         return Err(AppError::Validation("record id is required".into()));
     }
 
-    // Step 1: Fetch record + settings + attachments from DB (lock briefly)
-    let (record, attachments, api_key) = {
-        let conn = database.conn.lock()?;
-        let record = db::get_record(&conn, &record_id)?;
-        let api_key = db::get_setting(&conn, "claude_api_key")?
-            .ok_or_else(|| {
-                AppError::Validation(
-                    "Claude API key not configured. Set it in settings under 'claude_api_key'."
-                        .into(),
-                )
-            })?
-            .value;
-        let attachments = db::get_attachments_for_record(&conn, &record_id)?;
-        (record, attachments, api_key)
+    let request = RunAiTaskRequest {
+        task_type: crate::models::AiTaskType::LearningAnalysis,
+        payload: serde_json::json!({
+            "recordId": record_id,
+            "includeRelatedTasks": true,
+            "interactionMode": "prepare"
+        }),
     };
 
-    // Step 2: Build a text summary of the record
-    let mut text = String::new();
-    if let Some(ref title) = record.title {
-        text.push_str(&format!("Title: {title}\n\n"));
-    }
-    if let Some(ref content) = record.content {
-        text.push_str(&format!("Content: {content}\n\n"));
-    }
-    text.push_str(&format!("Source: {}", record.source.as_str()));
+    let task_run = crate::ai::run_task(&database, request).await?;
+    let source_record_id = task_run
+        .source_record_id
+        .ok_or_else(|| AppError::State("learning analysis did not return a source_record_id".into()))?;
 
-    // Find the first image-type attachment
-    let image_attachment = attachments
-        .iter()
-        .find(|a| a.file_type == AttachmentType::Image || a.file_type == AttachmentType::Screenshot);
+    let conn = database.conn.lock()?;
+    db::get_ai_results_for_record(&conn, &source_record_id)?
+        .into_iter()
+        .next()
+        .ok_or_else(|| AppError::NotFound(format!("ai_result for record {}", source_record_id)))
+}
 
-    // Step 3: Build the Claude API request payload
-    let system_prompt = r#"You are an AI analysis assistant. Analyze the provided captured record and return ONLY a raw JSON object (no markdown, no code fences) with these fields:
-{
-  "summary": "concise summary of the record",
-  "tags": "comma-separated tags",
-  "suggested_tasks": "any follow-up tasks or action items",
-  "research_result": "additional insights or context",
-  "sensitivity_flag": "one of: none, low, medium, high"
-}"#;
-
-    let mut content_blocks: Vec<serde_json::Value> = Vec::new();
-    content_blocks.push(serde_json::json!({
-        "type": "text",
-        "text": format!("Please analyze this captured record:\n\n{text}")
-    }));
-
-    if let Some(att) = image_attachment {
-        let path = std::path::Path::new(&att.local_path);
-        if path.exists() {
-            match std::fs::read(path) {
-                Ok(bytes) => {
-                    use base64::Engine;
-                    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
-                    let media_type = if att.mime_type == "image/png"
-                        || att.mime_type == "image/jpeg"
-                        || att.mime_type == "image/webp"
-                    {
-                        &att.mime_type
-                    } else {
-                        "image/png"
-                    };
-                    content_blocks.push(serde_json::json!({
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": media_type,
-                            "data": b64
-                        }
-                    }));
-                }
-                Err(_) => {
-                    // skip image if read fails — still send text-only
-                }
-            }
-        }
-    }
-
-    let request_body = serde_json::json!({
-        "model": "claude-opus-4-7",
-        "max_tokens": 4096,
-        "system": system_prompt,
-        "thinking": { "type": "adaptive" },
-        "messages": [
-            {
-                "role": "user",
-                "content": content_blocks
-            }
-        ]
-    });
-
-    // Step 4: Send the HTTP request to Anthropic
-    let client = reqwest::Client::new();
-    let response = client
-        .post("https://api.anthropic.com/v1/messages")
-        .header("x-api-key", &api_key)
-        .header("anthropic-version", "2023-06-01")
-        .header("content-type", "application/json")
-        .json(&request_body)
-        .send()
-        .await
-        .map_err(|e| AppError::State(format!("Claude API request failed: {e}")))?;
-
-    let status = response.status();
-    let response_text = response
-        .text()
-        .await
-        .map_err(|e| AppError::State(format!("Failed to read Claude API response: {e}")))?;
-
-    if !status.is_success() {
-        return Err(AppError::State(format!(
-            "Claude API returned {status}: {response_text}"
-        )));
-    }
-
-    // Step 5: Parse the response — find the first text content block
-    let response_json: serde_json::Value = serde_json::from_str(&response_text)
-        .map_err(|e| AppError::State(format!("Failed to parse Claude JSON: {e}")))?;
-
-    let raw_text = response_json["content"]
-        .as_array()
-        .and_then(|blocks| {
-            blocks
-                .iter()
-                .find_map(|b| (b["type"] == "text").then(|| b["text"].as_str()))
-                .flatten()
-        })
-        .unwrap_or("");
-
-    // Claude might wrap in markdown fences — try to extract
-    let cleaned = if raw_text.starts_with("```") {
-        raw_text
-            .lines()
-            .skip(1)
-            .take_while(|line| !line.starts_with("```"))
-            .collect::<Vec<_>>()
-            .join("\n")
-    } else {
-        raw_text.to_string()
-    };
-
-    let parsed: serde_json::Value =
-        serde_json::from_str(&cleaned).unwrap_or_else(|_| serde_json::json!({ "summary": raw_text }));
-
-    let summary = parsed["summary"].as_str().map(String::from);
-    let tags = parsed["tags"].as_str().map(String::from);
-    let suggested_tasks = parsed["suggested_tasks"].as_str().map(String::from);
-    let research_result = parsed["research_result"].as_str().map(String::from);
-    let sensitivity_flag = parsed["sensitivity_flag"].as_str().map(String::from);
-
-    // Step 6: Persist as an AiResult
-    let ai_result = {
-        let conn = database.conn.lock()?;
-        let result = db::insert_ai_result(
-            &conn,
-            CreateAiResultRequest {
-                record_id: record_id.clone(),
-                trigger_mode: AiTriggerMode::Manual,
-                model_provider: Some("anthropic".into()),
-                model_name: Some("claude-opus-4-7".into()),
-                summary,
-                tags: tags.clone(),
-                suggested_tasks,
-                research_result,
-                sensitivity_flag,
-            },
-        )?;
-
-        // Auto-promote AI tags to user-managed tags
-        if let Some(ref tags_csv) = tags {
-            let tag_names: Vec<String> = tags_csv
-                .split(',')
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect();
-            if !tag_names.is_empty() {
-                let mut tag_ids: Vec<String> = Vec::new();
-                for name in &tag_names {
-                    match db::find_or_create_tag_by_name(&conn, name) {
-                        Ok(tag) => tag_ids.push(tag.id),
-                        Err(e) => {
-                            eprintln!("Failed to find/create tag '{}': {}", name, e);
-                        }
-                    }
-                }
-                if !tag_ids.is_empty() {
-                    if let Err(e) = db::link_tags_to_record(&conn, &record_id, &tag_ids) {
-                        eprintln!("Failed to link tags to record: {}", e);
-                    }
-                }
-            }
-        }
-
-        result
-    };
-
-    Ok(ai_result)
+#[tauri::command]
+pub async fn trigger_ai_analysis(
+    database: State<'_, Database>,
+    record_id: String,
+    _trigger_mode: Option<String>,
+) -> AppResult<AiResult> {
+    request_ai_enhancement(database, record_id).await
 }
 
 fn insert_default_task(conn: &rusqlite::Connection, record_id: &str) -> AppResult<()> {
