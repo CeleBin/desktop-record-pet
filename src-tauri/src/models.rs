@@ -248,10 +248,38 @@ impl AiTriggerMode {
     }
 }
 
+/// Controls which product surface is exposed without deleting future modules.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProductMode {
+    Free,
+    GrowthPreview,
+}
+
+impl ProductMode {
+    pub fn parse(value: Option<&str>) -> Self {
+        match value {
+            Some("growth-preview") => Self::GrowthPreview,
+            _ => Self::Free,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Free => "free",
+            Self::GrowthPreview => "growth-preview",
+        }
+    }
+
+    pub fn allows_learning_tasks(self) -> bool {
+        matches!(self, Self::GrowthPreview)
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum AiTaskType {
     LearningAnalysis,
+    LearningDialogReply,
     LearningConversation,
     WeeklyReport,
 }
@@ -260,6 +288,7 @@ impl AiTaskType {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::LearningAnalysis => "learning_analysis",
+            Self::LearningDialogReply => "learning_dialog_reply",
             Self::LearningConversation => "learning_conversation",
             Self::WeeklyReport => "weekly_report",
         }
@@ -267,6 +296,7 @@ impl AiTaskType {
 
     pub fn parse(value: &str) -> Self {
         match value {
+            "learning_dialog_reply" => Self::LearningDialogReply,
             "learning_conversation" => Self::LearningConversation,
             "weekly_report" => Self::WeeklyReport,
             _ => Self::LearningAnalysis,
@@ -591,6 +621,24 @@ pub struct LearningConversationPayload {
     pub source_signals: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LearningDialogReplyPayload {
+    #[serde(rename = "topicId")]
+    pub topic_id: String,
+    #[serde(rename = "topicName")]
+    pub topic_name: String,
+    #[serde(rename = "sourceRecordId")]
+    pub source_record_id: String,
+    pub summary: String,
+    #[serde(rename = "evidenceText")]
+    pub evidence_text: String,
+    #[serde(rename = "noteExample")]
+    pub note_example: Option<String>,
+    #[serde(default, rename = "suggestedQuestions")]
+    pub suggested_questions: Vec<String>,
+    pub messages: Vec<LearningConversationMessage>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct LearningKnowledgePoint {
     pub name: String,
@@ -632,6 +680,11 @@ pub struct LearningConversationResult {
     pub memory_write: Option<LearningConversationMemoryWrite>,
     #[serde(rename = "next_action")]
     pub next_action: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LearningDialogReplyResult {
+    pub reply: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -756,6 +809,34 @@ pub struct KnowledgeEvidence {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct KnowledgeMemoryItem {
+    pub id: String,
+    pub name: String,
+    pub summary: String,
+    pub mastery_level: String,
+    pub evidence_count: i64,
+    pub latest_evidence_text: String,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct KnowledgeMemoryEvidence {
+    pub id: String,
+    pub record_id: String,
+    pub record_title: Option<String>,
+    pub evidence_type: String,
+    pub evidence_text: String,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct KnowledgeMemoryDetail {
+    pub topic: KnowledgeMemoryItem,
+    pub evidence: Vec<KnowledgeMemoryEvidence>,
+    pub latest_conclusion_json: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct LearningDialogSession {
     pub id: String,
     pub topic_id: String,
@@ -855,13 +936,30 @@ mod tests {
     #[test]
     fn ai_task_type_roundtrips_learning_and_weekly() {
         assert_eq!(AiTaskType::LearningAnalysis.as_str(), "learning_analysis");
+        assert_eq!(AiTaskType::LearningDialogReply.as_str(), "learning_dialog_reply");
         assert_eq!(AiTaskType::LearningConversation.as_str(), "learning_conversation");
         assert_eq!(AiTaskType::WeeklyReport.as_str(), "weekly_report");
         assert_eq!(AiTaskType::parse("learning_analysis"), AiTaskType::LearningAnalysis);
+        assert_eq!(
+            AiTaskType::parse("learning_dialog_reply"),
+            AiTaskType::LearningDialogReply
+        );
         assert_eq!(
             AiTaskType::parse("learning_conversation"),
             AiTaskType::LearningConversation
         );
         assert_eq!(AiTaskType::parse("weekly_report"), AiTaskType::WeeklyReport);
+    }
+
+    #[test]
+    fn product_mode_defaults_to_free_and_only_enables_explicit_preview() {
+        assert_eq!(ProductMode::parse(None), ProductMode::Free);
+        assert_eq!(ProductMode::parse(Some("invalid")), ProductMode::Free);
+        assert_eq!(
+            ProductMode::parse(Some("growth-preview")),
+            ProductMode::GrowthPreview
+        );
+        assert!(!ProductMode::Free.allows_learning_tasks());
+        assert!(ProductMode::GrowthPreview.allows_learning_tasks());
     }
 }

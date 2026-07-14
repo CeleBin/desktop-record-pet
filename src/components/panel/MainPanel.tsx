@@ -11,13 +11,22 @@ import type {
   UpdateRecordRequest,
 } from "../../types";
 import { Navigation } from "./Navigation";
+import { KnowledgeMemoryPanel } from "./KnowledgeMemoryPanel";
+import { PetLearningPanel } from "./PetLearningPanel";
 import { RecordDetail } from "./RecordDetail";
 import { RecordList } from "./RecordList";
 import { SettingsPanel } from "../settings/SettingsPanel";
+import { useLearningCoachStore } from "../../store/learningCoach";
+import { useSettingsStore } from "../../store/settings";
 
 type ViewMode = "all" | "notes" | "tasks";
+type ContentMode = "records" | "memory" | "settings";
 
 export function MainPanel() {
+  const activeLearningSession = useLearningCoachStore((state) => state.activeSession);
+  const closeLearningSession = useLearningCoachStore((state) => state.closeSession);
+  const productMode = useSettingsStore((state) => state.settings.product_mode);
+  const growthPreviewEnabled = productMode === "growth-preview";
   const {
     records,
     selectedId,
@@ -80,7 +89,13 @@ export function MainPanel() {
   }, []);
 
   // ── Settings panel ──
-  const [showSettings, setShowSettings] = useState(false);
+  const [contentMode, setContentMode] = useState<ContentMode>("records");
+
+  useEffect(() => {
+    if (growthPreviewEnabled) return;
+    closeLearningSession();
+    setContentMode((current) => current === "memory" ? "records" : current);
+  }, [closeLearningSession, growthPreviewEnabled]);
 
   // Debounce search
   useEffect(() => {
@@ -201,11 +216,17 @@ export function MainPanel() {
           activeStatus={activeStatus}
           taskStatusFilter={taskStatusFilter}
           searchQuery={searchQuery}
-          settingsOpen={showSettings}
+          settingsOpen={contentMode === "settings"}
+          memoryOpen={contentMode === "memory"}
+          growthPreviewEnabled={growthPreviewEnabled}
           onStatusChange={setActiveStatus}
           onTaskStatusFilterChange={setTaskStatusFilter}
           onSearchChange={setSearchQuery}
-          onToggleSettings={() => setShowSettings((prev) => !prev)}
+          onToggleSettings={() => setContentMode((current) => current === "settings" ? "records" : "settings")}
+          onToggleMemory={() => {
+            closeLearningSession();
+            setContentMode((current) => current === "memory" ? "records" : "memory");
+          }}
           activeTagIds={activeTagIds}
           onToggleTagFilter={toggleTagFilter}
         />
@@ -226,8 +247,10 @@ export function MainPanel() {
         className="flex shrink-0 flex-col border-r border-border bg-bg/30"
         style={{ width: widths.list }}
       >
-        {showSettings ? (
-          <SettingsPanel onClose={() => setShowSettings(false)} />
+        {contentMode === "settings" ? (
+          <SettingsPanel onClose={() => setContentMode("records")} />
+        ) : contentMode === "memory" && growthPreviewEnabled ? (
+          <KnowledgeMemoryPanel mode="list" />
         ) : (
           <RecordList
             records={displayRecords}
@@ -253,14 +276,27 @@ export function MainPanel() {
 
       {/* ── Right: Record detail ── */}
       <section className="flex min-w-0 flex-1 flex-col bg-bg/20">
-        <RecordDetail
-          record={selectedRecord}
-          loading={recordsLoading}
-          onUpdate={handleUpdate}
-          onConvertToTask={handleConvertToTask}
-          onUpdateTaskStatus={handleUpdateTaskStatus}
-          onDelete={handleDelete}
-        />
+        {contentMode === "memory" && growthPreviewEnabled ? (
+          <KnowledgeMemoryPanel mode="detail" />
+        ) : activeLearningSession && growthPreviewEnabled ? (
+          <PetLearningPanel
+            onBackToRecord={() => {
+              if (selectedRecord?.id) {
+                void selectRecord(selectedRecord.id);
+              }
+            }}
+          />
+        ) : (
+          <RecordDetail
+            record={selectedRecord}
+            loading={recordsLoading}
+            onUpdate={handleUpdate}
+            onConvertToTask={handleConvertToTask}
+            onUpdateTaskStatus={handleUpdateTaskStatus}
+            onDelete={handleDelete}
+            growthPreviewEnabled={growthPreviewEnabled}
+          />
+        )}
       </section>
     </div>
   );

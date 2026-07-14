@@ -9,6 +9,8 @@ import type {
   CreateRecordRequest,
   FolderItem,
   ImportFilesRequest,
+  KnowledgeMemoryDetail,
+  KnowledgeMemoryItem,
   CreateTaskRequest,
   RecordFilter,
   RecordItem,
@@ -87,6 +89,14 @@ export async function listRecords(filter?: RecordFilter): Promise<RecordWithRela
 export async function getRecordDetail(id: string): Promise<RecordWithRelations> {
   const record = await invoke<ApiRecordWithRelations>("get_record_detail", { id });
   return normalizeRecordWithRelations(record);
+}
+
+export async function listKnowledgeMemory(): Promise<KnowledgeMemoryItem[]> {
+  return invoke<KnowledgeMemoryItem[]>("list_knowledge_memory");
+}
+
+export async function getKnowledgeMemoryDetail(topicId: string): Promise<KnowledgeMemoryDetail> {
+  return invoke<KnowledgeMemoryDetail>("get_knowledge_memory_detail", { topicId });
 }
 
 export async function updateRecord(

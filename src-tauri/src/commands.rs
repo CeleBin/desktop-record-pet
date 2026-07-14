@@ -11,9 +11,9 @@ use crate::errors::{AppError, AppResult};
 use crate::models::{
     AiResult, AiTaskRun, AttachmentRole, AttachmentType, ClipboardImageRequest,
     CreateAiResultRequest, CreateAttachmentRequest, CreateRecordRequest, CreateTaskRequest, Folder,
-    ImportFilesRequest, Record, RecordFilter, RecordSource, RecordType, RecordWithRelations,
-    RunAiTaskRequest, SettingsEntry, Tag, Task, TaskFilter, TaskStatus, UnfinishedTaskItem,
-    UpdateRecordRequest,
+    ImportFilesRequest, KnowledgeMemoryDetail, KnowledgeMemoryItem, Record, RecordFilter,
+    RecordSource, RecordType, RecordWithRelations, RunAiTaskRequest, SettingsEntry, Tag, Task,
+    TaskFilter, TaskStatus, UnfinishedTaskItem, UpdateRecordRequest,
 };
 use crate::screenshot;
 use crate::windows;
@@ -354,6 +354,26 @@ pub fn get_record_detail(
     }
     let conn = database.conn.lock()?;
     db::get_record_with_relations(&conn, &id)
+}
+
+#[tauri::command]
+pub fn list_knowledge_memory(
+    database: State<'_, Database>,
+) -> AppResult<Vec<KnowledgeMemoryItem>> {
+    let conn = database.conn.lock()?;
+    db::list_knowledge_memory(&conn)
+}
+
+#[tauri::command]
+pub fn get_knowledge_memory_detail(
+    database: State<'_, Database>,
+    topic_id: String,
+) -> AppResult<KnowledgeMemoryDetail> {
+    if topic_id.trim().is_empty() {
+        return Err(AppError::Validation("knowledge topic id is required".into()));
+    }
+    let conn = database.conn.lock()?;
+    db::get_knowledge_memory_detail(&conn, &topic_id)
 }
 
 #[tauri::command]

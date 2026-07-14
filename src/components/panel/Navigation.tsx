@@ -13,10 +13,13 @@ interface NavigationProps {
   taskStatusFilter: TaskStatus | null;
   searchQuery: string;
   settingsOpen: boolean;
+  memoryOpen: boolean;
+  growthPreviewEnabled: boolean;
   onStatusChange: (status: RecordStatus | null) => void;
   onTaskStatusFilterChange: (status: TaskStatus | null) => void;
   onSearchChange: (query: string) => void;
   onToggleSettings: () => void;
+  onToggleMemory: () => void;
   activeTagIds: string[];
   onToggleTagFilter: (id: string) => void;
 }
@@ -61,11 +64,14 @@ export function Navigation({
   taskStatusFilter,
   searchQuery,
   settingsOpen,
+  memoryOpen,
+  growthPreviewEnabled,
   activeTagIds,
   onStatusChange,
   onTaskStatusFilterChange,
   onSearchChange,
   onToggleSettings,
+  onToggleMemory,
   onToggleTagFilter,
 }: NavigationProps) {
   const [focused, setFocused] = useState(false);
@@ -380,8 +386,19 @@ export function Navigation({
       {/* Spacer */}
       <div className="flex-1" />
 
-      {/* Settings toggle + bottom hint */}
+      {/* Memory and settings toggles */}
       <div className="flex items-center gap-1.5">
+        {growthPreviewEnabled && <button
+          type="button"
+          onClick={onToggleMemory}
+          className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-all duration-150 ${memoryOpen ? "bg-secondary/15 text-secondary ring-1 ring-secondary/30" : "text-text0 hover:bg-white/5 hover:text-text"}`}
+          title="知识记忆"
+        >
+          <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.253v11.494m0-11.494C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v11.494C4.168 16.977 5.754 16.5 7.5 16.5s3.332.477 4.5 1.253m0-11.494C13.168 5.477 14.754 5 16.5 5s3.332.477 4.5 1.253v11.494C19.832 16.977 18.246 16.5 16.5 16.5s-3.332.477-4.5 1.253" />
+          </svg>
+          知识记忆
+        </button>}
         <button
           type="button"
           onClick={onToggleSettings}

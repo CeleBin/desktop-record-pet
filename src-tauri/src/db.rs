@@ -14,8 +14,9 @@ use crate::errors::{AppError, AppResult};
 use crate::models::{
     AiResult, AiTaskRun, AiTaskType, AiTriggerMode, Attachment, AttachmentRole, AttachmentType,
     CreateAiResultRequest, CreateAttachmentRequest, CreateRecordRequest, CreateTaskRequest, Folder,
-    KnowledgeEvidence, KnowledgeTopic, LearningDialogSession, Record, RecordAttachmentLink,
-    RecordFilter, RecordKnowledgeTopic, RecordSource, RecordStatus, RecordType,
+    KnowledgeEvidence, KnowledgeMemoryDetail, KnowledgeMemoryEvidence, KnowledgeMemoryItem,
+    KnowledgeTopic, LearningDialogSession, Record, RecordAttachmentLink, RecordFilter,
+    RecordKnowledgeTopic, RecordSource, RecordStatus, RecordType,
     RecordWithRelations, RepeatRule, SettingsEntry, Tag, Task, TaskFilter, TaskPriority,
     TaskStatus, UnfinishedTaskItem, UpdateRecordRequest,
 };
@@ -853,6 +854,21 @@ pub fn get_knowledge_topic(conn: &Connection, id: &str) -> AppResult<KnowledgeTo
     .ok_or_else(|| AppError::NotFound(format!("knowledge_topic {id}")))
 }
 
+pub fn find_knowledge_topic_by_name(
+    conn: &Connection,
+    name: &str,
+) -> AppResult<Option<KnowledgeTopic>> {
+    Ok(conn
+        .query_row(
+            "SELECT id, name, summary, mastery_level, created_at, updated_at
+             FROM knowledge_topics
+             WHERE name = ?1 COLLATE NOCASE",
+            params![name],
+            map_knowledge_topic,
+        )
+        .optional()?)
+}
+
 pub fn get_knowledge_topics_for_record(
     conn: &Connection,
     record_id: &str,
@@ -882,6 +898,82 @@ pub fn get_knowledge_topics_for_record(
     let rows = stmt.query_map(params![record_id], map_record_knowledge_topic)?;
     let items = rows.collect::<Result<Vec<_>, _>>()?;
     Ok(items)
+}
+
+pub fn list_knowledge_memory(conn: &Connection) -> AppResult<Vec<KnowledgeMemoryItem>> {
+    let mut stmt = conn.prepare(
+        r#"
+        SELECT
+          kt.id,
+          kt.name,
+          kt.summary,
+          kt.mastery_level,
+          COUNT(ke.id) AS evidence_count,
+          COALESCE((
+            SELECT latest_ke.evidence_text
+            FROM knowledge_evidence latest_ke
+            WHERE latest_ke.topic_id = kt.id
+            ORDER BY datetime(latest_ke.created_at) DESC, latest_ke.rowid DESC
+            LIMIT 1
+          ), '') AS latest_evidence_text,
+          kt.updated_at
+        FROM knowledge_topics kt
+        LEFT JOIN knowledge_evidence ke ON ke.topic_id = kt.id
+        GROUP BY kt.id
+        ORDER BY
+          CASE kt.mastery_level
+            WHEN 'understanding' THEN 0
+            WHEN 'candidate' THEN 1
+            WHEN 'rejected' THEN 2
+            ELSE 3
+          END,
+          datetime(kt.updated_at) DESC,
+          kt.rowid DESC
+        "#,
+    )?;
+    let rows = stmt.query_map([], map_knowledge_memory_item)?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
+pub fn get_knowledge_memory_detail(
+    conn: &Connection,
+    topic_id: &str,
+) -> AppResult<KnowledgeMemoryDetail> {
+    let topic = list_knowledge_memory(conn)?
+        .into_iter()
+        .find(|item| item.id == topic_id)
+        .ok_or_else(|| AppError::NotFound(format!("knowledge topic {topic_id}")))?;
+
+    let mut evidence_stmt = conn.prepare(
+        r#"
+        SELECT ke.id, ke.record_id, r.title, ke.evidence_type, ke.evidence_text, ke.created_at
+        FROM knowledge_evidence ke
+        JOIN records r ON r.id = ke.record_id
+        WHERE ke.topic_id = ?1
+        ORDER BY datetime(ke.created_at) DESC, ke.rowid DESC
+        "#,
+    )?;
+    let evidence = evidence_stmt
+        .query_map(params![topic_id], map_knowledge_memory_evidence)?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let latest_conclusion_json = conn
+        .query_row(
+            "SELECT conclusion_json
+             FROM learning_dialog_sessions
+             WHERE topic_id = ?1
+             ORDER BY datetime(created_at) DESC, rowid DESC
+             LIMIT 1",
+            params![topic_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+
+    Ok(KnowledgeMemoryDetail {
+        topic,
+        evidence,
+        latest_conclusion_json,
+    })
 }
 
 pub fn insert_ai_task_run(conn: &Connection, run: AiTaskRun) -> AppResult<AiTaskRun> {
@@ -994,6 +1086,7 @@ pub fn default_settings() -> Vec<SettingsEntry> {
         SettingsEntry { key: "ai_model".into(), value: "claude-sonnet-4-20250514".into() },
         SettingsEntry { key: "ai_model_variant".into(), value: "default".into() },
         SettingsEntry { key: "ai_auto_analyze".into(), value: "false".into() },
+        SettingsEntry { key: "product_mode".into(), value: "free".into() },
         SettingsEntry { key: "ai_api_key".into(), value: "".into() },
         SettingsEntry { key: "ai_base_url".into(), value: "".into() },
         SettingsEntry { key: "reminder_channel".into(), value: "pet-bubble".into() },
@@ -1122,7 +1215,7 @@ pub fn list_tasks_filtered(conn: &Connection, filter: Option<&TaskFilter>) -> Ap
     };
 
     let mut sql = String::from(
-        "SELECT id, record_id, task_status, priority, due_at, remind_at, repeat_rule, completed_at FROM tasks WHERE 1=1",
+        "SELECT id, record_id, task_status, priority, due_at, remind_at, repeat_rule, completed_at, sort_order FROM tasks WHERE 1=1",
     );
     let mut param_values: Vec<String> = Vec::new();
 
@@ -1646,6 +1739,29 @@ fn map_record_knowledge_topic(row: &Row<'_>) -> rusqlite::Result<RecordKnowledge
         mastery_level: row.get(3)?,
         evidence_text: row.get(4)?,
         updated_at: parse_datetime(&row.get::<_, String>(5)?)?,
+    })
+}
+
+fn map_knowledge_memory_item(row: &Row<'_>) -> rusqlite::Result<KnowledgeMemoryItem> {
+    Ok(KnowledgeMemoryItem {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        summary: row.get(2)?,
+        mastery_level: row.get(3)?,
+        evidence_count: row.get(4)?,
+        latest_evidence_text: row.get(5)?,
+        updated_at: parse_datetime(&row.get::<_, String>(6)?)?,
+    })
+}
+
+fn map_knowledge_memory_evidence(row: &Row<'_>) -> rusqlite::Result<KnowledgeMemoryEvidence> {
+    Ok(KnowledgeMemoryEvidence {
+        id: row.get(0)?,
+        record_id: row.get(1)?,
+        record_title: row.get(2)?,
+        evidence_type: row.get(3)?,
+        evidence_text: row.get(4)?,
+        created_at: parse_datetime(&row.get::<_, String>(5)?)?,
     })
 }
 
@@ -2481,6 +2597,100 @@ mod tests {
     }
 
     #[test]
+    fn knowledge_memory_list_and_detail_include_evidence_and_latest_conclusion() {
+        let conn = in_memory();
+        let first_record = insert_record(
+            &conn,
+            CreateRecordRequest {
+                record_type: Some(RecordType::Note),
+                title: Some("监控系统笔记".into()),
+                content: Some("span decorator".into()),
+                source: RecordSource::QuickText,
+                create_as_task: false,
+                attachment_ids: vec![],
+            },
+        )
+        .expect("first record");
+        let second_record = insert_record(
+            &conn,
+            CreateRecordRequest {
+                record_type: Some(RecordType::Note),
+                title: Some("补充笔记".into()),
+                content: Some("span usage".into()),
+                source: RecordSource::QuickText,
+                create_as_task: false,
+                attachment_ids: vec![],
+            },
+        )
+        .expect("second record");
+
+        let understanding = upsert_knowledge_topic(
+            &conn,
+            "Python 装饰器",
+            "用户已能解释 span 装饰器的用途",
+            "understanding",
+        )
+        .expect("understanding topic");
+        append_knowledge_evidence(
+            &conn,
+            &understanding.id,
+            &first_record.id,
+            "dialog_answer",
+            "用户能用自己的话说明 span 装饰器的作用。",
+        )
+        .expect("first evidence");
+        append_knowledge_evidence(
+            &conn,
+            &understanding.id,
+            &second_record.id,
+            "task_practice",
+            "用户在新的监控代码中复用了该模式。",
+        )
+        .expect("second evidence");
+        insert_learning_dialog_session(
+            &conn,
+            crate::models::LearningDialogSession {
+                id: "session-1".into(),
+                topic_id: understanding.id.clone(),
+                source_record_id: second_record.id.clone(),
+                status: "promote_to_understanding".into(),
+                conversation_snapshot: "[]".into(),
+                conclusion_json: Some("{\"reason\":\"用户已能应用\"}".into()),
+                created_at: chrono::Utc::now(),
+            },
+        )
+        .expect("session");
+
+        let candidate = upsert_knowledge_topic(
+            &conn,
+            "OKR 执行",
+            "待确认的目标管理知识",
+            "candidate",
+        )
+        .expect("candidate topic");
+        append_knowledge_evidence(
+            &conn,
+            &candidate.id,
+            &first_record.id,
+            "analysis_suggestion",
+            "笔记中出现 KR 交付讨论。",
+        )
+        .expect("candidate evidence");
+
+        let items = list_knowledge_memory(&conn).expect("memory list");
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].name, "Python 装饰器");
+        assert_eq!(items[0].mastery_level, "understanding");
+        assert_eq!(items[0].evidence_count, 2);
+        assert_eq!(items[0].latest_evidence_text, "用户在新的监控代码中复用了该模式。");
+
+        let detail = get_knowledge_memory_detail(&conn, &understanding.id).expect("memory detail");
+        assert_eq!(detail.evidence.len(), 2);
+        assert_eq!(detail.evidence[0].record_title.as_deref(), Some("补充笔记"));
+        assert_eq!(detail.latest_conclusion_json.as_deref(), Some("{\"reason\":\"用户已能应用\"}"));
+    }
+
+    #[test]
     fn get_record_with_relations_includes_knowledge_topics() {
         let conn = in_memory();
         let record = insert_record(
@@ -2529,6 +2739,9 @@ mod tests {
         assert!(settings
             .iter()
             .any(|entry| entry.key == "ai_base_url" && entry.value.is_empty()));
+        assert!(settings
+            .iter()
+            .any(|entry| entry.key == "product_mode" && entry.value == "free"));
     }
 
     #[test]

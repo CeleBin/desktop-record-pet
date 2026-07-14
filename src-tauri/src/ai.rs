@@ -10,7 +10,8 @@ use crate::errors::{AppError, AppResult};
 use crate::models::{
     AiTaskRun, AiTaskType, AiTriggerMode, Attachment, AttachmentType, CreateAiResultRequest,
     LearningAnalysisPayload, LearningAnalysisResult, LearningConversationMemoryWrite,
-    LearningConversationPayload, LearningConversationResult, RunAiTaskRequest,
+    LearningConversationPayload, LearningConversationResult, LearningDialogReplyPayload,
+    LearningDialogReplyResult, ProductMode, RunAiTaskRequest,
 };
 
 pub struct AiRuntimeSettings {
@@ -76,9 +77,36 @@ fn build_http_client() -> AppResult<Client> {
         .map_err(|error| AppError::State(format!("failed to build AI client: {error}")))
 }
 
+fn ensure_task_allowed_for_product_mode(mode: ProductMode, task_type: AiTaskType) -> AppResult<()> {
+    let is_learning_task = matches!(
+        task_type,
+        AiTaskType::LearningAnalysis
+            | AiTaskType::LearningConversation
+            | AiTaskType::LearningDialogReply
+    );
+
+    if is_learning_task && !mode.allows_learning_tasks() {
+        return Err(AppError::Validation(
+            "growth features are not enabled in the free edition".into(),
+        ));
+    }
+
+    Ok(())
+}
+
 pub async fn run_task(database: &Database, request: RunAiTaskRequest) -> AppResult<AiTaskRun> {
+    let product_mode = {
+        let conn = database.conn.lock()?;
+        let setting = db::get_setting(&conn, "product_mode")?;
+        ProductMode::parse(setting.as_ref().map(|entry| entry.value.as_str()))
+    };
+    ensure_task_allowed_for_product_mode(product_mode, request.task_type)?;
+
     match request.task_type {
         AiTaskType::LearningAnalysis => run_learning_analysis(database, request.payload).await,
+        AiTaskType::LearningDialogReply => {
+            run_learning_dialog_reply(database, request.payload).await
+        }
         AiTaskType::LearningConversation => {
             run_learning_conversation(database, request.payload).await
         }
@@ -127,13 +155,18 @@ fn persist_learning_memory_updates(
 ) -> AppResult<()> {
     for update in &result.suggested_memory_updates {
         // Learning analysis can only propose candidate topics. Confirmed
-        // understanding must come from a later pet-user dialog step.
-        let topic = db::upsert_knowledge_topic(
-            conn,
-            &update.topic,
-            &update.evidence,
-            "candidate",
-        )?;
+        // understanding must come from a later pet-user dialog step. If a
+        // topic already exists, analysis may add evidence but must never
+        // overwrite the user's confirmed status or summary.
+        let topic = match db::find_knowledge_topic_by_name(conn, &update.topic)? {
+            Some(existing) => existing,
+            None => db::upsert_knowledge_topic(
+                conn,
+                &update.topic,
+                &update.evidence,
+                "candidate",
+            )?,
+        };
         db::append_knowledge_evidence(
             conn,
             &topic.id,
@@ -425,6 +458,81 @@ async fn run_learning_conversation(
     )
 }
 
+async fn run_learning_dialog_reply(
+    database: &Database,
+    payload: serde_json::Value,
+) -> AppResult<AiTaskRun> {
+    let payload: LearningDialogReplyPayload = serde_json::from_value(payload)
+        .map_err(|error| AppError::Validation(format!("invalid learning_dialog_reply payload: {error}")))?;
+
+    if payload.topic_id.trim().is_empty() {
+        return Err(AppError::Validation("topicId is required".into()));
+    }
+    if payload.topic_name.trim().is_empty() {
+        return Err(AppError::Validation("topicName is required".into()));
+    }
+    if payload.source_record_id.trim().is_empty() {
+        return Err(AppError::Validation("sourceRecordId is required".into()));
+    }
+    if payload.messages.is_empty() {
+        return Err(AppError::Validation("messages must contain at least one item".into()));
+    }
+
+    let settings = {
+        let conn = database.conn.lock()?;
+        load_ai_runtime_settings(&conn)?
+    };
+
+    let pending_run = AiTaskRun {
+        id: Uuid::new_v4().to_string(),
+        task_type: AiTaskType::LearningDialogReply,
+        source_record_id: Some(payload.source_record_id.clone()),
+        status: "running".into(),
+        model_provider: Some(settings.provider.clone()),
+        model_name: Some(settings.model.clone()),
+        model_variant: Some(settings.model_variant.clone()),
+        input_snapshot: serde_json::to_string(&payload).unwrap_or_else(|_| "{}".into()),
+        result_json: None,
+        error_message: None,
+        created_at: Utc::now(),
+    };
+
+    {
+        let conn = database.conn.lock()?;
+        db::insert_ai_task_run(&conn, pending_run.clone())?;
+    }
+
+    let response = run_learning_dialog_reply_request(&settings, &payload).await;
+
+    match response {
+        Ok(result) => {
+            let result_json = serde_json::to_string(&result)
+                .map_err(|error| AppError::State(format!("failed to serialize dialog reply result: {error}")))?;
+            let conn = database.conn.lock()?;
+            db::update_ai_task_run_result(
+                &conn,
+                &pending_run.id,
+                "success",
+                Some(&result_json),
+                None,
+            )
+        }
+        Err(error) => {
+            let message = error.to_string();
+            if let Ok(conn) = database.conn.lock() {
+                let _ = db::update_ai_task_run_result(
+                    &conn,
+                    &pending_run.id,
+                    "failed",
+                    None,
+                    Some(&message),
+                );
+            }
+            Err(error)
+        }
+    }
+}
+
 async fn run_weekly_report_placeholder(
     database: &Database,
     payload: serde_json::Value,
@@ -467,6 +575,21 @@ async fn run_model_request(
         }
         other => Err(AppError::Validation(format!(
             "unsupported ai_provider '{other}' for phase 1"
+        ))),
+    }
+}
+
+async fn run_learning_dialog_reply_request(
+    settings: &AiRuntimeSettings,
+    payload: &LearningDialogReplyPayload,
+) -> AppResult<LearningDialogReplyResult> {
+    match settings.provider.as_str() {
+        "claude" | "anthropic" => run_anthropic_learning_dialog_reply_request(settings, payload).await,
+        "openai" | "opencode" => {
+            run_openai_compatible_learning_dialog_reply_request(settings, payload).await
+        }
+        other => Err(AppError::Validation(format!(
+            "unsupported ai_provider '{other}' for dialog reply"
         ))),
     }
 }
@@ -742,6 +865,197 @@ async fn run_openai_compatible_learning_request(
             summary: cleaned,
         })
     })
+}
+
+fn build_learning_dialog_reply_prompt(payload: &LearningDialogReplyPayload) -> String {
+    let mut prompt = format!(
+        "You are a friendly desktop pet helping the user learn one concrete topic.\n\
+Stay focused on the single topic below.\n\
+Topic: {}\n\
+Learning summary: {}\n\
+Evidence from the note: {}\n",
+        payload.topic_name, payload.summary, payload.evidence_text
+    );
+
+    if let Some(note_example) = payload.note_example.as_deref().filter(|value| !value.trim().is_empty()) {
+        prompt.push_str(&format!("Example from the note: {note_example}\n"));
+    }
+
+    if !payload.suggested_questions.is_empty() {
+        prompt.push_str("Suggested follow-up angles:\n");
+        for question in &payload.suggested_questions {
+            prompt.push_str(&format!("- {question}\n"));
+        }
+    }
+
+    prompt.push_str(
+        "\nRules:\n\
+- Reply in Chinese.\n\
+- Keep the tone warm, curious, and concise.\n\
+- Ask at most one follow-up question.\n\
+- Do not decide whether the user has mastered the topic.\n\
+- Do not mention memory writing or status upgrades unless the user asks.\n\
+- Return ONLY the assistant reply text, with no markdown fences or JSON.\n",
+    );
+
+    prompt
+}
+
+fn parse_learning_dialog_reply_result(raw_text: &str) -> LearningDialogReplyResult {
+    let trimmed = raw_text.trim();
+    let cleaned = if trimmed.starts_with("```") {
+        trimmed
+            .lines()
+            .skip(1)
+            .take_while(|line| !line.starts_with("```"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    } else {
+        trimmed.to_string()
+    };
+
+    LearningDialogReplyResult {
+        reply: cleaned.trim().to_string(),
+    }
+}
+
+async fn run_openai_compatible_learning_dialog_reply_request(
+    settings: &AiRuntimeSettings,
+    payload: &LearningDialogReplyPayload,
+) -> AppResult<LearningDialogReplyResult> {
+    let system_prompt = build_learning_dialog_reply_prompt(payload);
+    let conversation_text = payload
+        .messages
+        .iter()
+        .map(|message| format!("{}: {}", message.role, message.content))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let user_content = vec![serde_json::json!({
+        "type": "input_text",
+        "text": format!("Conversation so far:\n{conversation_text}\n\nPlease continue the learning dialog with one helpful assistant reply.")
+    })];
+    let resolved_model = settings.resolved_model();
+    let request_body = build_openai_compatible_request_body(
+        &resolved_model,
+        &system_prompt,
+        user_content,
+    );
+
+    let endpoint = settings.endpoint();
+    let mut request = build_http_client()?
+        .post(endpoint)
+        .header("content-type", "application/json");
+    if !settings.api_key.trim().is_empty() {
+        request = request.bearer_auth(&settings.api_key);
+    }
+    if settings.provider == "opencode" {
+        request = request
+            .header("User-Agent", "opencode/latest/1.3.15/cli")
+            .header("x-opencode-client", "cli")
+            .header("x-opencode-session", Uuid::new_v4().to_string())
+            .header("x-opencode-project", Uuid::new_v4().to_string())
+            .header("x-opencode-request", Uuid::new_v4().to_string().replace('-', ""));
+    }
+
+    let response = request
+        .json(&request_body)
+        .send()
+        .await
+        .map_err(|error| AppError::State(format!("AI request failed: {error}")))?;
+    let status = response.status();
+    let response_text = read_openai_compatible_response_body(response).await?;
+    eprintln!(
+        "[ai] learning dialog reply body preview {}",
+        response_preview(&response_text, 280)
+    );
+
+    if !status.is_success() {
+        return Err(AppError::State(format!(
+            "AI provider returned {status}: {response_text}"
+        )));
+    }
+
+    let response_json: serde_json::Value = serde_json::from_str(&response_text)
+        .map_err(|error| AppError::State(format!("failed to parse AI JSON: {error}")))?;
+    let raw_text = extract_openai_compatible_text(&response_json);
+    if raw_text.trim().is_empty() {
+        return Err(AppError::State("AI provider returned empty dialog reply".into()));
+    }
+
+    Ok(parse_learning_dialog_reply_result(&raw_text))
+}
+
+async fn run_anthropic_learning_dialog_reply_request(
+    settings: &AiRuntimeSettings,
+    payload: &LearningDialogReplyPayload,
+) -> AppResult<LearningDialogReplyResult> {
+    let system_prompt = build_learning_dialog_reply_prompt(payload);
+    let conversation_text = payload
+        .messages
+        .iter()
+        .map(|message| format!("{}: {}", message.role, message.content))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let request_body = serde_json::json!({
+        "model": settings.resolved_model(),
+        "max_tokens": 1024,
+        "system": system_prompt,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": format!("Conversation so far:\n{conversation_text}\n\nPlease continue the learning dialog with one helpful assistant reply.")
+                    }
+                ]
+            }
+        ]
+    });
+
+    let endpoint = settings.endpoint();
+    let mut request = build_http_client()?
+        .post(endpoint)
+        .header("anthropic-version", "2023-06-01")
+        .header("content-type", "application/json");
+    if !settings.api_key.trim().is_empty() {
+        request = request.header("x-api-key", &settings.api_key);
+    }
+    let response = request
+        .json(&request_body)
+        .send()
+        .await
+        .map_err(|error| AppError::State(format!("AI request failed: {error}")))?;
+
+    let status = response.status();
+    let response_text = response
+        .text()
+        .await
+        .map_err(|error| AppError::State(format!("failed to read AI response: {error}")))?;
+
+    if !status.is_success() {
+        return Err(AppError::State(format!(
+            "AI provider returned {status}: {response_text}"
+        )));
+    }
+
+    let response_json: serde_json::Value = serde_json::from_str(&response_text)
+        .map_err(|error| AppError::State(format!("failed to parse AI JSON: {error}")))?;
+    let raw_text = response_json["content"]
+        .as_array()
+        .and_then(|blocks| {
+            blocks
+                .iter()
+                .find_map(|block| (block["type"] == "text").then(|| block["text"].as_str()))
+                .flatten()
+        })
+        .unwrap_or("");
+
+    if raw_text.trim().is_empty() {
+        return Err(AppError::State("AI provider returned empty dialog reply".into()));
+    }
+
+    Ok(parse_learning_dialog_reply_result(raw_text))
 }
 
 fn extract_openai_compatible_text(response_json: &serde_json::Value) -> String {
@@ -1139,6 +1453,30 @@ mod tests {
     }
 
     #[test]
+    fn free_mode_rejects_learning_tasks() {
+        assert!(ensure_task_allowed_for_product_mode(
+            crate::models::ProductMode::Free,
+            AiTaskType::LearningAnalysis,
+        )
+        .is_err());
+        assert!(ensure_task_allowed_for_product_mode(
+            crate::models::ProductMode::Free,
+            AiTaskType::LearningConversation,
+        )
+        .is_err());
+        assert!(ensure_task_allowed_for_product_mode(
+            crate::models::ProductMode::Free,
+            AiTaskType::LearningDialogReply,
+        )
+        .is_err());
+        assert!(ensure_task_allowed_for_product_mode(
+            crate::models::ProductMode::Free,
+            AiTaskType::WeeklyReport,
+        )
+        .is_ok());
+    }
+
+    #[test]
     fn openai_compatible_request_body_forces_non_streaming_mode() {
         let request_body = build_openai_compatible_request_body(
             "deepseek-v4-flash-free",
@@ -1153,6 +1491,16 @@ mod tests {
         assert_eq!(request_body["stream"], false);
         assert_eq!(request_body["input"][0]["role"], "system");
         assert_eq!(request_body["input"][1]["role"], "user");
+    }
+
+    #[test]
+    fn learning_dialog_reply_wraps_plain_text_reply() {
+        let result = parse_learning_dialog_reply_result("你已经抓到了装饰器在监控埋点里的核心作用。");
+
+        assert_eq!(
+            result.reply,
+            "你已经抓到了装饰器在监控埋点里的核心作用。"
+        );
     }
 
     #[test]
@@ -1195,6 +1543,74 @@ mod tests {
             "learning analysis must not mark confirmed understanding before dialog"
         );
         assert_eq!(topics[0].evidence_text, "已能结合 span 装饰器理解监控场景中的用法");
+    }
+
+    #[test]
+    fn learning_analysis_keeps_an_existing_confirmed_topic_status() {
+        let conn = rusqlite::Connection::open_in_memory().expect("in-memory");
+        db::run_migrations(&conn).expect("migrations");
+
+        let first_record = db::insert_record(
+            &conn,
+            crate::models::CreateRecordRequest {
+                record_type: Some(crate::models::RecordType::Note),
+                title: Some("confirmed decorator note".into()),
+                content: Some("span decorator explanation".into()),
+                source: crate::models::RecordSource::QuickText,
+                create_as_task: false,
+                attachment_ids: vec![],
+            },
+        )
+        .expect("first record");
+        let second_record = db::insert_record(
+            &conn,
+            crate::models::CreateRecordRequest {
+                record_type: Some(crate::models::RecordType::Note),
+                title: Some("new decorator note".into()),
+                content: Some("another span decorator use case".into()),
+                source: crate::models::RecordSource::QuickText,
+                create_as_task: false,
+                attachment_ids: vec![],
+            },
+        )
+        .expect("second record");
+
+        let topic = db::upsert_knowledge_topic(
+            &conn,
+            "Python 装饰器",
+            "用户已能解释 span 装饰器的用途",
+            "understanding",
+        )
+        .expect("confirmed topic");
+        db::append_knowledge_evidence(
+            &conn,
+            &topic.id,
+            &first_record.id,
+            "dialog_answer",
+            "用户能用自己的话复述装饰器如何增加埋点。",
+        )
+        .expect("confirmed evidence");
+
+        let result = LearningAnalysisResult {
+            knowledge_points: vec![],
+            questions_for_user: vec![],
+            suggested_memory_updates: vec![crate::models::SuggestedMemoryUpdate {
+                topic: "Python 装饰器".into(),
+                mastery_level: "candidate".into(),
+                evidence: "新笔记中出现了另一个 span 装饰器用例。".into(),
+            }],
+            summary: "summary".into(),
+        };
+
+        persist_learning_memory_updates(&conn, &second_record.id, &result).expect("persist");
+
+        let persisted = db::get_knowledge_topic(&conn, &topic.id).expect("topic");
+        assert_eq!(persisted.mastery_level, "understanding");
+        assert_eq!(persisted.summary, "用户已能解释 span 装饰器的用途");
+
+        let topics = db::get_knowledge_topics_for_record(&conn, &second_record.id).expect("topics");
+        assert_eq!(topics.len(), 1);
+        assert_eq!(topics[0].evidence_text, "新笔记中出现了另一个 span 装饰器用例。");
     }
 
     #[test]

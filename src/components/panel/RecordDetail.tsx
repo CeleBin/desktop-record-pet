@@ -15,6 +15,7 @@ import { useEditorPreviewSyncScroll } from "../../lib/useEditorPreviewSyncScroll
 import { useTocResize } from "../../lib/useTocResize";
 
 import { addAttachmentsToRecord, getRecordDetail, runAiTask, saveClipboardImage, setRecordTags } from "../../lib/tauri";
+import { useLearningCoachStore } from "../../store/learningCoach";
 import { useRecordsStore } from "../../store/records";
 import { useTagsStore } from "../../store/tags";
 import type {
@@ -32,6 +33,7 @@ interface RecordDetailProps {
   onConvertToTask: (recordId: string) => Promise<void>;
   onUpdateTaskStatus: (taskId: string, status: TaskStatus, recordId: string) => Promise<void>;
   onDelete: (id: string) => void;
+  growthPreviewEnabled: boolean;
 }
 
 const TYPE_LABELS: Record<string, string> = {
@@ -66,33 +68,6 @@ const KNOWLEDGE_STATUS_LABELS: Record<string, string> = {
   awareness: "待确认",
   rejected: "不是知识点",
 };
-
-const LEARNING_CONFIRM_ACTIONS = [
-  {
-    label: "我能复述",
-    signal: "restatement" as const,
-    content: "用户已经能用自己的话复述这个知识点。",
-  },
-  {
-    label: "我能应用",
-    signal: "application" as const,
-    content: "用户已经能把这个知识应用到实际问题。",
-  },
-  {
-    label: "写入为初步理解",
-    signal: "user_requested_memory" as const,
-    content: "用户主动要求把这个知识写入记忆。",
-  },
-  {
-    label: "不是知识点",
-    signal: "not_knowledge_point" as const,
-    content: "用户认为这个候选项不应该作为知识点记录。",
-  },
-] satisfies Array<{
-  label: string;
-  signal: "user_requested_memory" | "restatement" | "application" | "not_knowledge_point";
-  content: string;
-}>;
 
 interface EffectiveKnowledgeTopic {
   key: string;
@@ -246,6 +221,7 @@ export function RecordDetail({
   onConvertToTask,
   onUpdateTaskStatus,
   onDelete,
+  growthPreviewEnabled,
 }: RecordDetailProps) {
   const [editingTitle, setEditingTitle] = useState(false);
   const [editingContent, setEditingContent] = useState(false);
@@ -255,7 +231,6 @@ export function RecordDetail({
   const [converting, setConverting] = useState(false);
   const [updatingStatus, setUpdatingStatus] = useState(false);
   const [aiAnalyzing, setAiAnalyzing] = useState(false);
-  const [promotingTopicIds, setPromotingTopicIds] = useState<string[]>([]);
   const [aiError, setAiError] = useState<string | null>(null);
   const [latestAiResult, setLatestAiResult] = useState<LearningAnalysisResult | null>(null);
   //全屏预览窗口
@@ -280,6 +255,7 @@ export function RecordDetail({
     useTocResize();
 
   const { selectRecord, hydrateRecord } = useRecordsStore();
+  const startLearningSession = useLearningCoachStore((state) => state.startSession);
   const allTags = useTagsStore((s) => s.tags);
   const createTag = useTagsStore((s) => s.createTag);
 
@@ -916,38 +892,37 @@ export function RecordDetail({
     }
   }, [record, aiAnalyzing, hydrateRecord]);
 
-  const handleConfirmTopic = useCallback(async (
+  const handleStartLearningSession = useCallback((
     topicId: string,
-    sourceSignal: "user_requested_memory" | "restatement" | "application" | "not_knowledge_point",
-    content: string,
+    topicName: string,
+    summary: string,
+    evidenceText: string,
+    noteExample: string | null,
+    questions: string[],
   ) => {
-    if (!record || !topicId) return;
-    setPromotingTopicIds((current) => [...current, topicId]);
-    setAiError(null);
-    try {
-      await runAiTask({
-        taskType: "learning_conversation",
-        payload: {
-          topicId,
-          sourceRecordId: record.id,
-          messages: [
-            {
-              role: "user",
-              content,
-            },
-          ],
-          sourceSignals: [sourceSignal],
+    if (!record) return;
+    const openingQuestion = questions[0]
+      ?? `你可以先用自己的话说说，你现在怎么理解“${topicName}”？`;
+    startLearningSession({
+      id: `${record.id}:${topicId}:${Date.now()}`,
+      topicId,
+      topicName,
+      sourceRecordId: record.id,
+      sourceRecordTitle: record.title ?? null,
+      summary,
+      evidenceText,
+      noteExample,
+      suggestedQuestions: questions,
+      messages: [
+        {
+          role: "assistant",
+          content: `我想和你聊聊“${topicName}”。${openingQuestion}`,
         },
-      });
-
-      const updated = await getRecordDetail(record.id);
-      hydrateRecord(updated);
-    } catch (error) {
-      setAiError(error instanceof Error ? error.message : String(error));
-    } finally {
-      setPromotingTopicIds((current) => current.filter((id) => id !== topicId));
-    }
-  }, [record, hydrateRecord]);
+      ],
+      createdAt: new Date().toISOString(),
+      status: "active",
+    });
+  }, [record, startLearningSession]);
 
   const renderLearningAnalysisCard = (
     result: LearningAnalysisResult,
@@ -1023,9 +998,10 @@ export function RecordDetail({
           <div className="space-y-2">
             {result.suggested_memory_updates.map((update, index) => {
               const matchedTopic = knowledgeTopicByName.get(normalizeTopicName(update.topic));
-              const promotableTopicId = matchedTopic?.canPromote ? matchedTopic.topicId : null;
-              const isPromoting = !!promotableTopicId
-                && promotingTopicIds.includes(promotableTopicId);
+              const candidateTopicId = matchedTopic?.canPromote ? matchedTopic.topicId : null;
+              const matchedPoint = result.knowledge_points.find((point) =>
+                normalizeTopicName(point.name) === normalizeTopicName(update.topic),
+              );
               return (
                 <div key={`${keyPrefix}-memory-${update.topic}-${index}`} className="rounded-lg bg-surface/40 px-3 py-2">
                   <div className="flex items-center gap-2">
@@ -1037,31 +1013,25 @@ export function RecordDetail({
                   <p className="mt-1 text-[11px] leading-5 text-text-muted">
                     {update.evidence}
                   </p>
-                  {promotableTopicId && (
+                  {candidateTopicId && (
                     <div className="mt-3">
                       <p className="mb-2 text-[11px] leading-5 text-text-muted">
-                        请选择如何处理这个候选知识：
+                        先把这个候选知识交给宠物，聊过之后再决定是否写入知识记忆。
                       </p>
-                      <div className="flex flex-wrap gap-2">
-                        {LEARNING_CONFIRM_ACTIONS.map((action) => (
-                          <button
-                            key={`${promotableTopicId}-${action.signal}`}
-                            type="button"
-                            onClick={() => void handleConfirmTopic(
-                              promotableTopicId,
-                              action.signal,
-                              action.content,
-                            )}
-                            disabled={isPromoting}
-                            className="inline-flex items-center gap-1.5 rounded-full bg-secondary/15 px-3 py-1.5 text-[11px] font-medium text-secondary transition hover:bg-secondary/25 disabled:opacity-50"
-                          >
-                            {isPromoting ? (
-                              <span className="inline-block h-3 w-3 animate-spin rounded-full border border-secondary/40 border-t-secondary" />
-                            ) : null}
-                            {action.label}
-                          </button>
-                        ))}
-                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleStartLearningSession(
+                          candidateTopicId,
+                          update.topic,
+                          result.summary,
+                          update.evidence,
+                          matchedPoint?.example_from_note ?? null,
+                          result.questions_for_user,
+                        )}
+                        className="inline-flex items-center gap-1.5 rounded-full bg-secondary/15 px-3 py-1.5 text-[11px] font-medium text-secondary transition hover:bg-secondary/25"
+                      >
+                        和宠物聊聊
+                      </button>
                     </div>
                   )}
                 </div>
@@ -1161,7 +1131,7 @@ export function RecordDetail({
             </button>
           )}
 
-          {!editingContent && (
+          {growthPreviewEnabled && !editingContent && (
             <button
               type="button"
               onClick={() => void handleTriggerAi()}
@@ -1590,7 +1560,7 @@ export function RecordDetail({
               )}
 
               {/* AI Results */}
-              {(visibleLatestAiResult || persistedLearningAnalysisEntries.length > 0 || legacyAiResults.length > 0) && (
+              {growthPreviewEnabled && (visibleLatestAiResult || persistedLearningAnalysisEntries.length > 0 || legacyAiResults.length > 0) && (
                 <section ref={aiSectionRef}>
                   <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.2em] text-text0">
                     AI 分析
@@ -1715,7 +1685,7 @@ export function RecordDetail({
                 </section>
               )}
 
-              {effectiveKnowledgeTopics.length > 0 && (
+              {growthPreviewEnabled && effectiveKnowledgeTopics.length > 0 && (
                 <section>
                   <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.2em] text-text0">
                     待确认知识状态
@@ -1760,7 +1730,7 @@ export function RecordDetail({
                 </section>
               )}
               {/* AI Error */}
-              {aiError && (
+              {growthPreviewEnabled && aiError && (
                 <section>
                   <div className="flex items-start gap-2.5 rounded-xl border border-danger/15 bg-danger/5 px-4 py-3">
                     <svg className="mt-0.5 h-4 w-4 shrink-0 text-danger" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>

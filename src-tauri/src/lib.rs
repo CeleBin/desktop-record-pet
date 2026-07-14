@@ -206,6 +206,8 @@ pub fn run() {
             // Task 7: record & task browsing
             commands::list_records,
             commands::get_record_detail,
+            commands::list_knowledge_memory,
+            commands::get_knowledge_memory_detail,
             commands::update_record,
             commands::delete_record,
             commands::create_task,

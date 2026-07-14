@@ -13,6 +13,7 @@ export type AttachmentRole = "main" | "reference";
 export type AiTriggerMode = "manual" | "auto" | "smart";
 export type AiTaskType =
   | "learning_analysis"
+  | "learning_dialog_reply"
   | "learning_conversation"
   | "weekly_report";
 export type ReminderChannel = "pet-bubble" | "system-notification";
@@ -124,12 +125,51 @@ export interface LearningConversationMessage {
   content: string;
 }
 
+export type PetLearningMessageRole = "assistant" | "user";
+
+export interface PetLearningMessage {
+  role: PetLearningMessageRole;
+  content: string;
+}
+
+export type PetLearningConfirmSignal =
+  | "user_requested_memory"
+  | "restatement"
+  | "application"
+  | "not_knowledge_point";
+
+export interface PetLearningSessionDraft {
+  id: string;
+  topicId: string;
+  topicName: string;
+  sourceRecordId: string;
+  sourceRecordTitle: string | null;
+  summary: string;
+  evidenceText: string;
+  noteExample: string | null;
+  suggestedQuestions: string[];
+  messages: PetLearningMessage[];
+  createdAt: string;
+  status: "active" | "confirmed";
+}
+
 export interface LearningConversationPayload {
   topicId: string;
   sourceRecordId: string;
   dialogSessionId?: string | null;
   messages: LearningConversationMessage[];
   sourceSignals: string[];
+}
+
+export interface LearningDialogReplyPayload {
+  topicId: string;
+  topicName: string;
+  sourceRecordId: string;
+  summary: string;
+  evidenceText: string;
+  noteExample?: string | null;
+  suggestedQuestions: string[];
+  messages: LearningConversationMessage[];
 }
 
 export interface RecordKnowledgeTopicItem {
@@ -139,6 +179,31 @@ export interface RecordKnowledgeTopicItem {
   mastery_level: string;
   evidence_text: string;
   updated_at: string;
+}
+
+export interface KnowledgeMemoryItem {
+  id: string;
+  name: string;
+  summary: string;
+  mastery_level: string;
+  evidence_count: number;
+  latest_evidence_text: string;
+  updated_at: string;
+}
+
+export interface KnowledgeMemoryEvidence {
+  id: string;
+  record_id: string;
+  record_title: string | null;
+  evidence_type: string;
+  evidence_text: string;
+  created_at: string;
+}
+
+export interface KnowledgeMemoryDetail {
+  topic: KnowledgeMemoryItem;
+  evidence: KnowledgeMemoryEvidence[];
+  latest_conclusion_json: string | null;
 }
 
 export interface LearningAnalysisResult {
@@ -165,6 +230,10 @@ export interface LearningConversationResult {
     evidence_type: string;
   } | null;
   next_action: string;
+}
+
+export interface LearningDialogReplyResult {
+  reply: string;
 }
 
 export interface RunAiTaskRequest {
