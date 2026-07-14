@@ -30,6 +30,7 @@ import {
   useDroppable,
   type CollisionDetection,
   type DragEndEvent,
+  type DragOverEvent,
 } from "@dnd-kit/core";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
 
@@ -108,6 +109,7 @@ export function TodoOverlay() {
 
   // 分类管理浮层显示状态
   const [showCategoryManager, setShowCategoryManager] = useState(false);
+  const [dropTargetFolderId, setDropTargetFolderId] = useState<string | null>(null);
 
   // ── 从 settings 读取遮罩背景透明度 (0.0–1.0，默认 0.8) ──
   // 从存设置中获取原始字符串值，做安全解析，若非法则回退到 0.8
@@ -133,34 +135,37 @@ export function TodoOverlay() {
   const collisionDetection: CollisionDetection = useCallback(
     (args) => {
       const collisions = rectIntersection(args);
-      const activeId = String(args.active.id);
-      const activeItem = items.find((i) => i.task_id === activeId);
-      const activeFolderKey = activeItem?.folder_id ?? "__uncategorized__";
 
-      // 找到第一个「跨分类」的 folder droppable
-      const crossFolder = collisions.find((c) => {
-        const id = String(c.id);
-        if (id === "__uncategorized__") {
-          return activeFolderKey !== "__uncategorized__";
-        }
-        if (id.startsWith("folder-")) {
-          return id.replace("folder-", "") !== activeFolderKey;
-        }
-        return false;
-      });
-      if (crossFolder) {
-        return [crossFolder];
-      }
+      // Keep task-level collisions first so another category still shows
+      // sortable insertion feedback. Folder highlighting is derived separately.
       return collisions;
     },
     [items],
   );
 
+  const handleDragOver = useCallback((event: DragOverEvent) => {
+    const overId = event.over ? String(event.over.id) : null;
+    if (!overId) {
+      setDropTargetFolderId(null);
+      return;
+    }
+    if (overId.startsWith("folder-")) {
+      setDropTargetFolderId(overId.replace("folder-", ""));
+      return;
+    }
+    if (overId === "__uncategorized__") {
+      setDropTargetFolderId("__uncategorized__");
+      return;
+    }
+    setDropTargetFolderId(items.find((item) => item.task_id === overId)?.folder_id ?? "__uncategorized__");
+  }, [items]);
+
   // ── 拖拽结束回调 ──
   // 判断目标：如果是分类 droppable → 移动任务到该分类；否则 → 同列表内排序
   const handleDragEnd = useCallback(
-    (event: DragEndEvent) => {
+    async (event: DragEndEvent) => {
       const { active, over } = event;
+      setDropTargetFolderId(null);
       if (!over) return;
       const activeId = String(active.id);
       const overId = String(over.id);
@@ -170,8 +175,8 @@ export function TodoOverlay() {
         const targetFolderId = overId.replace("folder-", "");
         const item = items.find((i) => i.task_id === activeId);
         if (item && item.folder_id !== targetFolderId) {
-          void moveTask(activeId, targetFolderId);
-          void fetchItems();
+          await moveTask(activeId, targetFolderId);
+          await fetchItems();
         }
         return;
       }
@@ -180,8 +185,8 @@ export function TodoOverlay() {
       if (overId === "__uncategorized__") {
         const item = items.find((i) => i.task_id === activeId);
         if (item && item.folder_id !== null) {
-          void moveTask(activeId, null);
-          void fetchItems();
+          await moveTask(activeId, null);
+          await fetchItems();
         }
         return;
       }
@@ -195,9 +200,9 @@ export function TodoOverlay() {
           overItem &&
           activeItem.folder_id !== overItem.folder_id
         ) {
-          // 跨分类：移动到目标任务所在的分类（含未分类 null）
-          void moveTask(activeId, overItem.folder_id);
-          void fetchItems();
+          // Cross-folder task targets retain their exact insertion anchor.
+          await moveTask(activeId, overItem.folder_id);
+          reorderItems(activeId, overId);
         } else {
           // 同分类内排序
           reorderItems(activeId, overId);
@@ -676,7 +681,7 @@ export function TodoOverlay() {
           ) : (
             /* ── 任务列表（按分类分组，可拖拽排序） ── */
             /* DndContext + SortableContext 提供拖拽排序能力 */
-            <DndContext sensors={sensors} collisionDetection={collisionDetection} onDragEnd={handleDragEnd}>
+            <DndContext sensors={sensors} collisionDetection={collisionDetection} onDragOver={handleDragOver} onDragEnd={(event) => void handleDragEnd(event)} onDragCancel={() => setDropTargetFolderId(null)}>
               <SortableContext items={items.map((i) => i.task_id)} strategy={verticalListSortingStrategy}>
                 <div className="divide-y divide-white/[3%]">
                   {/* 有分类的任务 — 按文件夹 sort_order 排列，始终显示所有分类 */}
@@ -687,6 +692,7 @@ export function TodoOverlay() {
                         key={folder.id}
                         folderName={folder.name}
                         folderId={folder.id}
+                        isDropTarget={dropTargetFolderId === folder.id}
                         items={folderItems}
                         isCollapsed={collapsedFolders.has(folder.id)}
                         onToggleCollapse={() => toggleFolderCollapse(folder.id)}

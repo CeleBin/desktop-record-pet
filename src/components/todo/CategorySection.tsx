@@ -5,6 +5,7 @@ import { SortableTodoItem } from "./SortableTodoItem";
 interface CategorySectionProps {
   folderName: string;
   folderId: string;
+  isDropTarget: boolean;
   items: UnfinishedTaskItem[];
   isCollapsed: boolean;
   onToggleCollapse: () => void;
@@ -17,6 +18,7 @@ interface CategorySectionProps {
 export function CategorySection({
   folderName,
   folderId,
+  isDropTarget,
   items,
   isCollapsed,
   onToggleCollapse,
@@ -31,7 +33,7 @@ export function CategorySection({
   return (
     <div
       ref={setNodeRef}
-      className={`rounded-lg transition-colors ${isOver ? "bg-secondary/10 ring-1 ring-secondary/30" : ""}`}
+      className={`rounded-lg transition-colors ${isOver || isDropTarget ? "bg-secondary/10 ring-1 ring-secondary/30" : ""}`}
     >
       {/* 分类头部 */}
       <button
