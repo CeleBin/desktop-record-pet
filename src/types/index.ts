@@ -12,6 +12,7 @@ export type AttachmentType = "image" | "screenshot" | "file";
 export type AttachmentRole = "main" | "reference";
 export type AiTriggerMode = "manual" | "auto" | "smart";
 export type AiTaskType =
+  | "pet_chat"
   | "learning_analysis"
   | "learning_dialog_reply"
   | "learning_conversation"
@@ -233,6 +234,11 @@ export interface LearningConversationResult {
 }
 
 export interface LearningDialogReplyResult {
+  reply: string;
+}
+
+export interface PetChatResult {
+  sessionId: string;
   reply: string;
 }
 

@@ -13,6 +13,7 @@ import type {
 import { Navigation } from "./Navigation";
 import { KnowledgeMemoryPanel } from "./KnowledgeMemoryPanel";
 import { PetLearningPanel } from "./PetLearningPanel";
+import { PetChatPanel } from "./PetChatPanel";
 import { RecordDetail } from "./RecordDetail";
 import { RecordList } from "./RecordList";
 import { SettingsPanel } from "../settings/SettingsPanel";
@@ -20,7 +21,7 @@ import { useLearningCoachStore } from "../../store/learningCoach";
 import { useSettingsStore } from "../../store/settings";
 
 type ViewMode = "all" | "notes" | "tasks";
-type ContentMode = "records" | "memory" | "settings";
+type ContentMode = "records" | "memory" | "settings" | "chat";
 
 export function MainPanel() {
   const activeLearningSession = useLearningCoachStore((state) => state.activeSession);
@@ -218,6 +219,7 @@ export function MainPanel() {
           searchQuery={searchQuery}
           settingsOpen={contentMode === "settings"}
           memoryOpen={contentMode === "memory"}
+          chatOpen={contentMode === "chat"}
           growthPreviewEnabled={growthPreviewEnabled}
           onStatusChange={setActiveStatus}
           onTaskStatusFilterChange={setTaskStatusFilter}
@@ -227,6 +229,7 @@ export function MainPanel() {
             closeLearningSession();
             setContentMode((current) => current === "memory" ? "records" : "memory");
           }}
+          onToggleChat={() => setContentMode((current) => current === "chat" ? "records" : "chat")}
           activeTagIds={activeTagIds}
           onToggleTagFilter={toggleTagFilter}
         />
@@ -247,7 +250,9 @@ export function MainPanel() {
         className="flex shrink-0 flex-col border-r border-border bg-bg/30"
         style={{ width: widths.list }}
       >
-        {contentMode === "settings" ? (
+        {contentMode === "chat" ? (
+          <div className="flex h-full items-center justify-center text-sm text-text-muted">对话正在右侧展开</div>
+        ) : contentMode === "settings" ? (
           <SettingsPanel onClose={() => setContentMode("records")} />
         ) : contentMode === "memory" && growthPreviewEnabled ? (
           <KnowledgeMemoryPanel mode="list" />
@@ -276,7 +281,9 @@ export function MainPanel() {
 
       {/* ── Right: Record detail ── */}
       <section className="flex min-w-0 flex-1 flex-col bg-bg/20">
-        {contentMode === "memory" && growthPreviewEnabled ? (
+        {contentMode === "chat" ? (
+          <PetChatPanel />
+        ) : contentMode === "memory" && growthPreviewEnabled ? (
           <KnowledgeMemoryPanel mode="detail" />
         ) : activeLearningSession && growthPreviewEnabled ? (
           <PetLearningPanel
