@@ -1,15 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { mapAnchorScrollTop, mapSegmentScrollTop } from "./editorPreviewScrollAnchors";
 
 // ── Layout contract ───────────────────────────────────────────────────
 // RecordDetail's edit view splits into editor (textarea) | preview (Markdown).
-// This hook synchronizes the two panes' scroll positions proportionally:
-// when the user scrolls one pane, the other scrolls by the same *fraction*
-// of its scrollable range so that corresponding content stays aligned.
-//
-// Why proportional (not line-mapped): the editor is raw Markdown while the
-// preview is rendered HTML — there is no 1:1 line correspondence. Mapping by
-// scroll fraction keeps the two panes visually anchored at the same relative
-// depth in the document, which is the most useful approximation.
+// This hook synchronizes the two panes by matching Markdown heading anchors.
+// Between two headings it maps local progress, so different rendered heights
+// (images, lists, typography) do not accumulate into whole-document drift.
 
 const STORAGE_KEY = "drp-sync-scroll";
 
@@ -44,7 +40,14 @@ function loadSyncScroll(): boolean {
  * because if B is already at its scroll limit the browser may not fire a
  * scroll event at all, which would leave the lock stuck.
  */
-export function useEditorPreviewSyncScroll(enabled: boolean) {
+interface ScrollAnchors {
+  editor: readonly number[];
+  preview: readonly number[];
+}
+
+const EMPTY_ANCHORS: ScrollAnchors = { editor: [], preview: [] };
+
+export function useEditorPreviewSyncScroll(enabled: boolean, anchors: ScrollAnchors = EMPTY_ANCHORS) {
   const [syncScroll, setSyncScrollState] = useState(loadSyncScroll);
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const previewRef = useRef<HTMLDivElement>(null);
@@ -57,6 +60,43 @@ export function useEditorPreviewSyncScroll(enabled: boolean) {
   const setSyncScroll = useCallback((next: boolean) => {
     setSyncScrollState(next);
   }, []);
+
+  const applyScroll = useCallback((target: HTMLElement, nextScrollTop: number) => {
+    lockRef.current = true;
+    target.scrollTop = nextScrollTop;
+    requestAnimationFrame(() => {
+      lockRef.current = false;
+    });
+  }, []);
+
+  /** Move both panes to one matching content heading for a TOC jump. */
+  const scrollToHeading = useCallback((headingIndex: number): boolean => {
+    const editor = editorRef.current;
+    const preview = previewRef.current;
+    if (!editor || !preview) return false;
+
+    const editorTop = mapAnchorScrollTop(
+      headingIndex,
+      anchors.preview,
+      anchors.editor,
+      editor.scrollHeight - editor.clientHeight,
+    );
+    const previewTop = mapAnchorScrollTop(
+      headingIndex,
+      anchors.editor,
+      anchors.preview,
+      preview.scrollHeight - preview.clientHeight,
+    );
+    if (editorTop == null || previewTop == null) return false;
+
+    lockRef.current = true;
+    editor.scrollTop = editorTop;
+    preview.scrollTop = previewTop;
+    requestAnimationFrame(() => {
+      lockRef.current = false;
+    });
+    return true;
+  }, [anchors]);
 
   // Persist preference so it survives reloads / window reopen.
   useEffect(() => {
@@ -80,12 +120,8 @@ export function useEditorPreviewSyncScroll(enabled: boolean) {
       // If either pane can't scroll, nothing to sync. Still release any
       // stale lock on the next frame for safety.
       if (maxE <= 0 || maxP <= 0) return;
-      const ratio = editor.scrollTop / maxE;
-      lockRef.current = true;
-      preview.scrollTop = ratio * maxP;
-      requestAnimationFrame(() => {
-        lockRef.current = false;
-      });
+      const mapped = mapSegmentScrollTop(editor.scrollTop, anchors.editor, anchors.preview, maxP, maxE);
+      applyScroll(preview, mapped ?? (editor.scrollTop / maxE) * maxP);
     };
 
     const syncFromPreview = () => {
@@ -93,12 +129,8 @@ export function useEditorPreviewSyncScroll(enabled: boolean) {
       const maxE = editor.scrollHeight - editor.clientHeight;
       const maxP = preview.scrollHeight - preview.clientHeight;
       if (maxE <= 0 || maxP <= 0) return;
-      const ratio = preview.scrollTop / maxP;
-      lockRef.current = true;
-      editor.scrollTop = ratio * maxE;
-      requestAnimationFrame(() => {
-        lockRef.current = false;
-      });
+      const mapped = mapSegmentScrollTop(preview.scrollTop, anchors.preview, anchors.editor, maxE, maxP);
+      applyScroll(editor, mapped ?? (preview.scrollTop / maxP) * maxE);
     };
 
     editor.addEventListener("scroll", syncFromEditor, { passive: true });
@@ -109,7 +141,7 @@ export function useEditorPreviewSyncScroll(enabled: boolean) {
       // Defensive: clear lock on teardown in case a rAF unlock is pending.
       lockRef.current = false;
     };
-  }, [syncScroll, enabled]);
+  }, [syncScroll, enabled, anchors, applyScroll]);
 
-  return { syncScroll, toggle, setSyncScroll, editorRef, previewRef };
+  return { syncScroll, toggle, setSyncScroll, editorRef, previewRef, scrollToHeading };
 }

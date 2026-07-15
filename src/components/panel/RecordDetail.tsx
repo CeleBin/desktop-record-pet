@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -13,6 +14,7 @@ import { listenForFileDrops } from "../../lib/dragDrop";
 import { useEditorPreviewResize } from "../../lib/useEditorPreviewResize";
 import { useEditorPreviewSyncScroll } from "../../lib/useEditorPreviewSyncScroll";
 import { useTocResize } from "../../lib/useTocResize";
+import { extractMarkdownToc } from "../../lib/markdownToc";
 
 import { addAttachmentsToRecord, getRecordDetail, runAiTask, saveClipboardImage, setRecordTags } from "../../lib/tauri";
 import { useLearningCoachStore } from "../../store/learningCoach";
@@ -188,30 +190,6 @@ function blobToRgba(blob: Blob): Promise<{ rgba: Uint8Array; width: number; heig
 
 // ── Markdown helpers ────────────────────────────────────────────────
 
-interface TocEntry {
-  level: number;
-  text: string;
-  /** ordinal position among h1–h3 headings in document order */
-  index: number;
-}
-
-/** Extract h1–h3 headings from raw markdown into a TOC (index-based). */
-function extractToc(md: string): TocEntry[] {
-  const toc: TocEntry[] = [];
-  if (!md) return toc;
-  let index = 0;
-  for (const line of md.split("\n")) {
-    const m = line.match(/^(#{1,3})\s+(.+?)\s*#*\s*$/);
-    if (!m) continue;
-    const level = m[1].length;
-    const text = m[2].replace(/[*_`~]/g, "").trim();
-    if (!text) continue;
-    toc.push({ level, text, index });
-    index += 1;
-  }
-  return toc;
-}
-
 // ── Component ───────────────────────────────────────────────────────
 
 export function RecordDetail({
@@ -243,12 +221,17 @@ export function RecordDetail({
 
   // ── Editor / preview scroll sync (toggled, proportional) ──
   // Only active while editing AND the preview pane is visible.
+  const [scrollAnchors, setScrollAnchors] = useState<{ editor: number[]; preview: number[] }>({
+    editor: [],
+    preview: [],
+  });
   const {
     syncScroll,
     toggle: toggleSyncScroll,
     editorRef: syncEditorRef,
     previewRef: syncPreviewRef,
-  } = useEditorPreviewSyncScroll(editingContent && showPreview);
+    scrollToHeading: scrollToSyncedHeading,
+  } = useEditorPreviewSyncScroll(editingContent && showPreview, scrollAnchors);
 
   // ── TOC rail width (persisted, clamped px resize) ──
   const { width: tocWidth, startResize: startTocResize, resetWidth: resetTocWidth } =
@@ -463,6 +446,7 @@ export function RecordDetail({
   const markdownContainerRef = useRef<HTMLDivElement>(null);
 
   const scrollToHeading = useCallback((index: number) => {
+    if (editingContent && scrollToSyncedHeading(index)) return;
     const container = markdownContainerRef.current;
     if (!container) return;
     const headings = container.querySelectorAll("h1, h2, h3");
@@ -470,7 +454,7 @@ export function RecordDetail({
     if (target) {
       target.scrollIntoView({ behavior: "smooth", block: "start" });
     }
-  }, []);
+  }, [editingContent, scrollToSyncedHeading]);
 
   const mdComponents = useMemo(
     () => ({
@@ -574,7 +558,110 @@ export function RecordDetail({
 
   // TOC source — draft while editing, final content while viewing
   const tocSource = editingContent ? contentDraft : (record?.content ?? "");
-  const toc = useMemo(() => extractToc(tocSource), [tocSource]);
+  const toc = useMemo(() => extractMarkdownToc(tocSource), [tocSource]);
+
+  // Measure matching headings in both scroll panes. The textarea mirror is
+  // necessary because soft wrapping makes source character/line offsets
+  // different from its pixel scroll positions.
+  useLayoutEffect(() => {
+    if (!editingContent || !showPreview || toc.length === 0) {
+      setScrollAnchors((current) => (
+        current.editor.length === 0 && current.preview.length === 0
+          ? current
+          : { editor: [], preview: [] }
+      ));
+      return;
+    }
+
+    const textarea = contentRef.current;
+    const preview = syncPreviewRef.current;
+    const markdown = markdownContainerRef.current;
+    if (!textarea || !preview || !markdown) return;
+
+    let frame = 0;
+    const measure = () => {
+      const computed = window.getComputedStyle(textarea);
+      const mirror = document.createElement("div");
+      Object.assign(mirror.style, {
+        position: "absolute",
+        visibility: "hidden",
+        pointerEvents: "none",
+        zIndex: "-1",
+        top: "0",
+        left: "-100000px",
+        width: `${textarea.clientWidth}px`,
+        boxSizing: computed.boxSizing,
+        padding: computed.padding,
+        border: computed.border,
+        font: computed.font,
+        lineHeight: computed.lineHeight,
+        letterSpacing: computed.letterSpacing,
+        tabSize: computed.tabSize,
+        whiteSpace: "pre-wrap",
+        overflowWrap: "break-word",
+        wordBreak: "break-word",
+      });
+
+      const sourceMarkers: HTMLSpanElement[] = [];
+      let cursor = 0;
+      for (const entry of toc) {
+        mirror.append(document.createTextNode(contentDraft.slice(cursor, entry.start)));
+        const lineEnd = contentDraft.indexOf("\n", entry.start);
+        const marker = document.createElement("span");
+        marker.textContent = contentDraft.slice(entry.start, lineEnd === -1 ? contentDraft.length : lineEnd);
+        mirror.append(marker);
+        sourceMarkers.push(marker);
+        cursor = lineEnd === -1 ? contentDraft.length : lineEnd;
+      }
+      mirror.append(document.createTextNode(contentDraft.slice(cursor)));
+      document.body.append(mirror);
+
+      const editor = sourceMarkers.map((marker) => marker.offsetTop);
+      mirror.remove();
+
+      const headings = Array.from(markdown.querySelectorAll("h1, h2, h3"));
+      const previewRect = preview.getBoundingClientRect();
+      let headingCursor = 0;
+      const rendered = toc.map((entry) => {
+        const match = headings.findIndex((heading, index) => (
+          index >= headingCursor
+          && heading.tagName === `H${entry.level}`
+          && heading.textContent?.trim() === entry.text
+        ));
+        if (match === -1) return null;
+        headingCursor = match + 1;
+        const rect = headings[match].getBoundingClientRect();
+        return rect.top - previewRect.top + preview.scrollTop;
+      });
+
+      if (rendered.some((position) => position == null)) {
+        setScrollAnchors({ editor: [], preview: [] });
+        return;
+      }
+      const next = { editor, preview: rendered as number[] };
+      setScrollAnchors((current) => (
+        current.editor.every((value, index) => value === next.editor[index])
+        && current.preview.every((value, index) => value === next.preview[index])
+        && current.editor.length === next.editor.length
+        && current.preview.length === next.preview.length
+          ? current
+          : next
+      ));
+    };
+
+    frame = requestAnimationFrame(measure);
+    const resizeObserver = new ResizeObserver(() => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(measure);
+    });
+    resizeObserver.observe(textarea);
+    resizeObserver.observe(preview);
+    resizeObserver.observe(markdown);
+    return () => {
+      cancelAnimationFrame(frame);
+      resizeObserver.disconnect();
+    };
+  }, [contentDraft, editingContent, showPreview, toc]);
 
   // Keep lastSaved* refs in sync with the record from the server.
   useEffect(() => {
