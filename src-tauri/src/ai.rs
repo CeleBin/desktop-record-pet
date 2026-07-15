@@ -12,7 +12,7 @@ use crate::models::{
     AiTaskRun, AiTaskType, AiTriggerMode, Attachment, AttachmentType, CreateAiResultRequest,
     LearningAnalysisPayload, LearningAnalysisResult, LearningConversationMemoryWrite,
     LearningConversationPayload, LearningConversationResult, LearningDialogReplyPayload,
-    LearningDialogReplyResult, ProductMode, RunAiTaskRequest,
+    LearningDialogReplyResult, PetChatPayload, PetChatResult, ProductMode, RunAiTaskRequest,
 };
 
 pub struct AiRuntimeSettings {
@@ -103,6 +103,7 @@ pub async fn run_task(database: &Database, request: RunAiTaskRequest) -> AppResu
     ensure_task_allowed_for_product_mode(product_mode, request.task_type)?;
 
     match request.task_type {
+        AiTaskType::PetChat => run_pet_chat(database, request.payload).await,
         AiTaskType::LearningAnalysis => run_learning_analysis(database, request.payload).await,
         AiTaskType::LearningDialogReply => {
             run_learning_dialog_reply(database, request.payload).await
@@ -1341,6 +1342,87 @@ fn build_openai_compatible_request_body(
     })
 }
 
+fn build_pet_chat_system_prompt(persona: &str, custom_prompt: Option<&str>) -> String {
+    let custom_instruction = custom_prompt
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("(none)");
+    format!(
+        "You are a helpful desktop pet companion.\n\
+You may only use context explicitly retained by the user for this message.\n\
+You must not modify local data, claim that local work was completed, or create tasks or notes.\n\
+You must not invent external information such as weather, locations, or restaurant availability.\n\
+Keep the response concise and supportive.\n\n\
+Persona preference: {persona}\n\
+Additional user preference: {custom_instruction}"
+    )
+}
+
+async fn run_pet_chat(database: &Database, payload: serde_json::Value) -> AppResult<AiTaskRun> {
+    let payload: PetChatPayload = serde_json::from_value(payload)
+        .map_err(|error| AppError::Validation(format!("invalid pet_chat payload: {error}")))?;
+    if payload.content.trim().is_empty() {
+        return Err(AppError::Validation("chat content is required".into()));
+    }
+
+    let (session_id, messages, context_text, settings) = {
+        let conn = database.conn.lock()?;
+        let session = match payload.session_id.as_deref().filter(|id| !id.trim().is_empty()) {
+            Some(id) => id.to_string(),
+            None => db::create_pet_chat_session(&conn, None)?.id,
+        };
+        let context_snapshot = serde_json::to_string(&payload.retained_record_ids)
+            .map_err(|error| AppError::State(format!("failed to serialize chat context: {error}")))?;
+        db::append_pet_chat_message(&conn, &session, "user", &payload.content, &context_snapshot)?;
+        let context_text = payload.retained_record_ids.iter().filter_map(|id| {
+            db::get_record(&conn, id).ok().and_then(|record| {
+                (record.status == crate::models::RecordStatus::Active).then(|| format!(
+                    "- {}:\n{}",
+                    record.title.unwrap_or_else(|| "未命名记录".into()),
+                    record.content.unwrap_or_default()
+                ))
+            })
+        }).collect::<Vec<_>>().join("\n\n");
+        let messages = db::list_pet_chat_messages(&conn, &session)?
+            .into_iter()
+            .map(|message| crate::models::LearningConversationMessage { role: message.role, content: message.content })
+            .collect::<Vec<_>>();
+        let settings = load_ai_runtime_settings(&conn)?;
+        (session, messages, context_text, settings)
+    };
+
+    let bridge = LearningDialogReplyPayload {
+        topic_id: "pet-chat".into(),
+        topic_name: "桌宠日常对话".into(),
+        source_record_id: "pet-chat".into(),
+        summary: build_pet_chat_system_prompt(&payload.persona, payload.custom_prompt.as_deref()),
+        evidence_text: if context_text.is_empty() { "No user context retained for this message.".into() } else { context_text },
+        note_example: None,
+        suggested_questions: vec![],
+        messages,
+    };
+    let result = run_learning_dialog_reply_request(&settings, &bridge).await?;
+    let response = PetChatResult { session_id: session_id.clone(), reply: result.reply };
+    let result_json = serde_json::to_string(&response)
+        .map_err(|error| AppError::State(format!("failed to serialize pet chat result: {error}")))?;
+    let run = AiTaskRun {
+        id: Uuid::new_v4().to_string(),
+        task_type: AiTaskType::PetChat,
+        source_record_id: None,
+        status: "success".into(),
+        model_provider: Some(settings.provider),
+        model_name: Some(settings.model),
+        model_variant: Some(settings.model_variant),
+        input_snapshot: "pet_chat".into(),
+        result_json: Some(result_json),
+        error_message: None,
+        created_at: Utc::now(),
+    };
+    let conn = database.conn.lock()?;
+    db::append_pet_chat_message(&conn, &session_id, "assistant", &response.reply, "[]")?;
+    db::insert_ai_task_run(&conn, run.clone())?;
+    Ok(run)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1377,6 +1459,17 @@ mod tests {
             settings.api_key.is_empty(),
             "custom base_url should allow empty api key"
         );
+    }
+
+    #[test]
+    fn pet_chat_system_prompt_keeps_safety_boundaries_with_custom_persona() {
+        let prompt = build_pet_chat_system_prompt("用犀利的方式催促我", Some("多用短句"));
+
+        assert!(prompt.contains("only use context explicitly retained by the user"));
+        assert!(prompt.contains("must not modify local data"));
+        assert!(prompt.contains("must not invent external information"));
+        assert!(prompt.contains("用犀利的方式催促我"));
+        assert!(prompt.contains("多用短句"));
     }
 
     #[test]

@@ -278,6 +278,7 @@ impl ProductMode {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum AiTaskType {
+    PetChat,
     LearningAnalysis,
     LearningDialogReply,
     LearningConversation,
@@ -287,6 +288,7 @@ pub enum AiTaskType {
 impl AiTaskType {
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::PetChat => "pet_chat",
             Self::LearningAnalysis => "learning_analysis",
             Self::LearningDialogReply => "learning_dialog_reply",
             Self::LearningConversation => "learning_conversation",
@@ -296,6 +298,7 @@ impl AiTaskType {
 
     pub fn parse(value: &str) -> Self {
         match value {
+            "pet_chat" => Self::PetChat,
             "learning_dialog_reply" => Self::LearningDialogReply,
             "learning_conversation" => Self::LearningConversation,
             "weekly_report" => Self::WeeklyReport,
@@ -606,6 +609,25 @@ pub struct WeeklyReportPayload {
 pub struct LearningConversationMessage {
     pub role: String,
     pub content: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PetChatPayload {
+    #[serde(rename = "sessionId")]
+    pub session_id: Option<String>,
+    pub content: String,
+    #[serde(default, rename = "retainedRecordIds")]
+    pub retained_record_ids: Vec<String>,
+    pub persona: String,
+    #[serde(rename = "customPrompt")]
+    pub custom_prompt: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PetChatResult {
+    #[serde(rename = "sessionId")]
+    pub session_id: String,
+    pub reply: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
