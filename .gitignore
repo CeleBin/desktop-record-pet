@@ -15,6 +15,7 @@ dist-ssr
 # Project docs and config
 docs
 AGENT.md
+.superpowers/
 
 # Editor directories and files
 .vscode/*

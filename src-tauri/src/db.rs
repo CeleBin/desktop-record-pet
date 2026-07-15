@@ -15,7 +15,8 @@ use crate::models::{
     AiResult, AiTaskRun, AiTaskType, AiTriggerMode, Attachment, AttachmentRole, AttachmentType,
     CreateAiResultRequest, CreateAttachmentRequest, CreateRecordRequest, CreateTaskRequest, Folder,
     KnowledgeEvidence, KnowledgeMemoryDetail, KnowledgeMemoryEvidence, KnowledgeMemoryItem,
-    KnowledgeTopic, LearningDialogSession, Record, RecordAttachmentLink, RecordFilter,
+    KnowledgeTopic, LearningDialogSession, PetChatContextCandidate, PetChatMessage, PetChatSession,
+    Record, RecordAttachmentLink, RecordFilter,
     RecordKnowledgeTopic, RecordSource, RecordStatus, RecordType, RecordWithRelations, RepeatRule,
     SettingsEntry, Tag, Task, TaskFilter, TaskPriority, TaskStatus, UnfinishedTaskItem,
     UpdateRecordRequest,
@@ -160,6 +161,23 @@ pub fn run_migrations(conn: &Connection) -> AppResult<()> {
             created_at TEXT NOT NULL,
             FOREIGN KEY(topic_id) REFERENCES knowledge_topics(id) ON DELETE CASCADE,
             FOREIGN KEY(source_record_id) REFERENCES records(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS pet_chat_sessions (
+            id TEXT PRIMARY KEY,
+            title TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS pet_chat_messages (
+            id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            context_snapshot TEXT NOT NULL DEFAULT '[]',
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(session_id) REFERENCES pet_chat_sessions(id) ON DELETE CASCADE
         );
 
         CREATE TABLE IF NOT EXISTS reminders (
@@ -1205,6 +1223,97 @@ pub fn delete_all_settings(conn: &Connection) -> AppResult<()> {
     Ok(())
 }
 
+pub fn create_pet_chat_session(
+    conn: &Connection,
+    title: Option<String>,
+) -> AppResult<PetChatSession> {
+    let now = Utc::now();
+    let session = PetChatSession {
+        id: Uuid::new_v4().to_string(),
+        title,
+        created_at: now,
+        updated_at: now,
+    };
+    conn.execute(
+        "INSERT INTO pet_chat_sessions (id, title, created_at, updated_at) VALUES (?1, ?2, ?3, ?4)",
+        params![session.id, session.title, session.created_at, session.updated_at],
+    )?;
+    Ok(session)
+}
+
+pub fn append_pet_chat_message(
+    conn: &Connection,
+    session_id: &str,
+    role: &str,
+    content: &str,
+    context_snapshot: &str,
+) -> AppResult<PetChatMessage> {
+    let message = PetChatMessage {
+        id: Uuid::new_v4().to_string(),
+        session_id: session_id.to_string(),
+        role: role.to_string(),
+        content: content.to_string(),
+        context_snapshot: context_snapshot.to_string(),
+        created_at: Utc::now(),
+    };
+    conn.execute(
+        "INSERT INTO pet_chat_messages (id, session_id, role, content, context_snapshot, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![message.id, message.session_id, message.role, message.content, message.context_snapshot, message.created_at],
+    )?;
+    conn.execute(
+        "UPDATE pet_chat_sessions SET updated_at = ?2 WHERE id = ?1",
+        params![session_id, message.created_at],
+    )?;
+    Ok(message)
+}
+
+pub fn list_pet_chat_messages(
+    conn: &Connection,
+    session_id: &str,
+) -> AppResult<Vec<PetChatMessage>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, session_id, role, content, context_snapshot, created_at FROM pet_chat_messages WHERE session_id = ?1 ORDER BY datetime(created_at) ASC, rowid ASC",
+    )?;
+    let rows = stmt.query_map(params![session_id], map_pet_chat_message)?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
+pub fn list_pet_chat_context_candidates(
+    conn: &Connection,
+    query: &str,
+    limit: i64,
+) -> AppResult<Vec<PetChatContextCandidate>> {
+    let trimmed = query.trim();
+    if trimmed.is_empty() || limit <= 0 {
+        return Ok(vec![]);
+    }
+    let pattern = format!("%{}%", trimmed.to_lowercase());
+    let mut stmt = conn.prepare(
+        "SELECT r.id,
+                CASE WHEN t.id IS NULL THEN 'note' ELSE 'task' END,
+                COALESCE(NULLIF(r.title, ''), '未命名记录'),
+                substr(COALESCE(r.content, ''), 1, 240)
+         FROM records r
+         LEFT JOIN tasks t ON t.record_id = r.id
+         WHERE r.status = 'active'
+           AND (t.id IS NULL OR t.task_status IN ('todo', 'doing'))
+           AND lower(COALESCE(r.title, '') || ' ' || COALESCE(r.content, '')) LIKE ?1
+         ORDER BY CASE WHEN lower(COALESCE(r.title, '')) LIKE ?1 THEN 0 ELSE 1 END,
+                  datetime(r.updated_at) DESC,
+                  r.rowid DESC
+         LIMIT ?2",
+    )?;
+    let rows = stmt.query_map(params![pattern, limit.min(3)], |row| {
+        Ok(PetChatContextCandidate {
+            record_id: row.get(0)?,
+            item_type: row.get(1)?,
+            title: row.get(2)?,
+            excerpt: row.get(3)?,
+        })
+    })?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
 // ── Task 7: filtered listing helpers ──────────────────────────────────
 
 pub fn list_records_filtered(
@@ -1882,6 +1991,17 @@ fn map_learning_dialog_session(row: &Row<'_>) -> rusqlite::Result<LearningDialog
         conversation_snapshot: row.get(4)?,
         conclusion_json: row.get(5)?,
         created_at: parse_datetime(&row.get::<_, String>(6)?)?,
+    })
+}
+
+fn map_pet_chat_message(row: &Row<'_>) -> rusqlite::Result<PetChatMessage> {
+    Ok(PetChatMessage {
+        id: row.get(0)?,
+        session_id: row.get(1)?,
+        role: row.get(2)?,
+        content: row.get(3)?,
+        context_snapshot: row.get(4)?,
+        created_at: row.get(5)?,
     })
 }
 
@@ -2912,6 +3032,42 @@ mod tests {
         assert!(settings.iter().all(|entry| entry.key != "claude_api_key"));
         assert!(settings.iter().all(|entry| entry.value != "current-secret"));
         assert!(settings.iter().all(|entry| entry.value != "legacy-secret"));
+    }
+
+    #[test]
+    fn pet_chat_sessions_persist_messages_and_limit_context_candidates() {
+        let conn = in_memory();
+        let session = create_pet_chat_session(&conn, Some("监控迁移".into())).expect("session");
+        append_pet_chat_message(&conn, &session.id, "user", "Signoz 迁移先做什么", "[]")
+            .expect("message");
+
+        for title in [
+            "Signoz 迁移方案",
+            "Signoz trace 验证",
+            "Signoz 仪表盘清单",
+            "无关的周末购物",
+        ] {
+            insert_record(
+                &conn,
+                CreateRecordRequest {
+                    record_type: Some(RecordType::Note),
+                    title: Some(title.into()),
+                    content: Some("迁移监控系统的工作记录".into()),
+                    source: RecordSource::QuickText,
+                    create_as_task: false,
+                    attachment_ids: vec![],
+                },
+            )
+            .expect("record");
+        }
+
+        let candidates = list_pet_chat_context_candidates(&conn, "Signoz", 3)
+            .expect("context candidates");
+        let messages = list_pet_chat_messages(&conn, &session.id).expect("messages");
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(candidates.len(), 3);
+        assert!(candidates.iter().all(|candidate| candidate.title.contains("Signoz")));
     }
 
     #[test]
