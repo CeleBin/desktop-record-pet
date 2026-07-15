@@ -148,6 +148,43 @@ const SETTING_DEFS: Record<string, SettingDef> = {
     type: "boolean",
     category: "pet",
   },
+  pet_persona: {
+    label: "搭子人格",
+    description: "影响桌宠回复与主动问候的语气",
+    type: "select",
+    options: [
+      { label: "温和搭子", value: "gentle-companion" },
+      { label: "安静整理者", value: "quiet-organizer" },
+      { label: "直接提醒者", value: "direct-reminder" },
+    ],
+    category: "pet",
+  },
+  pet_custom_prompt: {
+    label: "自定义搭子提示词",
+    description: "补充希望桌宠采用的表达方式，不会覆盖隐私规则",
+    type: "text",
+    placeholder: "例如：用简短、有行动感的方式和我说话",
+    category: "pet",
+  },
+  pet_proactive_ai_enabled: {
+    label: "主动 AI 互动",
+    description: "开启后桌宠会按人格和允许的本地内容主动发起短气泡，使用你的 API",
+    type: "boolean",
+    category: "pet",
+  },
+  pet_meal_companion_enabled: {
+    label: "饭点陪伴",
+    description: "午餐和晚餐时间显示本地短提醒，不调用 AI",
+    type: "boolean",
+    category: "pet",
+  },
+  pet_quiet_hours: {
+    label: "宠物免打扰时段",
+    description: "在此时间内不显示主动气泡",
+    type: "text",
+    placeholder: "22:00-08:00",
+    category: "pet",
+  },
 
   // ── Todo-overlay settings ──
 

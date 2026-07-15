@@ -1166,6 +1166,12 @@ pub fn default_settings() -> Vec<SettingsEntry> {
             key: "pet_visible".into(),
             value: "true".into(),
         },
+        SettingsEntry { key: "pet_persona".into(), value: "gentle-companion".into() },
+        SettingsEntry { key: "pet_custom_prompt".into(), value: "".into() },
+        SettingsEntry { key: "pet_proactive_ai_enabled".into(), value: "false".into() },
+        SettingsEntry { key: "pet_meal_companion_enabled".into(), value: "true".into() },
+        SettingsEntry { key: "pet_quiet_hours".into(), value: "22:00-08:00".into() },
+        SettingsEntry { key: "pet_proactive_min_interval_minutes".into(), value: "120".into() },
         // ── Todo-overlay settings ──
         SettingsEntry {
             key: "todo_overlay_visibility_mode".into(),
