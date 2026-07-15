@@ -1,5 +1,6 @@
 mod ai;
 mod commands;
+mod credentials;
 mod db;
 mod errors;
 mod models;
@@ -70,7 +71,11 @@ pub fn run() {
             });
             windows::ensure_window_runtime_ready().map_err(|error| error.to_string())?;
 
-            for label in [windows::MAIN_PANEL_LABEL, windows::PET_LABEL, windows::TODO_OVERLAY_LABEL] {
+            for label in [
+                windows::MAIN_PANEL_LABEL,
+                windows::PET_LABEL,
+                windows::TODO_OVERLAY_LABEL,
+            ] {
                 if windows::should_hide_instead_of_close(label) {
                     let window = app
                         .get_webview_window(label)
@@ -118,9 +123,7 @@ pub fn run() {
                                     windows::show_window(app, windows::SCREENSHOT_OVERLAY_LABEL);
                             }
                         })
-                        .map_err(|error| {
-                            format!("failed to register screenshot shortcut: {error}")
-                        })
+                        .map_err(|error| format!("failed to register screenshot shortcut: {error}"))
                 })?;
             }
 
@@ -134,14 +137,9 @@ pub fn run() {
                 None::<&str>,
             )
             .map_err(|error| error.to_string())?;
-            let toggle_pet_item = MenuItem::with_id(
-                handle,
-                "toggle_pet",
-                "Show/Hide Pet",
-                true,
-                None::<&str>,
-            )
-            .map_err(|error| error.to_string())?;
+            let toggle_pet_item =
+                MenuItem::with_id(handle, "toggle_pet", "Show/Hide Pet", true, None::<&str>)
+                    .map_err(|error| error.to_string())?;
             let toggle_todo_overlay_item = MenuItem::with_id(
                 handle,
                 "toggle_todo_overlay",
@@ -242,6 +240,9 @@ pub fn run() {
             commands::get_all_settings,
             commands::update_setting,
             commands::reset_settings,
+            commands::get_ai_api_key_status,
+            commands::set_ai_api_key,
+            commands::clear_ai_api_key,
             commands::create_ai_result,
             commands::run_ai_task,
             commands::trigger_ai_analysis,

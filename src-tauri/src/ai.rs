@@ -5,6 +5,7 @@ use reqwest::Client;
 use tokio::time::timeout;
 use uuid::Uuid;
 
+use crate::credentials;
 use crate::db::{self, Database};
 use crate::errors::{AppError, AppResult};
 use crate::models::{
@@ -33,9 +34,8 @@ impl AiRuntimeSettings {
 
                 variant_model
                     .or_else(|| {
-                        (!self.model.trim().is_empty()).then_some(
-                            self.model.trim().trim_start_matches("zen:"),
-                        )
+                        (!self.model.trim().is_empty())
+                            .then_some(self.model.trim().trim_start_matches("zen:"))
                     })
                     .unwrap_or("deepseek-v4-flash-free")
                     .into()
@@ -115,12 +115,8 @@ pub async fn run_task(database: &Database, request: RunAiTaskRequest) -> AppResu
 }
 
 pub fn load_ai_runtime_settings(conn: &rusqlite::Connection) -> AppResult<AiRuntimeSettings> {
-    let provider = db::get_setting_or(conn, "ai_provider", "claude")?;
-    let model = db::get_setting_or(conn, "ai_model", "claude-sonnet-4-20250514")?;
-    let model_variant = db::get_setting_or(conn, "ai_model_variant", "default")?;
-    let base_url = db::get_setting_or(conn, "ai_base_url", "")?;
-
-    let api_key = db::get_setting(conn, "ai_api_key")?
+    let secure_api_key = credentials::get_ai_api_key()?;
+    let legacy_api_key = db::get_setting(conn, "ai_api_key")?
         .map(|entry| entry.value)
         .filter(|value| !value.trim().is_empty())
         .or_else(|| {
@@ -129,13 +125,36 @@ pub fn load_ai_runtime_settings(conn: &rusqlite::Connection) -> AppResult<AiRunt
                 .flatten()
                 .map(|entry| entry.value)
                 .filter(|value| !value.trim().is_empty())
-        })
-        .unwrap_or_default();
+        });
+
+    let api_key = if let Some(value) = secure_api_key {
+        Some(value)
+    } else if let Some(value) = legacy_api_key {
+        credentials::set_ai_api_key(&value)?;
+        db::delete_setting(conn, "ai_api_key")?;
+        db::delete_setting(conn, "claude_api_key")?;
+        Some(value)
+    } else {
+        None
+    };
+
+    load_ai_runtime_settings_with_api_key(conn, api_key)
+}
+
+fn load_ai_runtime_settings_with_api_key(
+    conn: &rusqlite::Connection,
+    api_key: Option<String>,
+) -> AppResult<AiRuntimeSettings> {
+    let provider = db::get_setting_or(conn, "ai_provider", "claude")?;
+    let model = db::get_setting_or(conn, "ai_model", "claude-sonnet-4-20250514")?;
+    let model_variant = db::get_setting_or(conn, "ai_model_variant", "default")?;
+    let base_url = db::get_setting_or(conn, "ai_base_url", "")?;
+
+    let api_key = api_key.unwrap_or_default();
 
     if api_key.trim().is_empty() && base_url.trim().is_empty() {
         return Err(AppError::Validation(
-            "AI API key not configured. Set 'ai_api_key' or legacy 'claude_api_key' in settings."
-                .into(),
+            "AI API key not configured. Configure it in Settings.".into(),
         ));
     }
 
@@ -160,12 +179,7 @@ fn persist_learning_memory_updates(
         // overwrite the user's confirmed status or summary.
         let topic = match db::find_knowledge_topic_by_name(conn, &update.topic)? {
             Some(existing) => existing,
-            None => db::upsert_knowledge_topic(
-                conn,
-                &update.topic,
-                &update.evidence,
-                "candidate",
-            )?,
+            None => db::upsert_knowledge_topic(conn, &update.topic, &update.evidence, "candidate")?,
         };
         db::append_knowledge_evidence(
             conn,
@@ -285,7 +299,11 @@ fn persist_learning_conversation(
         let evidence_type = memory_write
             .as_ref()
             .map(|write| write.evidence_type.as_str())
-            .unwrap_or(if status == "rejected" { "user_rejected_candidate" } else { "dialog_answer" });
+            .unwrap_or(if status == "rejected" {
+                "user_rejected_candidate"
+            } else {
+                "dialog_answer"
+            });
         db::append_knowledge_evidence(
             conn,
             &topic.id,
@@ -304,11 +322,11 @@ fn persist_learning_conversation(
             topic_id: payload.topic_id,
             source_record_id: payload.source_record_id,
             status: decision,
-            conversation_snapshot: serde_json::to_string(&payload.messages).unwrap_or_else(|_| "[]".into()),
-            conclusion_json: Some(
-                serde_json::to_string(&result)
-                    .map_err(|error| AppError::State(format!("failed to serialize conversation result: {error}")))?,
-            ),
+            conversation_snapshot: serde_json::to_string(&payload.messages)
+                .unwrap_or_else(|_| "[]".into()),
+            conclusion_json: Some(serde_json::to_string(&result).map_err(|error| {
+                AppError::State(format!("failed to serialize conversation result: {error}"))
+            })?),
             created_at: Utc::now(),
         },
     )?;
@@ -320,8 +338,9 @@ async fn run_learning_analysis(
     database: &Database,
     payload: serde_json::Value,
 ) -> AppResult<AiTaskRun> {
-    let payload: LearningAnalysisPayload = serde_json::from_value(payload)
-        .map_err(|error| AppError::Validation(format!("invalid learning_analysis payload: {error}")))?;
+    let payload: LearningAnalysisPayload = serde_json::from_value(payload).map_err(|error| {
+        AppError::Validation(format!("invalid learning_analysis payload: {error}"))
+    })?;
 
     if payload.record_id.trim().is_empty() {
         return Err(AppError::Validation("recordId is required".into()));
@@ -355,12 +374,20 @@ async fn run_learning_analysis(
         db::insert_ai_task_run(&conn, pending_run.clone())?;
     }
 
-    let response = run_model_request(&settings, &record.title, &record.content, record.source.as_str(), &attachments).await;
+    let response = run_model_request(
+        &settings,
+        &record.title,
+        &record.content,
+        record.source.as_str(),
+        &attachments,
+    )
+    .await;
 
     match response {
         Ok(result) => {
-            let result_json = serde_json::to_string(&result)
-                .map_err(|error| AppError::State(format!("failed to serialize learning result: {error}")))?;
+            let result_json = serde_json::to_string(&result).map_err(|error| {
+                AppError::State(format!("failed to serialize learning result: {error}"))
+            })?;
 
             let updated_run = {
                 let conn = database.conn.lock()?;
@@ -412,8 +439,10 @@ async fn run_learning_conversation(
     database: &Database,
     payload: serde_json::Value,
 ) -> AppResult<AiTaskRun> {
-    let payload: LearningConversationPayload = serde_json::from_value(payload)
-        .map_err(|error| AppError::Validation(format!("invalid learning_conversation payload: {error}")))?;
+    let payload: LearningConversationPayload =
+        serde_json::from_value(payload).map_err(|error| {
+            AppError::Validation(format!("invalid learning_conversation payload: {error}"))
+        })?;
 
     if payload.topic_id.trim().is_empty() {
         return Err(AppError::Validation("topicId is required".into()));
@@ -444,26 +473,22 @@ async fn run_learning_conversation(
     let result_json = {
         let conn = database.conn.lock()?;
         let result = persist_learning_conversation(&conn, payload)?;
-        serde_json::to_string(&result)
-            .map_err(|error| AppError::State(format!("failed to serialize conversation result: {error}")))?
+        serde_json::to_string(&result).map_err(|error| {
+            AppError::State(format!("failed to serialize conversation result: {error}"))
+        })?
     };
 
     let conn = database.conn.lock()?;
-    db::update_ai_task_run_result(
-        &conn,
-        &pending_run.id,
-        "success",
-        Some(&result_json),
-        None,
-    )
+    db::update_ai_task_run_result(&conn, &pending_run.id, "success", Some(&result_json), None)
 }
 
 async fn run_learning_dialog_reply(
     database: &Database,
     payload: serde_json::Value,
 ) -> AppResult<AiTaskRun> {
-    let payload: LearningDialogReplyPayload = serde_json::from_value(payload)
-        .map_err(|error| AppError::Validation(format!("invalid learning_dialog_reply payload: {error}")))?;
+    let payload: LearningDialogReplyPayload = serde_json::from_value(payload).map_err(|error| {
+        AppError::Validation(format!("invalid learning_dialog_reply payload: {error}"))
+    })?;
 
     if payload.topic_id.trim().is_empty() {
         return Err(AppError::Validation("topicId is required".into()));
@@ -475,7 +500,9 @@ async fn run_learning_dialog_reply(
         return Err(AppError::Validation("sourceRecordId is required".into()));
     }
     if payload.messages.is_empty() {
-        return Err(AppError::Validation("messages must contain at least one item".into()));
+        return Err(AppError::Validation(
+            "messages must contain at least one item".into(),
+        ));
     }
 
     let settings = {
@@ -506,8 +533,9 @@ async fn run_learning_dialog_reply(
 
     match response {
         Ok(result) => {
-            let result_json = serde_json::to_string(&result)
-                .map_err(|error| AppError::State(format!("failed to serialize dialog reply result: {error}")))?;
+            let result_json = serde_json::to_string(&result).map_err(|error| {
+                AppError::State(format!("failed to serialize dialog reply result: {error}"))
+            })?;
             let conn = database.conn.lock()?;
             db::update_ai_task_run_result(
                 &conn,
@@ -569,9 +597,12 @@ async fn run_model_request(
     attachments: &[Attachment],
 ) -> AppResult<LearningAnalysisResult> {
     match settings.provider.as_str() {
-        "claude" | "anthropic" => run_anthropic_learning_request(settings, title, content, source, attachments).await,
+        "claude" | "anthropic" => {
+            run_anthropic_learning_request(settings, title, content, source, attachments).await
+        }
         "openai" | "opencode" => {
-            run_openai_compatible_learning_request(settings, title, content, source, attachments).await
+            run_openai_compatible_learning_request(settings, title, content, source, attachments)
+                .await
         }
         other => Err(AppError::Validation(format!(
             "unsupported ai_provider '{other}' for phase 1"
@@ -584,7 +615,9 @@ async fn run_learning_dialog_reply_request(
     payload: &LearningDialogReplyPayload,
 ) -> AppResult<LearningDialogReplyResult> {
     match settings.provider.as_str() {
-        "claude" | "anthropic" => run_anthropic_learning_dialog_reply_request(settings, payload).await,
+        "claude" | "anthropic" => {
+            run_anthropic_learning_dialog_reply_request(settings, payload).await
+        }
         "openai" | "opencode" => {
             run_openai_compatible_learning_dialog_reply_request(settings, payload).await
         }
@@ -610,9 +643,9 @@ async fn run_anthropic_learning_request(
     }
     text.push_str(&format!("Source: {source}"));
 
-    let image_attachment = attachments
-        .iter()
-        .find(|a| a.file_type == AttachmentType::Image || a.file_type == AttachmentType::Screenshot);
+    let image_attachment = attachments.iter().find(|a| {
+        a.file_type == AttachmentType::Image || a.file_type == AttachmentType::Screenshot
+    });
 
     let system_prompt = r#"You are an AI learning assistant. Analyze the provided note and return ONLY a raw JSON object (no markdown, no code fences) with these fields:
 {
@@ -781,18 +814,13 @@ async fn run_openai_compatible_learning_request(
     let user_content = build_openai_compatible_user_content(&text, attachments, false);
 
     let resolved_model = settings.resolved_model();
-    let request_body = build_openai_compatible_request_body(
-        &resolved_model,
-        system_prompt,
-        user_content,
-    );
+    let request_body =
+        build_openai_compatible_request_body(&resolved_model, system_prompt, user_content);
 
     let endpoint = settings.endpoint();
     eprintln!(
         "[ai] sending openai-compatible request provider={} model={} endpoint={}",
-        settings.provider,
-        resolved_model,
-        endpoint
+        settings.provider, resolved_model, endpoint
     );
     let mut request = build_http_client()?
         .post(endpoint)
@@ -806,7 +834,10 @@ async fn run_openai_compatible_learning_request(
             .header("x-opencode-client", "cli")
             .header("x-opencode-session", Uuid::new_v4().to_string())
             .header("x-opencode-project", Uuid::new_v4().to_string())
-            .header("x-opencode-request", Uuid::new_v4().to_string().replace('-', ""));
+            .header(
+                "x-opencode-request",
+                Uuid::new_v4().to_string().replace('-', ""),
+            );
     }
 
     let response = request
@@ -818,9 +849,7 @@ async fn run_openai_compatible_learning_request(
     let status = response.status();
     eprintln!(
         "[ai] openai-compatible response provider={} model={} status={}",
-        settings.provider,
-        resolved_model,
-        status
+        settings.provider, resolved_model, status
     );
     let response_text = read_openai_compatible_response_body(response).await?;
     eprintln!(
@@ -877,7 +906,11 @@ Evidence from the note: {}\n",
         payload.topic_name, payload.summary, payload.evidence_text
     );
 
-    if let Some(note_example) = payload.note_example.as_deref().filter(|value| !value.trim().is_empty()) {
+    if let Some(note_example) = payload
+        .note_example
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
         prompt.push_str(&format!("Example from the note: {note_example}\n"));
     }
 
@@ -935,11 +968,8 @@ async fn run_openai_compatible_learning_dialog_reply_request(
         "text": format!("Conversation so far:\n{conversation_text}\n\nPlease continue the learning dialog with one helpful assistant reply.")
     })];
     let resolved_model = settings.resolved_model();
-    let request_body = build_openai_compatible_request_body(
-        &resolved_model,
-        &system_prompt,
-        user_content,
-    );
+    let request_body =
+        build_openai_compatible_request_body(&resolved_model, &system_prompt, user_content);
 
     let endpoint = settings.endpoint();
     let mut request = build_http_client()?
@@ -954,7 +984,10 @@ async fn run_openai_compatible_learning_dialog_reply_request(
             .header("x-opencode-client", "cli")
             .header("x-opencode-session", Uuid::new_v4().to_string())
             .header("x-opencode-project", Uuid::new_v4().to_string())
-            .header("x-opencode-request", Uuid::new_v4().to_string().replace('-', ""));
+            .header(
+                "x-opencode-request",
+                Uuid::new_v4().to_string().replace('-', ""),
+            );
     }
 
     let response = request
@@ -979,7 +1012,9 @@ async fn run_openai_compatible_learning_dialog_reply_request(
         .map_err(|error| AppError::State(format!("failed to parse AI JSON: {error}")))?;
     let raw_text = extract_openai_compatible_text(&response_json);
     if raw_text.trim().is_empty() {
-        return Err(AppError::State("AI provider returned empty dialog reply".into()));
+        return Err(AppError::State(
+            "AI provider returned empty dialog reply".into(),
+        ));
     }
 
     Ok(parse_learning_dialog_reply_result(&raw_text))
@@ -1052,22 +1087,28 @@ async fn run_anthropic_learning_dialog_reply_request(
         .unwrap_or("");
 
     if raw_text.trim().is_empty() {
-        return Err(AppError::State("AI provider returned empty dialog reply".into()));
+        return Err(AppError::State(
+            "AI provider returned empty dialog reply".into(),
+        ));
     }
 
     Ok(parse_learning_dialog_reply_result(raw_text))
 }
 
 fn extract_openai_compatible_text(response_json: &serde_json::Value) -> String {
-    if let Some(text) = response_json["response"].as_object().map(|_| {
-        extract_openai_compatible_text(&response_json["response"])
-    }).filter(|text| !text.trim().is_empty()) {
+    if let Some(text) = response_json["response"]
+        .as_object()
+        .map(|_| extract_openai_compatible_text(&response_json["response"]))
+        .filter(|text| !text.trim().is_empty())
+    {
         return text;
     }
 
-    if let Some(text) = response_json["data"].as_object().map(|_| {
-        extract_openai_compatible_text(&response_json["data"])
-    }).filter(|text| !text.trim().is_empty()) {
+    if let Some(text) = response_json["data"]
+        .as_object()
+        .map(|_| extract_openai_compatible_text(&response_json["data"]))
+        .filter(|text| !text.trim().is_empty())
+    {
         return text;
     }
 
@@ -1075,13 +1116,17 @@ fn extract_openai_compatible_text(response_json: &serde_json::Value) -> String {
         return text.to_string();
     }
 
-    if let Some(text) = response_json["output_text"].as_array().map(|parts| {
-        parts
-            .iter()
-            .filter_map(|part| part.as_str().or_else(|| part["text"].as_str()))
-            .collect::<Vec<_>>()
-            .join("\n")
-    }).filter(|text| !text.trim().is_empty()) {
+    if let Some(text) = response_json["output_text"]
+        .as_array()
+        .map(|parts| {
+            parts
+                .iter()
+                .filter_map(|part| part.as_str().or_else(|| part["text"].as_str()))
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .filter(|text| !text.trim().is_empty())
+    {
         return text;
     }
 
@@ -1154,7 +1199,10 @@ fn extract_sse_json_payload(stream_text: &str) -> Option<serde_json::Value> {
                 return Some(json);
             }
 
-            if json["response"].is_object() || json["output"].is_array() || json["choices"].is_array() {
+            if json["response"].is_object()
+                || json["output"].is_array()
+                || json["choices"].is_array()
+            {
                 last_json = Some(json);
             }
         }
@@ -1184,10 +1232,13 @@ async fn read_openai_compatible_response_body(response: reqwest::Response) -> Ap
     loop {
         let next_chunk = timeout(Duration::from_secs(15), response.chunk())
             .await
-            .map_err(|_| AppError::State("timed out while waiting for streamed AI response body".into()))?;
+            .map_err(|_| {
+                AppError::State("timed out while waiting for streamed AI response body".into())
+            })?;
 
-        let chunk = next_chunk
-            .map_err(|error| AppError::State(format!("failed to read streamed AI response: {error}")))?;
+        let chunk = next_chunk.map_err(|error| {
+            AppError::State(format!("failed to read streamed AI response: {error}"))
+        })?;
 
         let Some(chunk) = chunk else {
             break;
@@ -1201,8 +1252,9 @@ async fn read_openai_compatible_response_body(response: reqwest::Response) -> Ap
     }
 
     if let Some(json) = extract_sse_json_payload(&body) {
-        return serde_json::to_string(&json)
-            .map_err(|error| AppError::State(format!("failed to serialize streamed AI payload: {error}")));
+        return serde_json::to_string(&json).map_err(|error| {
+            AppError::State(format!("failed to serialize streamed AI payload: {error}"))
+        });
     }
 
     Ok(body)
@@ -1239,9 +1291,9 @@ fn build_openai_compatible_user_content(
         return user_content;
     }
 
-    let image_attachment = attachments
-        .iter()
-        .find(|a| a.file_type == AttachmentType::Image || a.file_type == AttachmentType::Screenshot);
+    let image_attachment = attachments.iter().find(|a| {
+        a.file_type == AttachmentType::Image || a.file_type == AttachmentType::Screenshot
+    });
     if let Some(att) = image_attachment {
         let path = Path::new(&att.local_path);
         if path.exists() {
@@ -1294,14 +1346,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn load_ai_runtime_settings_prefers_new_key_and_falls_back_to_legacy() {
+    fn load_ai_runtime_settings_uses_supplied_secure_key() {
         let conn = rusqlite::Connection::open_in_memory().expect("in-memory");
         db::run_migrations(&conn).expect("migrations");
         db::set_setting(&conn, "ai_provider", "claude").expect("provider");
         db::set_setting(&conn, "ai_model", "test-model").expect("model");
-        db::set_setting(&conn, "claude_api_key", "legacy-key").expect("legacy key");
 
-        let settings = load_ai_runtime_settings(&conn).expect("settings");
+        let settings = load_ai_runtime_settings_with_api_key(&conn, Some("legacy-key".into()))
+            .expect("settings");
         assert_eq!(settings.provider, "claude");
         assert_eq!(settings.model, "test-model");
         assert_eq!(settings.api_key, "legacy-key");
@@ -1316,9 +1368,15 @@ mod tests {
         db::set_setting(&conn, "ai_base_url", "http://127.0.0.1:3000/v1/messages")
             .expect("base url");
 
-        let settings = load_ai_runtime_settings(&conn).expect("settings");
-        assert_eq!(settings.base_url.as_deref(), Some("http://127.0.0.1:3000/v1/messages"));
-        assert!(settings.api_key.is_empty(), "custom base_url should allow empty api key");
+        let settings = load_ai_runtime_settings_with_api_key(&conn, None).expect("settings");
+        assert_eq!(
+            settings.base_url.as_deref(),
+            Some("http://127.0.0.1:3000/v1/messages")
+        );
+        assert!(
+            settings.api_key.is_empty(),
+            "custom base_url should allow empty api key"
+        );
     }
 
     #[test]
@@ -1377,7 +1435,10 @@ mod tests {
             ]
         });
 
-        assert_eq!(extract_openai_compatible_text(&response_json), "{\"summary\":\"done\"}");
+        assert_eq!(
+            extract_openai_compatible_text(&response_json),
+            "{\"summary\":\"done\"}"
+        );
     }
 
     #[test]
@@ -1434,11 +1495,8 @@ mod tests {
             created_at: Utc::now(),
         }];
 
-        let user_content = build_openai_compatible_user_content(
-            "Title: Decorator note",
-            &attachments,
-            false,
-        );
+        let user_content =
+            build_openai_compatible_user_content("Title: Decorator note", &attachments, false);
 
         assert_eq!(user_content.len(), 1);
         assert_eq!(user_content[0]["type"], "input_text");
@@ -1495,12 +1553,10 @@ mod tests {
 
     #[test]
     fn learning_dialog_reply_wraps_plain_text_reply() {
-        let result = parse_learning_dialog_reply_result("你已经抓到了装饰器在监控埋点里的核心作用。");
+        let result =
+            parse_learning_dialog_reply_result("你已经抓到了装饰器在监控埋点里的核心作用。");
 
-        assert_eq!(
-            result.reply,
-            "你已经抓到了装饰器在监控埋点里的核心作用。"
-        );
+        assert_eq!(result.reply, "你已经抓到了装饰器在监控埋点里的核心作用。");
     }
 
     #[test]
@@ -1538,11 +1594,13 @@ mod tests {
         assert_eq!(topics.len(), 1);
         assert_eq!(topics[0].name, "Python 装饰器");
         assert_eq!(
-            topics[0].mastery_level,
-            "candidate",
+            topics[0].mastery_level, "candidate",
             "learning analysis must not mark confirmed understanding before dialog"
         );
-        assert_eq!(topics[0].evidence_text, "已能结合 span 装饰器理解监控场景中的用法");
+        assert_eq!(
+            topics[0].evidence_text,
+            "已能结合 span 装饰器理解监控场景中的用法"
+        );
     }
 
     #[test]
@@ -1610,7 +1668,10 @@ mod tests {
 
         let topics = db::get_knowledge_topics_for_record(&conn, &second_record.id).expect("topics");
         assert_eq!(topics.len(), 1);
-        assert_eq!(topics[0].evidence_text, "新笔记中出现了另一个 span 装饰器用例。");
+        assert_eq!(
+            topics[0].evidence_text,
+            "新笔记中出现了另一个 span 装饰器用例。"
+        );
     }
 
     #[test]
@@ -1639,12 +1700,8 @@ mod tests {
         };
         let result_json = serde_json::to_string(&result).expect("serialize");
 
-        let request = build_learning_analysis_ai_result_request(
-            "record-1",
-            &settings,
-            &result,
-            &result_json,
-        );
+        let request =
+            build_learning_analysis_ai_result_request("record-1", &settings, &result, &result_json);
 
         assert_eq!(request.record_id, "record-1");
         assert_eq!(
@@ -1676,13 +1733,9 @@ mod tests {
         )
         .expect("record");
 
-        let topic = db::upsert_knowledge_topic(
-            &conn,
-            "OKR 执行理解",
-            "候选知识，待确认",
-            "candidate",
-        )
-        .expect("topic");
+        let topic =
+            db::upsert_knowledge_topic(&conn, "OKR 执行理解", "候选知识，待确认", "candidate")
+                .expect("topic");
 
         let payload = crate::models::LearningConversationPayload {
             topic_id: topic.id.clone(),
@@ -1723,13 +1776,9 @@ mod tests {
         )
         .expect("record");
 
-        let topic = db::upsert_knowledge_topic(
-            &conn,
-            "Python 装饰器",
-            "候选知识，待确认",
-            "candidate",
-        )
-        .expect("topic");
+        let topic =
+            db::upsert_knowledge_topic(&conn, "Python 装饰器", "候选知识，待确认", "candidate")
+                .expect("topic");
 
         let payload = crate::models::LearningConversationPayload {
             topic_id: topic.id.clone(),
@@ -1770,13 +1819,9 @@ mod tests {
         )
         .expect("record");
 
-        let topic = db::upsert_knowledge_topic(
-            &conn,
-            "应用监控埋点",
-            "候选知识，待确认",
-            "candidate",
-        )
-        .expect("topic");
+        let topic =
+            db::upsert_knowledge_topic(&conn, "应用监控埋点", "候选知识，待确认", "candidate")
+                .expect("topic");
 
         let payload = crate::models::LearningConversationPayload {
             topic_id: topic.id.clone(),
@@ -1817,13 +1862,8 @@ mod tests {
         )
         .expect("record");
 
-        let topic = db::upsert_knowledge_topic(
-            &conn,
-            "刷新疑问",
-            "候选知识，待确认",
-            "candidate",
-        )
-        .expect("topic");
+        let topic = db::upsert_knowledge_topic(&conn, "刷新疑问", "候选知识，待确认", "candidate")
+            .expect("topic");
 
         let payload = crate::models::LearningConversationPayload {
             topic_id: topic.id.clone(),

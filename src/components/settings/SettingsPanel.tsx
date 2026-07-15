@@ -8,7 +8,7 @@ import { THEME_OPTIONS } from "../../lib/theme";
 interface SettingDef {
   label: string;
   description: string;
-  type: "text" | "boolean" | "select" | "shortcut";
+  type: "text" | "boolean" | "select" | "shortcut" | "api-key";
   options?: { label: string; value: string }[];
   category: "general" | "capture" | "ai" | "notification" | "pet" | "overlay";
   placeholder?: string;
@@ -114,9 +114,8 @@ const SETTING_DEFS: Record<string, SettingDef> = {
   },
   ai_api_key: {
     label: "API 密钥",
-    description: "AI 服务的 API 密钥",
-    type: "text",
-    mask: true,
+    description: "仅保存在系统凭据管理器中，不会写入应用数据库",
+    type: "api-key",
     placeholder: "sk-…",
     category: "ai",
   },
@@ -475,6 +474,73 @@ function ShortcutInput({
   );
 }
 
+function ApiKeyRow({
+  configured,
+  loading,
+  onSave,
+  onClear,
+}: {
+  configured: boolean;
+  loading: boolean;
+  onSave: (value: string) => Promise<boolean>;
+  onClear: () => Promise<boolean>;
+}) {
+  const [value, setValue] = useState("");
+
+  const save = async () => {
+    if (await onSave(value)) {
+      setValue("");
+    }
+  };
+
+  return (
+    <div className="group flex flex-row items-center justify-between gap-4 rounded-xl px-4 py-3 transition hover:bg-white/[3%]">
+      <div className="min-w-0 flex-1">
+        <p className="text-sm font-medium text-text">API 密钥</p>
+        <p className="mt-0.5 text-[11px] leading-4 text-text0">
+          仅保存在系统凭据管理器中，不会写入应用数据库
+        </p>
+        <p className={`mt-1 text-[10px] ${configured ? "text-secondary" : "text-text-muted"}`}>
+          {configured ? "已安全配置" : "尚未配置"}
+        </p>
+      </div>
+      <div className="flex shrink-0 items-center gap-2">
+        <input
+          type="password"
+          value={value}
+          onChange={(event) => setValue(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && value.trim()) {
+              event.preventDefault();
+              void save();
+            }
+          }}
+          placeholder={configured ? "输入新密钥以替换" : "sk-…"}
+          className="w-40 rounded-lg border border-border bg-surface-2/80 px-3 py-1.5 text-xs text-text outline-none transition placeholder:text-text-muted hover:border-white/20 focus:border-primary/40 focus:ring-2 focus:ring-primary/20"
+        />
+        <button
+          type="button"
+          disabled={loading || !value.trim()}
+          onClick={() => void save()}
+          className="rounded-lg bg-primary/15 px-2.5 py-1.5 text-xs font-medium text-primary transition hover:bg-primary/25 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          保存
+        </button>
+        {configured && (
+          <button
+            type="button"
+            disabled={loading}
+            onClick={() => void onClear()}
+            className="rounded-lg px-2.5 py-1.5 text-xs text-text0 transition hover:bg-danger/10 hover:text-danger disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            清除
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Setting row ───────────────────────────────────────────────────────
 
 function SettingRow({
@@ -611,10 +677,13 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
     loading,
     error,
     shortcutErrors,
+    aiApiKeyConfigured,
     loadSettings,
     setSetting,
     setShortcut,
     resetSettings,
+    setAiApiKey,
+    clearAiApiKey,
     clearShortcutError,
   } = useSettingsStore();
 
@@ -812,15 +881,33 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
 
                   {/* Setting rows */}
                   <div className="-mx-2 rounded-xl border border-border bg-surface/40">
-                    {entries.map(({ def, key }) => (
-                      <SettingRow
-                        key={key}
-                        def={def}
-                        value={settings[key] ?? ""}
-                        error={shortcutErrors[key]}
-                        onChange={(val) => void handleChange(key, val)}
-                      />
-                    ))}
+                    {entries.map(({ def, key }) =>
+                      def.type === "api-key" ? (
+                        <ApiKeyRow
+                          key={key}
+                          configured={aiApiKeyConfigured}
+                          loading={loading}
+                          onSave={async (value) => {
+                            const saved = await setAiApiKey(value);
+                            if (saved) setSuccessMsg("API 密钥已安全保存");
+                            return saved;
+                          }}
+                          onClear={async () => {
+                            const cleared = await clearAiApiKey();
+                            if (cleared) setSuccessMsg("API 密钥已清除");
+                            return cleared;
+                          }}
+                        />
+                      ) : (
+                        <SettingRow
+                          key={key}
+                          def={def}
+                          value={settings[key] ?? ""}
+                          error={shortcutErrors[key]}
+                          onChange={(val) => void handleChange(key, val)}
+                        />
+                      ),
+                    )}
                   </div>
 
                   {/* Unknown settings from backend */}

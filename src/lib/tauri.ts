@@ -211,6 +211,22 @@ export async function resetSettings(): Promise<void> {
   return invoke<void>("reset_settings");
 }
 
+export interface AiApiKeyStatus {
+  configured: boolean;
+}
+
+export async function getAiApiKeyStatus(): Promise<AiApiKeyStatus> {
+  return invoke<AiApiKeyStatus>("get_ai_api_key_status");
+}
+
+export async function setAiApiKey(value: string): Promise<void> {
+  return invoke<void>("set_ai_api_key", { value });
+}
+
+export async function clearAiApiKey(): Promise<void> {
+  return invoke<void>("clear_ai_api_key");
+}
+
 // ── Screenshot capture ──────────────────────────────────────────────
 
 export async function captureScreenshot(

@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
 
+use crate::credentials;
 use crate::db::{self, Database};
 use crate::errors::{AppError, AppResult};
 use crate::models::{
@@ -37,6 +38,11 @@ pub struct RecordSortOrder {
 
 pub const DATA_CHANGED_EVENT: &str = "data-changed";
 pub const SETTINGS_CHANGED_EVENT: &str = "settings-changed";
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AiApiKeyStatus {
+    pub configured: bool,
+}
 
 fn emit_data_changed(app: &AppHandle) -> AppResult<()> {
     app.emit(DATA_CHANGED_EVENT, ())
@@ -78,7 +84,13 @@ fn import_files_impl(
     )?;
 
     for (index, attachment_id) in attachment_ids.iter().enumerate() {
-        db::link_attachment(conn, &record.id, attachment_id, AttachmentRole::Main, index as i64)?;
+        db::link_attachment(
+            conn,
+            &record.id,
+            attachment_id,
+            AttachmentRole::Main,
+            index as i64,
+        )?;
     }
 
     if request.create_as_task {
@@ -129,7 +141,9 @@ pub fn import_files(
     request: ImportFilesRequest,
 ) -> AppResult<Record> {
     if request.paths.is_empty() {
-        return Err(AppError::Validation("at least one file path is required".into()));
+        return Err(AppError::Validation(
+            "at least one file path is required".into(),
+        ));
     }
 
     let record = {
@@ -146,9 +160,10 @@ pub fn import_clipboard_image(
     database: State<'_, Database>,
     request: ClipboardImageRequest,
 ) -> AppResult<Record> {
-    let image = RgbaImage::from_raw(request.width, request.height, request.rgba).ok_or_else(|| {
-        AppError::Validation("clipboard image buffer does not match width/height".into())
-    })?;
+    let image =
+        RgbaImage::from_raw(request.width, request.height, request.rgba).ok_or_else(|| {
+            AppError::Validation("clipboard image buffer does not match width/height".into())
+        })?;
 
     let file_path = save_rgba_image(&database.attachments_dir, &image)?;
     let path_string = file_path.to_string_lossy().into_owned();
@@ -169,11 +184,7 @@ pub fn import_clipboard_image(
 }
 
 #[tauri::command]
-pub fn save_clipboard_image(
-    rgba: Vec<u8>,
-    width: u32,
-    height: u32,
-) -> AppResult<String> {
+pub fn save_clipboard_image(rgba: Vec<u8>, width: u32, height: u32) -> AppResult<String> {
     let image = RgbaImage::from_raw(width, height, rgba).ok_or_else(|| {
         AppError::Validation("clipboard image buffer does not match width/height".into())
     })?;
@@ -195,7 +206,9 @@ pub fn add_attachments_to_record(
     paths: Vec<String>,
 ) -> AppResult<Record> {
     if paths.is_empty() {
-        return Err(AppError::Validation("at least one file path is required".into()));
+        return Err(AppError::Validation(
+            "at least one file path is required".into(),
+        ));
     }
 
     let record = {
@@ -327,7 +340,8 @@ pub fn list_records(
     filter: Option<RecordFilter>,
 ) -> AppResult<Vec<RecordWithRelations>> {
     let conn = database.conn.lock()?;
-    let tag_ids = filter.as_ref()
+    let tag_ids = filter
+        .as_ref()
         .and_then(|f| f.tag_ids.clone())
         .unwrap_or_default();
     let records = db::list_records_filtered(&conn, filter.as_ref(), &tag_ids)?;
@@ -357,9 +371,7 @@ pub fn get_record_detail(
 }
 
 #[tauri::command]
-pub fn list_knowledge_memory(
-    database: State<'_, Database>,
-) -> AppResult<Vec<KnowledgeMemoryItem>> {
+pub fn list_knowledge_memory(database: State<'_, Database>) -> AppResult<Vec<KnowledgeMemoryItem>> {
     let conn = database.conn.lock()?;
     db::list_knowledge_memory(&conn)
 }
@@ -370,7 +382,9 @@ pub fn get_knowledge_memory_detail(
     topic_id: String,
 ) -> AppResult<KnowledgeMemoryDetail> {
     if topic_id.trim().is_empty() {
-        return Err(AppError::Validation("knowledge topic id is required".into()));
+        return Err(AppError::Validation(
+            "knowledge topic id is required".into(),
+        ));
     }
     let conn = database.conn.lock()?;
     db::get_knowledge_memory_detail(&conn, &topic_id)
@@ -497,7 +511,11 @@ pub fn update_task_due_at(
 }
 
 #[tauri::command]
-pub fn remove_task(app: AppHandle, database: State<'_, Database>, task_id: String) -> AppResult<Task> {
+pub fn remove_task(
+    app: AppHandle,
+    database: State<'_, Database>,
+    task_id: String,
+) -> AppResult<Task> {
     if task_id.trim().is_empty() {
         return Err(AppError::Validation("task id is required".into()));
     }
@@ -546,7 +564,10 @@ pub fn list_unfinished_tasks(database: State<'_, Database>) -> AppResult<Vec<Unf
 #[tauri::command]
 pub fn reorder_tasks(database: State<'_, Database>, order: Vec<TaskSortOrder>) -> AppResult<()> {
     let conn = database.conn.lock()?;
-    let order_tuples: Vec<(String, i64)> = order.iter().map(|o| (o.task_id.clone(), o.sort_order)).collect();
+    let order_tuples: Vec<(String, i64)> = order
+        .iter()
+        .map(|o| (o.task_id.clone(), o.sort_order))
+        .collect();
     db::reorder_tasks(&conn, &order_tuples)
 }
 
@@ -579,7 +600,11 @@ pub fn list_folders(database: State<'_, Database>) -> AppResult<Vec<Folder>> {
 }
 
 #[tauri::command]
-pub fn create_folder(app: AppHandle, database: State<'_, Database>, name: String) -> AppResult<Folder> {
+pub fn create_folder(
+    app: AppHandle,
+    database: State<'_, Database>,
+    name: String,
+) -> AppResult<Folder> {
     if name.trim().is_empty() {
         return Err(AppError::Validation("folder name is required".into()));
     }
@@ -592,7 +617,12 @@ pub fn create_folder(app: AppHandle, database: State<'_, Database>, name: String
 }
 
 #[tauri::command]
-pub fn rename_folder(app: AppHandle, database: State<'_, Database>, id: String, name: String) -> AppResult<Folder> {
+pub fn rename_folder(
+    app: AppHandle,
+    database: State<'_, Database>,
+    id: String,
+    name: String,
+) -> AppResult<Folder> {
     if id.trim().is_empty() {
         return Err(AppError::Validation("folder id is required".into()));
     }
@@ -645,9 +675,13 @@ pub struct FolderSortOrder {
 }
 
 #[tauri::command]
-pub fn reorder_folders(database: State<'_, Database>, order: Vec<FolderSortOrder>) -> AppResult<()> {
+pub fn reorder_folders(
+    database: State<'_, Database>,
+    order: Vec<FolderSortOrder>,
+) -> AppResult<()> {
     let conn = database.conn.lock()?;
-    let order_tuples: Vec<(String, i64)> = order.iter().map(|o| (o.id.clone(), o.sort_order)).collect();
+    let order_tuples: Vec<(String, i64)> =
+        order.iter().map(|o| (o.id.clone(), o.sort_order)).collect();
     db::reorder_folders(&conn, &order_tuples)
 }
 
@@ -667,7 +701,9 @@ pub fn create_tag(
         .conn
         .lock()
         .map_err(|e| e.to_string())
-        .and_then(|conn| db::create_tag(&conn, name.trim(), color.as_deref()).map_err(|e| e.to_string()))?;
+        .and_then(|conn| {
+            db::create_tag(&conn, name.trim(), color.as_deref()).map_err(|e| e.to_string())
+        })?;
     emit_data_changed(&app).map_err(|e| e.to_string())?;
     Ok(tag)
 }
@@ -710,11 +746,7 @@ pub fn update_tag(
 }
 
 #[tauri::command]
-pub fn delete_tag(
-    app: AppHandle,
-    database: State<'_, Database>,
-    id: String,
-) -> Result<(), String> {
+pub fn delete_tag(app: AppHandle, database: State<'_, Database>, id: String) -> Result<(), String> {
     if id.trim().is_empty() {
         return Err("tag id is required".to_string());
     }
@@ -741,7 +773,9 @@ pub fn set_record_tags(
         .conn
         .lock()
         .map_err(|e| e.to_string())
-        .and_then(|conn| db::set_record_tags(&conn, &record_id, &tag_ids).map_err(|e| e.to_string()))?;
+        .and_then(|conn| {
+            db::set_record_tags(&conn, &record_id, &tag_ids).map_err(|e| e.to_string())
+        })?;
     emit_data_changed(&app).map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -827,8 +861,47 @@ pub fn update_setting(
     if key.trim().is_empty() {
         return Err(AppError::Validation("setting key is required".into()));
     }
+    if matches!(key.as_str(), "ai_api_key" | "claude_api_key") {
+        return Err(AppError::Validation(
+            "AI API keys must be managed through secure credential storage".into(),
+        ));
+    }
     let conn = database.conn.lock()?;
     db::set_setting(&conn, &key, &value)?;
+    emit_settings_changed(&app)?;
+    Ok(())
+}
+
+/// Return only whether an AI API key is stored in the OS credential manager.
+#[tauri::command]
+pub fn get_ai_api_key_status() -> AppResult<AiApiKeyStatus> {
+    Ok(AiApiKeyStatus {
+        configured: credentials::get_ai_api_key()?.is_some(),
+    })
+}
+
+/// Store the AI API key in the OS credential manager, never in SQLite.
+#[tauri::command]
+pub fn set_ai_api_key(
+    app: AppHandle,
+    database: State<'_, Database>,
+    value: String,
+) -> AppResult<()> {
+    credentials::set_ai_api_key(&value)?;
+    let conn = database.conn.lock()?;
+    db::delete_setting(&conn, "ai_api_key")?;
+    db::delete_setting(&conn, "claude_api_key")?;
+    emit_settings_changed(&app)?;
+    Ok(())
+}
+
+/// Explicitly remove the AI API key from the OS credential manager.
+#[tauri::command]
+pub fn clear_ai_api_key(app: AppHandle, database: State<'_, Database>) -> AppResult<()> {
+    credentials::clear_ai_api_key()?;
+    let conn = database.conn.lock()?;
+    db::delete_setting(&conn, "ai_api_key")?;
+    db::delete_setting(&conn, "claude_api_key")?;
     emit_settings_changed(&app)?;
     Ok(())
 }
@@ -876,28 +949,35 @@ pub fn set_shortcut(
 
             // Register the new shortcut first; if it conflicts the old one
             // stays registered so the user isn't left without a working shortcut.
-            match app.global_shortcut().on_shortcut(
-                new_shortcut,
-                |app, _shortcut, event| {
+            match app
+                .global_shortcut()
+                .on_shortcut(new_shortcut, |app, _shortcut, event| {
                     if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
                         let _ = windows::show_quick_input(app);
                     }
-                },
-            ) {
+                }) {
                 Ok(_) => {
                     // New shortcut registered — unregister the old one (best-effort).
                     if let Ok(old) = old_accel.parse::<Shortcut>() {
                         let _ = app.global_shortcut().unregister(old);
                     }
                     // Persist to DB and update in-memory state.
-                    persist_and_update(&database, &shortcut_state, "quick_capture_shortcut", &accelerator);
+                    persist_and_update(
+                        &database,
+                        &shortcut_state,
+                        "quick_capture_shortcut",
+                        &accelerator,
+                    );
                     let _ = emit_settings_changed(&app);
-                    SetShortcutResult { ok: true, error: None }
+                    SetShortcutResult {
+                        ok: true,
+                        error: None,
+                    }
                 }
                 Err(e) => SetShortcutResult {
                     ok: false,
                     error: Some(e.to_string()),
-                }
+                },
             }
         }
         "screenshot_shortcut" => {
@@ -907,21 +987,28 @@ pub fn set_shortcut(
                 .map(|g| g.clone())
                 .unwrap_or_default();
 
-            match app.global_shortcut().on_shortcut(
-                new_shortcut,
-                |app, _shortcut, event| {
+            match app
+                .global_shortcut()
+                .on_shortcut(new_shortcut, |app, _shortcut, event| {
                     if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
                         let _ = windows::show_window(app, windows::SCREENSHOT_OVERLAY_LABEL);
                     }
-                },
-            ) {
+                }) {
                 Ok(_) => {
                     if let Ok(old) = old_accel.parse::<Shortcut>() {
                         let _ = app.global_shortcut().unregister(old);
                     }
-                    persist_and_update(&database, &shortcut_state, "screenshot_shortcut", &accelerator);
+                    persist_and_update(
+                        &database,
+                        &shortcut_state,
+                        "screenshot_shortcut",
+                        &accelerator,
+                    );
                     let _ = emit_settings_changed(&app);
-                    SetShortcutResult { ok: true, error: None }
+                    SetShortcutResult {
+                        ok: true,
+                        error: None,
+                    }
                 }
                 Err(e) => SetShortcutResult {
                     ok: false,
@@ -1013,9 +1100,9 @@ pub async fn request_ai_enhancement(
     };
 
     let task_run = crate::ai::run_task(&database, request).await?;
-    let source_record_id = task_run
-        .source_record_id
-        .ok_or_else(|| AppError::State("learning analysis did not return a source_record_id".into()))?;
+    let source_record_id = task_run.source_record_id.ok_or_else(|| {
+        AppError::State("learning analysis did not return a source_record_id".into())
+    })?;
 
     let conn = database.conn.lock()?;
     db::get_ai_results_for_record(&conn, &source_record_id)?

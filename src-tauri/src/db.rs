@@ -16,9 +16,9 @@ use crate::models::{
     CreateAiResultRequest, CreateAttachmentRequest, CreateRecordRequest, CreateTaskRequest, Folder,
     KnowledgeEvidence, KnowledgeMemoryDetail, KnowledgeMemoryEvidence, KnowledgeMemoryItem,
     KnowledgeTopic, LearningDialogSession, Record, RecordAttachmentLink, RecordFilter,
-    RecordKnowledgeTopic, RecordSource, RecordStatus, RecordType,
-    RecordWithRelations, RepeatRule, SettingsEntry, Tag, Task, TaskFilter, TaskPriority,
-    TaskStatus, UnfinishedTaskItem, UpdateRecordRequest,
+    RecordKnowledgeTopic, RecordSource, RecordStatus, RecordType, RecordWithRelations, RepeatRule,
+    SettingsEntry, Tag, Task, TaskFilter, TaskPriority, TaskStatus, UnfinishedTaskItem,
+    UpdateRecordRequest,
 };
 
 pub struct Database {
@@ -232,7 +232,9 @@ pub fn run_migrations(conn: &Connection) -> AppResult<()> {
 
     // ── Migration: add folder_id column to tasks if missing ──
     if !tasks_columns.iter().any(|c| c == "folder_id") {
-        conn.execute_batch("ALTER TABLE tasks ADD COLUMN folder_id TEXT REFERENCES folders(id) ON DELETE CASCADE")?;
+        conn.execute_batch(
+            "ALTER TABLE tasks ADD COLUMN folder_id TEXT REFERENCES folders(id) ON DELETE CASCADE",
+        )?;
     }
 
     Ok(())
@@ -300,7 +302,11 @@ pub fn list_records(conn: &Connection) -> AppResult<Vec<Record>> {
     Ok(records)
 }
 
-pub fn update_record(conn: &Connection, id: &str, update: UpdateRecordRequest) -> AppResult<Record> {
+pub fn update_record(
+    conn: &Connection,
+    id: &str,
+    update: UpdateRecordRequest,
+) -> AppResult<Record> {
     let current = get_record(conn, id)?;
     let updated = Record {
         title: update.title.or(current.title),
@@ -431,7 +437,11 @@ pub fn delete_record_physical(conn: &Connection, record_id: &str) -> AppResult<(
 pub fn insert_task(conn: &Connection, request: CreateTaskRequest) -> AppResult<Task> {
     // Assign sort_order: use max existing + 1, or 0 if table empty
     let max_sort: i64 = conn
-        .query_row("SELECT COALESCE(MAX(sort_order), -1) FROM tasks", [], |row| row.get(0))
+        .query_row(
+            "SELECT COALESCE(MAX(sort_order), -1) FROM tasks",
+            [],
+            |row| row.get(0),
+        )
         .unwrap_or(-1);
     let sort_order = max_sort + 1;
 
@@ -569,22 +579,26 @@ pub fn update_task_repeat_rule(
 ///
 /// `due_at` 为 `None` 时清除截止日期（不设期限）。
 /// 返回更新后的 Task 结构体，供前端乐观更新使用。
-pub fn update_task_due_at(conn: &Connection, id: &str, due_at: Option<DateTime<Utc>>) -> AppResult<Task> {
+pub fn update_task_due_at(
+    conn: &Connection,
+    id: &str,
+    due_at: Option<DateTime<Utc>>,
+) -> AppResult<Task> {
     let mut task = get_task(conn, id)?;
     task.due_at = due_at;
 
     conn.execute(
         "UPDATE tasks SET due_at = ?2 WHERE id = ?1",
-        params![
-            task.id,
-            task.due_at.map(|value| value.to_rfc3339()),
-        ],
+        params![task.id, task.due_at.map(|value| value.to_rfc3339()),],
     )?;
 
     Ok(task)
 }
 
-pub fn insert_attachment(conn: &Connection, request: CreateAttachmentRequest) -> AppResult<Attachment> {
+pub fn insert_attachment(
+    conn: &Connection,
+    request: CreateAttachmentRequest,
+) -> AppResult<Attachment> {
     let attachment = Attachment {
         id: Uuid::new_v4().to_string(),
         file_type: request.file_type,
@@ -651,7 +665,10 @@ pub fn link_attachment(
     Ok(link)
 }
 
-pub fn get_record_attachments(conn: &Connection, record_id: &str) -> AppResult<Vec<RecordAttachmentLink>> {
+pub fn get_record_attachments(
+    conn: &Connection,
+    record_id: &str,
+) -> AppResult<Vec<RecordAttachmentLink>> {
     let mut stmt = conn.prepare(
         "SELECT id, record_id, attachment_id, role, sort_order FROM record_attachments WHERE record_id = ?1 ORDER BY sort_order ASC, rowid ASC",
     )?;
@@ -1062,9 +1079,7 @@ pub fn get_setting_or(conn: &Connection, key: &str, default: &str) -> AppResult<
 }
 
 pub fn get_all_settings(conn: &Connection) -> AppResult<Vec<SettingsEntry>> {
-    let mut stmt = conn.prepare(
-        "SELECT key, value FROM settings ORDER BY key ASC",
-    )?;
+    let mut stmt = conn.prepare("SELECT key, value FROM settings ORDER BY key ASC")?;
     let rows = stmt.query_map([], |row| {
         Ok(SettingsEntry {
             key: row.get(0)?,
@@ -1077,27 +1092,83 @@ pub fn get_all_settings(conn: &Connection) -> AppResult<Vec<SettingsEntry>> {
 
 pub fn default_settings() -> Vec<SettingsEntry> {
     vec![
-        SettingsEntry { key: "language".into(), value: "zh-CN".into() },
-        SettingsEntry { key: "auto_ocr".into(), value: "false".into() },
-        SettingsEntry { key: "screenshot_quality".into(), value: "2".into() },
-        SettingsEntry { key: "quick_capture_shortcut".into(), value: "Alt+Shift+R".into() },
-        SettingsEntry { key: "screenshot_shortcut".into(), value: "Alt+Shift+S".into() },
-        SettingsEntry { key: "ai_provider".into(), value: "claude".into() },
-        SettingsEntry { key: "ai_model".into(), value: "claude-sonnet-4-20250514".into() },
-        SettingsEntry { key: "ai_model_variant".into(), value: "default".into() },
-        SettingsEntry { key: "ai_auto_analyze".into(), value: "false".into() },
-        SettingsEntry { key: "product_mode".into(), value: "free".into() },
-        SettingsEntry { key: "ai_api_key".into(), value: "".into() },
-        SettingsEntry { key: "ai_base_url".into(), value: "".into() },
-        SettingsEntry { key: "reminder_channel".into(), value: "pet-bubble".into() },
-        SettingsEntry { key: "pet_always_on_top".into(), value: "true".into() },
-        SettingsEntry { key: "pet_visible".into(), value: "true".into() },
+        SettingsEntry {
+            key: "language".into(),
+            value: "zh-CN".into(),
+        },
+        SettingsEntry {
+            key: "auto_ocr".into(),
+            value: "false".into(),
+        },
+        SettingsEntry {
+            key: "screenshot_quality".into(),
+            value: "2".into(),
+        },
+        SettingsEntry {
+            key: "quick_capture_shortcut".into(),
+            value: "Alt+Shift+R".into(),
+        },
+        SettingsEntry {
+            key: "screenshot_shortcut".into(),
+            value: "Alt+Shift+S".into(),
+        },
+        SettingsEntry {
+            key: "ai_provider".into(),
+            value: "claude".into(),
+        },
+        SettingsEntry {
+            key: "ai_model".into(),
+            value: "claude-sonnet-4-20250514".into(),
+        },
+        SettingsEntry {
+            key: "ai_model_variant".into(),
+            value: "default".into(),
+        },
+        SettingsEntry {
+            key: "ai_auto_analyze".into(),
+            value: "false".into(),
+        },
+        SettingsEntry {
+            key: "product_mode".into(),
+            value: "free".into(),
+        },
+        SettingsEntry {
+            key: "ai_base_url".into(),
+            value: "".into(),
+        },
+        SettingsEntry {
+            key: "reminder_channel".into(),
+            value: "pet-bubble".into(),
+        },
+        SettingsEntry {
+            key: "pet_always_on_top".into(),
+            value: "true".into(),
+        },
+        SettingsEntry {
+            key: "pet_visible".into(),
+            value: "true".into(),
+        },
         // ── Todo-overlay settings ──
-        SettingsEntry { key: "todo_overlay_visibility_mode".into(), value: "unfinished-only".into() },
-        SettingsEntry { key: "todo_overlay_always_on_top".into(), value: "true".into() },
-        SettingsEntry { key: "todo_overlay_opacity".into(), value: "0.8".into() },
-        SettingsEntry { key: "todo_overlay_auto_collapse".into(), value: "false".into() },
-        SettingsEntry { key: "todo_overlay_open_behavior".into(), value: "drawer".into() },
+        SettingsEntry {
+            key: "todo_overlay_visibility_mode".into(),
+            value: "unfinished-only".into(),
+        },
+        SettingsEntry {
+            key: "todo_overlay_always_on_top".into(),
+            value: "true".into(),
+        },
+        SettingsEntry {
+            key: "todo_overlay_opacity".into(),
+            value: "0.8".into(),
+        },
+        SettingsEntry {
+            key: "todo_overlay_auto_collapse".into(),
+            value: "false".into(),
+        },
+        SettingsEntry {
+            key: "todo_overlay_open_behavior".into(),
+            value: "drawer".into(),
+        },
     ]
 }
 
@@ -1109,13 +1180,24 @@ pub fn get_all_settings_with_defaults(conn: &Connection) -> AppResult<Vec<Settin
         .collect();
 
     for entry in persisted {
-        merged.insert(entry.key, entry.value);
+        if !is_sensitive_setting_key(&entry.key) {
+            merged.insert(entry.key, entry.value);
+        }
     }
 
     Ok(merged
         .into_iter()
         .map(|(key, value)| SettingsEntry { key, value })
         .collect())
+}
+
+pub fn delete_setting(conn: &Connection, key: &str) -> AppResult<()> {
+    conn.execute("DELETE FROM settings WHERE key = ?1", params![key])?;
+    Ok(())
+}
+
+fn is_sensitive_setting_key(key: &str) -> bool {
+    matches!(key, "ai_api_key" | "claude_api_key")
 }
 
 pub fn delete_all_settings(conn: &Connection) -> AppResult<()> {
@@ -1173,7 +1255,10 @@ pub fn list_records_filtered(
         sql.push_str(&format!(
             " AND (r.title LIKE ?{idx} OR r.content LIKE ?{idx})"
         ));
-        let escaped = q.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+        let escaped = q
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_");
         param_values.push(format!("%{escaped}%"));
     }
 
@@ -1201,8 +1286,10 @@ pub fn list_records_filtered(
     }
 
     let mut stmt = conn.prepare(&sql)?;
-    let param_refs: Vec<&dyn rusqlite::types::ToSql> =
-        param_values.iter().map(|s| s as &dyn rusqlite::types::ToSql).collect();
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> = param_values
+        .iter()
+        .map(|s| s as &dyn rusqlite::types::ToSql)
+        .collect();
     let rows = stmt.query_map(rusqlite::params_from_iter(param_refs), map_record)?;
     let records = rows.collect::<Result<Vec<_>, _>>()?;
     Ok(records)
@@ -1231,8 +1318,10 @@ pub fn list_tasks_filtered(conn: &Connection, filter: Option<&TaskFilter>) -> Ap
     sql.push_str(" ORDER BY COALESCE(due_at, ''), rowid DESC");
 
     let mut stmt = conn.prepare(&sql)?;
-    let param_refs: Vec<&dyn rusqlite::types::ToSql> =
-        param_values.iter().map(|s| s as &dyn rusqlite::types::ToSql).collect();
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> = param_values
+        .iter()
+        .map(|s| s as &dyn rusqlite::types::ToSql)
+        .collect();
     let rows = stmt.query_map(rusqlite::params_from_iter(param_refs), map_task)?;
     let tasks = rows.collect::<Result<Vec<_>, _>>()?;
     Ok(tasks)
@@ -1248,7 +1337,10 @@ pub fn get_task_for_record(conn: &Connection, record_id: &str) -> AppResult<Opti
     .map_err(Into::into)
 }
 
-pub fn get_attachments_for_record(conn: &Connection, record_id: &str) -> AppResult<Vec<Attachment>> {
+pub fn get_attachments_for_record(
+    conn: &Connection,
+    record_id: &str,
+) -> AppResult<Vec<Attachment>> {
     let mut stmt = conn.prepare(
         "SELECT a.id, a.file_type, a.mime_type, a.local_path, a.thumbnail_path, a.ocr_text, a.hash, a.created_at
          FROM attachments a
@@ -1457,7 +1549,11 @@ pub fn list_folders(conn: &Connection) -> AppResult<Vec<Folder>> {
 pub fn create_folder(conn: &Connection, name: &str) -> AppResult<Folder> {
     let now = Utc::now();
     let max_sort: i64 = conn
-        .query_row("SELECT COALESCE(MAX(sort_order), -1) FROM folders", [], |row| row.get(0))
+        .query_row(
+            "SELECT COALESCE(MAX(sort_order), -1) FROM folders",
+            [],
+            |row| row.get(0),
+        )
         .unwrap_or(-1);
 
     let folder = Folder {
@@ -1501,15 +1597,21 @@ pub fn rename_folder(conn: &Connection, id: &str, name: &str) -> AppResult<Folde
 }
 
 pub fn delete_folder(conn: &Connection, id: &str) -> AppResult<()> {
-    conn.query_row("SELECT id FROM folders WHERE id = ?1", params![id], |_| Ok(()))
-        .optional()?
-        .ok_or_else(|| AppError::NotFound(format!("folder {id}")))?;
+    conn.query_row("SELECT id FROM folders WHERE id = ?1", params![id], |_| {
+        Ok(())
+    })
+    .optional()?
+    .ok_or_else(|| AppError::NotFound(format!("folder {id}")))?;
 
     conn.execute("DELETE FROM folders WHERE id = ?1", params![id])?;
     Ok(())
 }
 
-pub fn move_task_to_folder(conn: &Connection, task_id: &str, folder_id: Option<&str>) -> AppResult<()> {
+pub fn move_task_to_folder(
+    conn: &Connection,
+    task_id: &str,
+    folder_id: Option<&str>,
+) -> AppResult<()> {
     let updated = conn.execute(
         "UPDATE tasks SET folder_id = ?2 WHERE id = ?1",
         params![task_id, folder_id],
@@ -1551,9 +1653,8 @@ pub fn create_tag(conn: &Connection, name: &str, color: Option<&str>) -> AppResu
 }
 
 pub fn list_tags(conn: &Connection) -> AppResult<Vec<Tag>> {
-    let mut stmt = conn.prepare(
-        "SELECT id, name, color, created_at FROM tags ORDER BY name COLLATE NOCASE ASC",
-    )?;
+    let mut stmt = conn
+        .prepare("SELECT id, name, color, created_at FROM tags ORDER BY name COLLATE NOCASE ASC")?;
     let rows = stmt.query_map([], map_tag)?;
     let tags = rows.collect::<Result<Vec<_>, _>>()?;
     Ok(tags)
@@ -1596,7 +1697,10 @@ pub fn delete_tag(conn: &Connection, id: &str) -> AppResult<()> {
 }
 
 pub fn set_record_tags(conn: &Connection, record_id: &str, tag_ids: &[String]) -> AppResult<()> {
-    conn.execute("DELETE FROM record_tags WHERE record_id = ?1", params![record_id])?;
+    conn.execute(
+        "DELETE FROM record_tags WHERE record_id = ?1",
+        params![record_id],
+    )?;
     for tag_id in tag_ids {
         conn.execute(
             "INSERT OR IGNORE INTO record_tags (record_id, tag_id) VALUES (?1, ?2)",
@@ -1629,7 +1733,11 @@ pub fn find_or_create_tag_by_name(conn: &Connection, name: &str) -> AppResult<Ta
     .map_or_else(|| create_tag(conn, name, None), Ok)
 }
 
-pub fn link_tags_to_record(conn: &Connection, record_id: &str, tag_ids: &[String]) -> AppResult<()> {
+pub fn link_tags_to_record(
+    conn: &Connection,
+    record_id: &str,
+    tag_ids: &[String],
+) -> AppResult<()> {
     for tag_id in tag_ids {
         conn.execute(
             "INSERT OR IGNORE INTO record_tags (record_id, tag_id) VALUES (?1, ?2)",
@@ -1797,9 +1905,9 @@ fn parse_optional_datetime(value: Option<String>) -> rusqlite::Result<Option<Dat
 mod tests {
     use super::*;
     use crate::models::{
-    AttachmentRole, CreateAttachmentRequest, CreateRecordRequest, CreateTaskRequest, RecordSource,
-    RecordType, TaskPriority, TaskStatus,
-};
+        AttachmentRole, CreateAttachmentRequest, CreateRecordRequest, CreateTaskRequest,
+        RecordSource, RecordType, TaskPriority, TaskStatus,
+    };
 
     fn in_memory() -> Connection {
         let conn = Connection::open_in_memory().expect("in-memory db");
@@ -2000,7 +2108,9 @@ mod tests {
 
         assert!(get_record(&conn, &record.id).is_err());
         assert!(get_task(&conn, &task.id).is_err());
-        assert!(get_record_attachments(&conn, &record.id).expect("links").is_empty());
+        assert!(get_record_attachments(&conn, &record.id)
+            .expect("links")
+            .is_empty());
         // Attachment DB row is cleaned up (sole-owner)
         assert!(get_attachment(&conn, &attachment.id).is_err());
     }
@@ -2078,7 +2188,7 @@ mod tests {
             CreateTaskRequest {
                 record_id: record.id.clone(),
                 task_status: Some(TaskStatus::Done), // should be ignored
-                priority: Some(TaskPriority::High),   // should be ignored
+                priority: Some(TaskPriority::High),  // should be ignored
                 due_at: None,
                 remind_at: None,
                 repeat_rule: None,
@@ -2219,8 +2329,8 @@ mod tests {
     #[test]
     fn get_setting_or_returns_default_when_missing() {
         let conn = in_memory();
-        let value = get_setting_or(&conn, "quick_capture_shortcut", "Alt+Shift+R")
-            .expect("get_setting_or");
+        let value =
+            get_setting_or(&conn, "quick_capture_shortcut", "Alt+Shift+R").expect("get_setting_or");
         assert_eq!(value, "Alt+Shift+R");
     }
 
@@ -2228,8 +2338,8 @@ mod tests {
     fn get_setting_or_returns_stored_value_when_set() {
         let conn = in_memory();
         set_setting(&conn, "quick_capture_shortcut", "Alt+Shift+T").expect("set");
-        let value = get_setting_or(&conn, "quick_capture_shortcut", "Alt+Shift+R")
-            .expect("get_setting_or");
+        let value =
+            get_setting_or(&conn, "quick_capture_shortcut", "Alt+Shift+R").expect("get_setting_or");
         assert_eq!(value, "Alt+Shift+T");
     }
 
@@ -2349,7 +2459,8 @@ mod tests {
         .expect("attachment b");
 
         link_attachment(&conn, &record.id, &att_a.id, AttachmentRole::Main, 0).expect("link a");
-        link_attachment(&conn, &record.id, &att_b.id, AttachmentRole::Reference, 1).expect("link b");
+        link_attachment(&conn, &record.id, &att_b.id, AttachmentRole::Reference, 1)
+            .expect("link b");
 
         // Verify files exist before deletion
         assert!(file_a.exists());
@@ -2466,7 +2577,8 @@ mod tests {
         .expect("attachment");
 
         link_attachment(&conn, &record_a.id, &att.id, AttachmentRole::Main, 0).expect("link A");
-        link_attachment(&conn, &record_b.id, &att.id, AttachmentRole::Reference, 0).expect("link B");
+        link_attachment(&conn, &record_b.id, &att.id, AttachmentRole::Reference, 0)
+            .expect("link B");
 
         assert!(shared_file.exists());
 
@@ -2503,10 +2615,8 @@ mod tests {
         set_setting(&conn, "screenshot_shortcut", "Ctrl+Shift+2").expect("set ss");
 
         // Read back
-        let qc = get_setting_or(&conn, "quick_capture_shortcut", "Alt+Shift+R")
-            .expect("qc");
-        let ss = get_setting_or(&conn, "screenshot_shortcut", "Alt+Shift+S")
-            .expect("ss");
+        let qc = get_setting_or(&conn, "quick_capture_shortcut", "Alt+Shift+R").expect("qc");
+        let ss = get_setting_or(&conn, "screenshot_shortcut", "Alt+Shift+S").expect("ss");
 
         assert_eq!(qc, "Ctrl+Shift+1");
         assert_eq!(ss, "Ctrl+Shift+2");
@@ -2539,7 +2649,10 @@ mod tests {
             )
             .expect("query table count");
 
-        assert_eq!(count, 2, "knowledge memory tables should exist after migrations");
+        assert_eq!(
+            count, 2,
+            "knowledge memory tables should exist after migrations"
+        );
     }
 
     #[test]
@@ -2554,7 +2667,10 @@ mod tests {
             )
             .expect("query table count");
 
-        assert_eq!(count, 1, "learning dialog session table should exist after migrations");
+        assert_eq!(
+            count, 1,
+            "learning dialog session table should exist after migrations"
+        );
     }
 
     #[test]
@@ -2593,7 +2709,10 @@ mod tests {
         assert_eq!(topics.len(), 1);
         assert_eq!(topics[0].name, "Python 装饰器");
         assert_eq!(topics[0].mastery_level, "understanding");
-        assert_eq!(topics[0].evidence_text, "在应用监控系统笔记中分析过 span 装饰器");
+        assert_eq!(
+            topics[0].evidence_text,
+            "在应用监控系统笔记中分析过 span 装饰器"
+        );
     }
 
     #[test]
@@ -2661,13 +2780,9 @@ mod tests {
         )
         .expect("session");
 
-        let candidate = upsert_knowledge_topic(
-            &conn,
-            "OKR 执行",
-            "待确认的目标管理知识",
-            "candidate",
-        )
-        .expect("candidate topic");
+        let candidate =
+            upsert_knowledge_topic(&conn, "OKR 执行", "待确认的目标管理知识", "candidate")
+                .expect("candidate topic");
         append_knowledge_evidence(
             &conn,
             &candidate.id,
@@ -2682,12 +2797,18 @@ mod tests {
         assert_eq!(items[0].name, "Python 装饰器");
         assert_eq!(items[0].mastery_level, "understanding");
         assert_eq!(items[0].evidence_count, 2);
-        assert_eq!(items[0].latest_evidence_text, "用户在新的监控代码中复用了该模式。");
+        assert_eq!(
+            items[0].latest_evidence_text,
+            "用户在新的监控代码中复用了该模式。"
+        );
 
         let detail = get_knowledge_memory_detail(&conn, &understanding.id).expect("memory detail");
         assert_eq!(detail.evidence.len(), 2);
         assert_eq!(detail.evidence[0].record_title.as_deref(), Some("补充笔记"));
-        assert_eq!(detail.latest_conclusion_json.as_deref(), Some("{\"reason\":\"用户已能应用\"}"));
+        assert_eq!(
+            detail.latest_conclusion_json.as_deref(),
+            Some("{\"reason\":\"用户已能应用\"}")
+        );
     }
 
     #[test]
@@ -2750,8 +2871,12 @@ mod tests {
 
         let settings = get_all_settings_with_defaults(&conn).expect("settings");
 
-        assert!(settings.iter().any(|entry| entry.key == "quick_capture_shortcut" && entry.value == "Alt+Shift+R"));
-        assert!(settings.iter().any(|entry| entry.key == "screenshot_shortcut" && entry.value == "Alt+Shift+S"));
+        assert!(settings
+            .iter()
+            .any(|entry| entry.key == "quick_capture_shortcut" && entry.value == "Alt+Shift+R"));
+        assert!(settings
+            .iter()
+            .any(|entry| entry.key == "screenshot_shortcut" && entry.value == "Alt+Shift+S"));
         assert!(settings.iter().any(|entry| entry.key == "pet_visible"));
     }
 
@@ -2764,9 +2889,29 @@ mod tests {
 
         let settings = get_all_settings_with_defaults(&conn).expect("settings");
 
-        assert!(settings.iter().any(|entry| entry.key == "quick_capture_shortcut" && entry.value == "Ctrl+Shift+9"));
-        assert!(settings.iter().any(|entry| entry.key == "ai_provider" && entry.value == "openai"));
-        assert!(settings.iter().any(|entry| entry.key == "screenshot_shortcut" && entry.value == "Alt+Shift+S"));
+        assert!(settings
+            .iter()
+            .any(|entry| entry.key == "quick_capture_shortcut" && entry.value == "Ctrl+Shift+9"));
+        assert!(settings
+            .iter()
+            .any(|entry| entry.key == "ai_provider" && entry.value == "openai"));
+        assert!(settings
+            .iter()
+            .any(|entry| entry.key == "screenshot_shortcut" && entry.value == "Alt+Shift+S"));
+    }
+
+    #[test]
+    fn get_all_settings_with_defaults_never_returns_api_key_values() {
+        let conn = in_memory();
+        set_setting(&conn, "ai_api_key", "current-secret").expect("set current key");
+        set_setting(&conn, "claude_api_key", "legacy-secret").expect("set legacy key");
+
+        let settings = get_all_settings_with_defaults(&conn).expect("settings");
+
+        assert!(settings.iter().all(|entry| entry.key != "ai_api_key"));
+        assert!(settings.iter().all(|entry| entry.key != "claude_api_key"));
+        assert!(settings.iter().all(|entry| entry.value != "current-secret"));
+        assert!(settings.iter().all(|entry| entry.value != "legacy-secret"));
     }
 
     #[test]
@@ -2945,14 +3090,26 @@ mod tests {
 
         // Assert: both returned task IDs match
         let returned_ids: Vec<&str> = items.iter().map(|i| i.task_id.as_str()).collect();
-        assert!(returned_ids.contains(&task_todo.id.as_str()), "should contain todo task");
-        assert!(returned_ids.contains(&task_doing.id.as_str()), "should contain doing task");
+        assert!(
+            returned_ids.contains(&task_todo.id.as_str()),
+            "should contain todo task"
+        );
+        assert!(
+            returned_ids.contains(&task_doing.id.as_str()),
+            "should contain doing task"
+        );
 
         // Assert: done/cancelled are excluded
-        assert!(!returned_ids.contains(&task_done.id.as_str()), "should NOT contain done task");
+        assert!(
+            !returned_ids.contains(&task_done.id.as_str()),
+            "should NOT contain done task"
+        );
 
         // Assert: todo item has correct record fields
-        let todo_item = items.iter().find(|i| i.task_id == task_todo.id).expect("todo item");
+        let todo_item = items
+            .iter()
+            .find(|i| i.task_id == task_todo.id)
+            .expect("todo item");
         assert_eq!(todo_item.record_id, record_todo.id);
         assert_eq!(todo_item.record_title.as_deref(), Some("todo item"));
         assert_eq!(todo_item.record_content.as_deref(), Some("need to do this"));
@@ -2961,7 +3118,10 @@ mod tests {
         assert_eq!(todo_item.attachment_count, 0);
 
         // Assert: doing item has attachment_count = 1
-        let doing_item = items.iter().find(|i| i.task_id == task_doing.id).expect("doing item");
+        let doing_item = items
+            .iter()
+            .find(|i| i.task_id == task_doing.id)
+            .expect("doing item");
         assert_eq!(doing_item.record_title.as_deref(), Some("doing item"));
         assert_eq!(doing_item.record_content.as_deref(), Some("in progress"));
         assert_eq!(doing_item.task_status, TaskStatus::Doing);

@@ -1,8 +1,11 @@
 import { create } from "zustand";
 
 import {
+  clearAiApiKey as clearAiApiKeyCommand,
+  getAiApiKeyStatus,
   getAllSettings,
   resetSettings as resetSettingsCommand,
+  setAiApiKey as setAiApiKeyCommand,
   setShortcut as setShortcutCommand,
   updateSetting as updateSettingCommand,
 } from "../lib/tauri";
@@ -13,10 +16,13 @@ interface SettingsState {
   hasLoaded: boolean;
   error: string | null;
   shortcutErrors: Record<string, string>;
+  aiApiKeyConfigured: boolean;
   loadSettings: () => Promise<void>;
   setSetting: (key: string, value: string) => Promise<void>;
   setShortcut: (key: string, shortcut: string) => Promise<boolean>;
   resetSettings: () => Promise<void>;
+  setAiApiKey: (value: string) => Promise<boolean>;
+  clearAiApiKey: () => Promise<boolean>;
   clearError: () => void;
   clearShortcutError: (key: string) => void;
 }
@@ -27,12 +33,17 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   hasLoaded: false,
   error: null,
   shortcutErrors: {},
+  aiApiKeyConfigured: false,
   async loadSettings() {
     set({ loading: true, error: null });
     try {
-      const entries = await getAllSettings();
+      const [entries, apiKeyStatus] = await Promise.all([
+        getAllSettings(),
+        getAiApiKeyStatus(),
+      ]);
       set({
         settings: Object.fromEntries(entries.map((entry) => [entry.key, entry.value])),
+        aiApiKeyConfigured: apiKeyStatus.configured,
         loading: false,
         hasLoaded: true,
       });
@@ -103,9 +114,13 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     set({ loading: true, error: null });
     try {
       await resetSettingsCommand();
-      const entries = await getAllSettings();
+      const [entries, apiKeyStatus] = await Promise.all([
+        getAllSettings(),
+        getAiApiKeyStatus(),
+      ]);
       set({
         settings: Object.fromEntries(entries.map((entry) => [entry.key, entry.value])),
+        aiApiKeyConfigured: apiKeyStatus.configured,
         loading: false,
         shortcutErrors: {},
       });
@@ -114,6 +129,34 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         loading: false,
         error: error instanceof Error ? error.message : String(error),
       });
+    }
+  },
+  async setAiApiKey(value) {
+    set({ loading: true, error: null });
+    try {
+      await setAiApiKeyCommand(value);
+      set({ loading: false, aiApiKeyConfigured: true });
+      return true;
+    } catch (error) {
+      set({
+        loading: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    }
+  },
+  async clearAiApiKey() {
+    set({ loading: true, error: null });
+    try {
+      await clearAiApiKeyCommand();
+      set({ loading: false, aiApiKeyConfigured: false });
+      return true;
+    } catch (error) {
+      set({
+        loading: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return false;
     }
   },
   clearError() {

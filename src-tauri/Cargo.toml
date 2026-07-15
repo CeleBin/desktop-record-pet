@@ -33,3 +33,4 @@ xcap = "0.9"
 image = "0.25"
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 base64 = "0.22"
+keyring = "4.1.5"
