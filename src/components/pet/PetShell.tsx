@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 
-import { showMainPanel } from "../../lib/tauri";
+import { listRecords, runAiTask, showMainPanel } from "../../lib/tauri";
 import { useSettingsStore } from "../../store/settings";
 import { PetMenu } from "./PetMenu";
 
@@ -31,6 +31,35 @@ export function PetShell() {
   const settings = useSettingsStore((state) => state.settings);
   const [bubble, setBubble] = useState<string | null>(null);
   const mealShownRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    const maybeStartProactiveChat = async () => {
+      if (settings.pet_proactive_ai_enabled !== "true" || bubble) return;
+      const now = Date.now();
+      const minInterval = Number(settings.pet_proactive_min_interval_minutes ?? "120") * 60_000;
+      const last = Number(localStorage.getItem("pet-proactive-ai-at") ?? "0");
+      if (now - last < minInterval) return;
+      try {
+        const records = await listRecords({ limit: 1 });
+        const run = await runAiTask({ taskType: "pet_chat", payload: {
+          content: "请根据用户允许的上下文，用一句简短、不施压的方式主动问候或邀请交流。",
+          retainedRecordIds: records.map((record) => record.id),
+          persona: settings.pet_persona ?? "gentle-companion",
+          customPrompt: settings.pet_custom_prompt || null,
+        }});
+        const result = run.result_json ? JSON.parse(run.result_json) as { reply?: string } : null;
+        if (result?.reply) {
+          localStorage.setItem("pet-proactive-ai-at", String(now));
+          setBubble(result.reply);
+        }
+      } catch {
+        // A proactive invitation is optional; model failures must stay silent.
+      }
+    };
+    const timer = window.setInterval(() => void maybeStartProactiveChat(), 60_000);
+    void maybeStartProactiveChat();
+    return () => window.clearInterval(timer);
+  }, [bubble, settings.pet_custom_prompt, settings.pet_persona, settings.pet_proactive_ai_enabled, settings.pet_proactive_min_interval_minutes]);
 
   useEffect(() => {
     const checkMealCompanion = () => {
