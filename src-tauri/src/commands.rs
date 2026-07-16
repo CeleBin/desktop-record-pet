@@ -13,8 +13,9 @@ use crate::models::{
     AiResult, AiTaskRun, AttachmentRole, AttachmentType, ClipboardImageRequest,
     CreateAiResultRequest, CreateAttachmentRequest, CreateRecordRequest, CreateTaskRequest, Folder,
     ImportFilesRequest, KnowledgeMemoryDetail, KnowledgeMemoryItem, Record, RecordFilter,
-    RecordSource, RecordType, RecordWithRelations, RunAiTaskRequest, SettingsEntry, Tag, Task,
-    TaskFilter, TaskStatus, UnfinishedTaskItem, UpdateRecordRequest,
+    PetChatMessage, PetChatSession, RecordSource, RecordType, RecordWithRelations,
+    RunAiTaskRequest, SettingsEntry, Tag, Task, TaskFilter, TaskStatus, UnfinishedTaskItem,
+    UpdateRecordRequest,
 };
 use crate::screenshot;
 use crate::windows;
@@ -555,6 +556,35 @@ pub fn update_task_repeat_rule(
 pub fn list_unfinished_tasks(database: State<'_, Database>) -> AppResult<Vec<UnfinishedTaskItem>> {
     let conn = database.conn.lock()?;
     db::list_unfinished_tasks(&conn)
+}
+
+#[tauri::command]
+pub fn list_pet_chat_sessions(
+    database: State<'_, Database>,
+    limit: Option<i64>,
+) -> AppResult<Vec<PetChatSession>> {
+    let conn = database.conn.lock()?;
+    db::list_pet_chat_sessions(&conn, limit.unwrap_or(20).clamp(1, 100))
+}
+
+#[tauri::command]
+pub fn get_latest_pet_chat_session(
+    database: State<'_, Database>,
+) -> AppResult<Option<PetChatSession>> {
+    let conn = database.conn.lock()?;
+    db::get_latest_pet_chat_session(&conn)
+}
+
+#[tauri::command]
+pub fn list_pet_chat_messages(
+    database: State<'_, Database>,
+    session_id: String,
+) -> AppResult<Vec<PetChatMessage>> {
+    if session_id.trim().is_empty() {
+        return Err(AppError::Validation("session id is required".into()));
+    }
+    let conn = database.conn.lock()?;
+    db::list_pet_chat_messages(&conn, &session_id)
 }
 
 /// Reorder tasks by updating their `sort_order` values.

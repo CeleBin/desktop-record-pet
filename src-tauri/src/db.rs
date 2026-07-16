@@ -1273,6 +1273,24 @@ pub fn append_pet_chat_message(
     Ok(message)
 }
 
+pub fn list_pet_chat_sessions(
+    conn: &Connection,
+    limit: i64,
+) -> AppResult<Vec<PetChatSession>> {
+    if limit <= 0 {
+        return Ok(vec![]);
+    }
+    let mut stmt = conn.prepare(
+        "SELECT id, title, created_at, updated_at FROM pet_chat_sessions ORDER BY datetime(updated_at) DESC, rowid DESC LIMIT ?1",
+    )?;
+    let rows = stmt.query_map(params![limit], map_pet_chat_session)?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
+pub fn get_latest_pet_chat_session(conn: &Connection) -> AppResult<Option<PetChatSession>> {
+    Ok(list_pet_chat_sessions(conn, 1)?.into_iter().next())
+}
+
 pub fn list_pet_chat_messages(
     conn: &Connection,
     session_id: &str,
@@ -2008,6 +2026,15 @@ fn map_pet_chat_message(row: &Row<'_>) -> rusqlite::Result<PetChatMessage> {
         content: row.get(3)?,
         context_snapshot: row.get(4)?,
         created_at: row.get(5)?,
+    })
+}
+
+fn map_pet_chat_session(row: &Row<'_>) -> rusqlite::Result<PetChatSession> {
+    Ok(PetChatSession {
+        id: row.get(0)?,
+        title: row.get(1)?,
+        created_at: row.get(2)?,
+        updated_at: row.get(3)?,
     })
 }
 
@@ -3074,6 +3101,24 @@ mod tests {
         assert_eq!(messages.len(), 1);
         assert_eq!(candidates.len(), 3);
         assert!(candidates.iter().all(|candidate| candidate.title.contains("Signoz")));
+    }
+
+    #[test]
+    fn pet_chat_sessions_are_listed_by_recent_activity_and_can_restore_latest() {
+        let conn = in_memory();
+        let older = create_pet_chat_session(&conn, Some("较早对话".into())).expect("older session");
+        let newer = create_pet_chat_session(&conn, Some("最近对话".into())).expect("newer session");
+        conn.execute(
+            "UPDATE pet_chat_sessions SET updated_at = ?2 WHERE id = ?1",
+            params![older.id, "2100-01-01T00:00:00+00:00"],
+        )
+        .expect("newer activity");
+
+        let sessions = list_pet_chat_sessions(&conn, 10).expect("sessions");
+        let latest = get_latest_pet_chat_session(&conn).expect("latest session");
+
+        assert_eq!(sessions.iter().map(|session| &session.id).collect::<Vec<_>>(), vec![&older.id, &newer.id]);
+        assert_eq!(latest.expect("a latest session").id, older.id);
     }
 
     #[test]

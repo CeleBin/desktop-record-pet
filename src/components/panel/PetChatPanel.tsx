@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import { listRecords, runAiTask } from "../../lib/tauri";
+import { getLatestPetChatSession, listPetChatMessages, listRecords, runAiTask } from "../../lib/tauri";
 import { useSettingsStore } from "../../store/settings";
 import type { PetChatResult, RecordItem } from "../../types";
 
@@ -15,6 +15,26 @@ export function PetChatPanel() {
   const [includeContext, setIncludeContext] = useState(true);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const latest = await getLatestPetChatSession();
+        if (!latest) return;
+        const restored = await listPetChatMessages(latest.id);
+        if (cancelled) return;
+        setSessionId(latest.id);
+        setMessages(restored.map((message) => ({
+          role: message.role === "user" ? "user" : "assistant",
+          content: message.content,
+        })));
+      } catch (cause) {
+        if (!cancelled) setError(cause instanceof Error ? `无法恢复最近对话：${cause.message}` : "无法恢复最近对话");
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     const query = draft.trim();
@@ -57,8 +77,16 @@ export function PetChatPanel() {
     }
   };
 
+  const startNewConversation = () => {
+    setSessionId(null);
+    setMessages([]);
+    setCandidates([]);
+    setDraft("");
+    setError(null);
+  };
+
   return <div className="flex h-full min-h-0 flex-col p-6">
-    <div className="mb-4"><p className="text-[11px] uppercase tracking-[0.2em] text-text0">桌宠搭子</p><h2 className="mt-1 text-xl font-semibold">聊聊你正在做的事</h2></div>
+    <div className="mb-4 flex items-start justify-between gap-4"><div><p className="text-[11px] uppercase tracking-[0.2em] text-text0">桌宠搭子</p><h2 className="mt-1 text-xl font-semibold">聊聊你正在做的事</h2></div><button type="button" onClick={startNewConversation} disabled={sending} className="rounded-full border border-border px-3 py-2 text-xs text-text-muted hover:border-primary/50 hover:text-primary disabled:opacity-40">新对话</button></div>
     <div className="min-h-0 flex-1 space-y-3 overflow-y-auto">
       {messages.length === 0 && <p className="rounded-2xl border border-border bg-surface/50 p-4 text-sm text-text-muted">我会在你发送前本地找出少量相关笔记或待办；你也可以关闭本轮上下文。</p>}
       {messages.map((message, index) => <div key={index} className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}><p className={`max-w-[80%] rounded-2xl px-4 py-3 text-sm leading-6 ${message.role === "user" ? "bg-secondary/20" : "border border-primary/15 bg-primary/5"}`}>{message.content}</p></div>)}

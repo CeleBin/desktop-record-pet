@@ -242,6 +242,22 @@ export interface PetChatResult {
   reply: string;
 }
 
+export interface PetChatSession {
+  id: string;
+  title: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PetChatMessage {
+  id: string;
+  session_id: string;
+  role: "user" | "assistant";
+  content: string;
+  context_snapshot: string;
+  created_at: string;
+}
+
 export interface RunAiTaskRequest {
   taskType: AiTaskType;
   payload: Record<string, unknown>;

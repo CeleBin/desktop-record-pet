@@ -216,6 +216,9 @@ pub fn run() {
             commands::update_task_repeat_rule,
             commands::remove_task,
             commands::list_unfinished_tasks,
+            commands::list_pet_chat_sessions,
+            commands::get_latest_pet_chat_session,
+            commands::list_pet_chat_messages,
             commands::reorder_tasks,
             commands::reorder_records,
             // Folder category commands

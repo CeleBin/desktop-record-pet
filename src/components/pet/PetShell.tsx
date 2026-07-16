@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { LogicalSize } from "@tauri-apps/api/dpi";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 
 import { listRecords, runAiTask, showMainPanel } from "../../lib/tauri";
+import { createProactivePetChatRequest } from "../../lib/petProactive";
+import { getPetWindowSize } from "../../lib/petWindowSize";
 import { useSettingsStore } from "../../store/settings";
 import { PetMenu } from "./PetMenu";
 
@@ -33,33 +36,58 @@ export function PetShell() {
   const mealShownRef = useRef<string | null>(null);
 
   useEffect(() => {
-    const maybeStartProactiveChat = async () => {
-      if (settings.pet_proactive_ai_enabled !== "true" || bubble) return;
-      const now = Date.now();
-      const minInterval = Number(settings.pet_proactive_min_interval_minutes ?? "120") * 60_000;
-      const last = Number(localStorage.getItem("pet-proactive-ai-at") ?? "0");
-      if (now - last < minInterval) return;
-      try {
-        const records = await listRecords({ limit: 1 });
-        const run = await runAiTask({ taskType: "pet_chat", payload: {
-          content: "请根据用户允许的上下文，用一句简短、不施压的方式主动问候或邀请交流。",
-          retainedRecordIds: records.map((record) => record.id),
-          persona: settings.pet_persona ?? "gentle-companion",
-          customPrompt: settings.pet_custom_prompt || null,
-        }});
-        const result = run.result_json ? JSON.parse(run.result_json) as { reply?: string } : null;
-        if (result?.reply) {
-          localStorage.setItem("pet-proactive-ai-at", String(now));
-          setBubble(result.reply);
-        }
-      } catch {
-        // A proactive invitation is optional; model failures must stay silent.
-      }
+    const rootBackground = document.documentElement.style.background;
+    const bodyBackground = document.body.style.background;
+    document.documentElement.style.background = "transparent";
+    document.body.style.background = "transparent";
+    return () => {
+      document.documentElement.style.background = rootBackground;
+      document.body.style.background = bodyBackground;
     };
-    const timer = window.setInterval(() => void maybeStartProactiveChat(), 60_000);
-    void maybeStartProactiveChat();
-    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    const size = getPetWindowSize({ bubbleVisible: Boolean(bubble), menuOpen });
+    void appWindow.setSize(new LogicalSize(size.width, size.height)).catch(() => {
+      // Keep the pet usable if a platform declines a transparent-window resize.
+    });
+  }, [bubble, menuOpen]);
+
+  const startProactiveChat = useCallback(async (manual: boolean) => {
+    if (!manual && (settings.pet_proactive_ai_enabled !== "true" || bubble)) return;
+    if (manual) setBubble("汪，我想想怎么和你开场…");
+    const now = Date.now();
+    const minInterval = Number(settings.pet_proactive_min_interval_minutes ?? "120") * 60_000;
+    const last = Number(localStorage.getItem("pet-proactive-ai-at") ?? "0");
+    if (!manual && now - last < minInterval) return;
+    try {
+      const records = await listRecords({ limit: 1 });
+      const run = await runAiTask(createProactivePetChatRequest(
+        records.map((record) => record.id),
+        settings.pet_persona ?? "gentle-companion",
+        settings.pet_custom_prompt || null,
+      ));
+      const result = run.result_json ? JSON.parse(run.result_json) as { reply?: string } : null;
+      if (result?.reply) {
+        localStorage.setItem("pet-proactive-ai-at", String(now));
+        setBubble(result.reply);
+      } else if (manual) {
+        setBubble("这次没能想好开场白，稍后再试一次吧。");
+      }
+    } catch {
+      if (manual) setBubble("这次没能想好开场白，稍后再试一次吧。");
+      // A scheduled invitation is optional; model failures must stay silent.
+    }
   }, [bubble, settings.pet_custom_prompt, settings.pet_persona, settings.pet_proactive_ai_enabled, settings.pet_proactive_min_interval_minutes]);
+
+  useEffect(() => {
+    const maybeStartProactiveChat = () => {
+      void startProactiveChat(false);
+    };
+    const timer = window.setInterval(maybeStartProactiveChat, 60_000);
+    maybeStartProactiveChat();
+    return () => window.clearInterval(timer);
+  }, [startProactiveChat]);
 
   useEffect(() => {
     const checkMealCompanion = () => {
@@ -158,65 +186,21 @@ export function PetShell() {
 
   return (
     <div
-      className="relative flex h-screen w-screen select-none items-center justify-center overflow-hidden"
+      className="relative flex h-screen w-screen select-none items-end justify-center overflow-hidden pb-2"
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
       onMouseLeave={handleMouseLeave}
       onContextMenu={handleContextMenu}
     >
-      {/* ── Glow aura ── */}
-      <div
-        className="pointer-events-none absolute h-20 w-20 rounded-full opacity-30 blur-2xl transition-all duration-1000"
+      <img
+        src="/assets/pixel-dog.png"
+        alt="像素小狗桌宠"
+        draggable={false}
+        className="h-28 w-24 object-contain [image-rendering:pixelated] transition-transform duration-300"
         style={{
-          background:
-            currentPose === "idle"
-              ? `radial-gradient(circle, var(--pet-glow) 0%, color-mix(in srgb, var(--secondary) 20%, transparent) 70%, transparent 100%)`
-              : `radial-gradient(circle, color-mix(in srgb, var(--pet-glow) 70%, transparent) 0%, color-mix(in srgb, var(--secondary) 30%, transparent) 70%, transparent 100%)`,
-        }}
-      />
-
-      {/* ── Pet body ── */}
-      <div
-        className="relative flex h-[72px] w-[72px] items-center justify-center rounded-full transition-all duration-[2000ms] ease-in-out"
-        style={{
-          background:
-            "radial-gradient(circle at 40% 35%, var(--pet-from) 0%, color-mix(in srgb, var(--primary) 70%, transparent) 40%, var(--pet-to) 100%)",
-          boxShadow:
-            currentPose === "blink"
-              ? `0 0 20px color-mix(in srgb, var(--pet-glow) 40%, transparent), inset 0 -2px 8px rgba(0,0,0,0.3)`
-              : `0 0 30px color-mix(in srgb, var(--pet-glow) 25%, transparent), inset 0 -2px 8px rgba(0,0,0,0.3)`,
-          transform: dragging ? "scale(0.92)" : "scale(1)",
-        }}
-      >
-        {/* Highlight sheen */}
-        <div className="absolute left-[14px] top-[12px] h-[18px] w-[24px] rounded-full bg-white/20 blur-sm" />
-
-        {/* ── Eyes ── */}
-        <div className="mt-3 flex gap-3.5">
-          <span
-            className="block h-[5px] w-[5px] rounded-full bg-amber-50 transition-all duration-500"
-            style={{
-              transform: `translateX(${eyeOffset})`,
-              opacity: currentPose === "blink" ? 0 : 1,
-            }}
-          />
-          <span
-            className="block h-[5px] w-[5px] rounded-full bg-amber-50 transition-all duration-500"
-            style={{
-              transform: `translateX(${eyeOffset})`,
-              opacity: currentPose === "blink" ? 0 : 1,
-            }}
-          />
-        </div>
-      </div>
-
-      {/* ── Floor shadow ── */}
-      <div
-        className="pointer-events-none absolute bottom-3 h-1.5 w-10 rounded-full bg-black/20 blur-sm transition-all duration-1000"
-        style={{
-          transform: dragging ? "scaleX(0.7)" : "scaleX(1)",
-          opacity: dragging ? 0.4 : 0.6,
+          transform: `translateX(${eyeOffset}) scale(${dragging ? 0.92 : 1})`,
+          opacity: currentPose === "blink" ? 0.86 : 1,
         }}
       />
 
@@ -228,7 +212,7 @@ export function PetShell() {
       </div>
 
       {bubble && (
-        <div className="absolute -top-24 left-1/2 z-40 w-52 -translate-x-1/2 rounded-2xl border border-primary/25 bg-surface/95 p-3 text-xs leading-5 text-text shadow-xl backdrop-blur" onMouseDown={(event) => event.stopPropagation()} onMouseUp={(event) => event.stopPropagation()}>
+        <div className="absolute bottom-28 left-1/2 z-40 w-52 -translate-x-1/2 rounded-2xl border border-primary/25 bg-surface/95 p-3 text-xs leading-5 text-text shadow-xl backdrop-blur" onMouseDown={(event) => event.stopPropagation()} onMouseUp={(event) => event.stopPropagation()}>
           <button type="button" onClick={() => setBubble(null)} className="absolute right-2 top-1 text-text-muted hover:text-text">×</button>
           <p className="pr-3">{bubble}</p>
           <button type="button" onClick={() => { setBubble(null); void showMainPanel(); }} className="mt-2 rounded-full bg-primary/15 px-2.5 py-1 text-[10px] text-primary hover:bg-primary/25">聊聊</button>
@@ -242,6 +226,10 @@ export function PetShell() {
           onOpenPanel={() => {
             handleCloseMenu();
             void showMainPanel();
+          }}
+          onManualCompanionInvite={() => {
+            handleCloseMenu();
+            void startProactiveChat(true);
           }}
           onOpenChat={() => {
             handleCloseMenu();

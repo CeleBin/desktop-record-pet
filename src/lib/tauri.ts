@@ -12,6 +12,8 @@ import type {
   KnowledgeMemoryDetail,
   KnowledgeMemoryItem,
   CreateTaskRequest,
+  PetChatMessage,
+  PetChatSession,
   RecordFilter,
   RecordItem,
   RecordWithRelations,
@@ -131,6 +133,18 @@ export async function updateTaskStatus(
 
 export async function listUnfinishedTasks(): Promise<UnfinishedTaskItem[]> {
   return invoke<UnfinishedTaskItem[]>("list_unfinished_tasks");
+}
+
+export async function listPetChatSessions(limit = 20): Promise<PetChatSession[]> {
+  return invoke<PetChatSession[]>("list_pet_chat_sessions", { limit });
+}
+
+export async function getLatestPetChatSession(): Promise<PetChatSession | null> {
+  return invoke<PetChatSession | null>("get_latest_pet_chat_session");
+}
+
+export async function listPetChatMessages(sessionId: string): Promise<PetChatMessage[]> {
+  return invoke<PetChatMessage[]>("list_pet_chat_messages", { sessionId });
 }
 
 /**
