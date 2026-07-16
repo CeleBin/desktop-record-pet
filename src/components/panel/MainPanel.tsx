@@ -90,7 +90,11 @@ export function MainPanel() {
   }, []);
 
   // ── Settings panel ──
-  const [contentMode, setContentMode] = useState<ContentMode>("records");
+  const [contentMode, setContentMode] = useState<ContentMode>(() => {
+    const openChat = localStorage.getItem("open-pet-chat") === "true";
+    localStorage.removeItem("open-pet-chat");
+    return openChat ? "chat" : "records";
+  });
 
   useEffect(() => {
     if (growthPreviewEnabled) return;

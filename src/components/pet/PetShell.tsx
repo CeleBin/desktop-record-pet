@@ -243,6 +243,11 @@ export function PetShell() {
             handleCloseMenu();
             void showMainPanel();
           }}
+          onOpenChat={() => {
+            handleCloseMenu();
+            localStorage.setItem("open-pet-chat", "true");
+            void showMainPanel();
+          }}
         />
       )}
     </div>
