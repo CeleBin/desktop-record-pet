@@ -1,11 +1,13 @@
 import { useEffect, useState } from "react";
 
 import { listRecords, runAiTask } from "../../lib/tauri";
+import { useSettingsStore } from "../../store/settings";
 import type { PetChatResult, RecordItem } from "../../types";
 
 type Message = { role: "user" | "assistant"; content: string };
 
 export function PetChatPanel() {
+  const settings = useSettingsStore((state) => state.settings);
   const [messages, setMessages] = useState<Message[]>([]);
   const [draft, setDraft] = useState("");
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -39,8 +41,8 @@ export function PetChatPanel() {
           sessionId,
           content,
           retainedRecordIds,
-          persona: "温和搭子",
-          customPrompt: null,
+          persona: settings.pet_persona ?? "gentle-companion",
+          customPrompt: settings.pet_custom_prompt || null,
         },
       });
       const result = run.result_json ? JSON.parse(run.result_json) as PetChatResult : null;
