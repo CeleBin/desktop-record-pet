@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 
 import { showMainPanel } from "../../lib/tauri";
+import { useSettingsStore } from "../../store/settings";
 import { PetMenu } from "./PetMenu";
 
 const appWindow = getCurrentWebviewWindow();
@@ -27,6 +28,32 @@ export function PetShell() {
   const [dragging, setDragging] = useState(false);
   const dragStart = useRef<{ x: number; y: number } | null>(null);
   const dragActive = useRef(false);
+  const settings = useSettingsStore((state) => state.settings);
+  const [bubble, setBubble] = useState<string | null>(null);
+  const mealShownRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    const checkMealCompanion = () => {
+      if (settings.pet_meal_companion_enabled !== "true") return;
+      const now = new Date();
+      const hour = now.getHours();
+      const minute = now.getMinutes();
+      const quiet = settings.pet_quiet_hours ?? "22:00-08:00";
+      const [start, end] = quiet.split("-");
+      const current = `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+      const inQuietHours = start && end && (start < end ? current >= start && current < end : current >= start || current < end);
+      if (inQuietHours) return;
+      const meal = hour === 12 && minute < 30 ? "午饭时间到啦，先照顾好自己再继续吧。" : hour === 18 && minute < 30 ? "晚饭时间到啦，今天辛苦了。" : null;
+      const key = `${now.toDateString()}-${hour}`;
+      if (meal && mealShownRef.current !== key) {
+        mealShownRef.current = key;
+        setBubble(meal);
+      }
+    };
+    checkMealCompanion();
+    const timer = window.setInterval(checkMealCompanion, 60_000);
+    return () => window.clearInterval(timer);
+  }, [settings.pet_meal_companion_enabled, settings.pet_quiet_hours]);
 
   // ── Idle animation loop ──
   useEffect(() => {
@@ -170,6 +197,14 @@ export function PetShell() {
           click to open · drag to move
         </div>
       </div>
+
+      {bubble && (
+        <div className="absolute -top-24 left-1/2 z-40 w-52 -translate-x-1/2 rounded-2xl border border-primary/25 bg-surface/95 p-3 text-xs leading-5 text-text shadow-xl backdrop-blur" onMouseDown={(event) => event.stopPropagation()} onMouseUp={(event) => event.stopPropagation()}>
+          <button type="button" onClick={() => setBubble(null)} className="absolute right-2 top-1 text-text-muted hover:text-text">×</button>
+          <p className="pr-3">{bubble}</p>
+          <button type="button" onClick={() => { setBubble(null); void showMainPanel(); }} className="mt-2 rounded-full bg-primary/15 px-2.5 py-1 text-[10px] text-primary hover:bg-primary/25">聊聊</button>
+        </div>
+      )}
 
       {/* ── Context menu ── */}
       {menuOpen && (
