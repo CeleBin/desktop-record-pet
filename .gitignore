@@ -16,6 +16,8 @@ dist-ssr
 docs
 AGENT.md
 .superpowers/
+# Local database recovery copies can contain private note content.
+data-recovery-backup-*/
 
 # Editor directories and files
 .vscode/*

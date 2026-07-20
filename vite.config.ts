@@ -9,6 +9,17 @@ const host = process.env.TAURI_DEV_HOST;
 export default defineConfig(async () => ({
   plugins: [react(), tailwindcss()],
 
+  // Pre-bundle BlockNote so the dev server doesn't re-optimize on first
+  // load (avoids a reload churn round-trip when the editor mounts).
+  optimizeDeps: {
+    include: [
+      "@blocknote/core",
+      "@blocknote/react",
+      "@blocknote/shadcn",
+    ],
+  },
+
+
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
   // 1. prevent Vite from obscuring rust errors

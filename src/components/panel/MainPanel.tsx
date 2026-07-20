@@ -14,7 +14,7 @@ import { Navigation } from "./Navigation";
 import { KnowledgeMemoryPanel } from "./KnowledgeMemoryPanel";
 import { PetLearningPanel } from "./PetLearningPanel";
 import { PetChatPanel } from "./PetChatPanel";
-import { RecordDetail } from "./RecordDetail";
+import { getRecordDetailInstanceKey, RecordDetail } from "./RecordDetail";
 import { RecordList } from "./RecordList";
 import { SettingsPanel } from "../settings/SettingsPanel";
 import { useLearningCoachStore } from "../../store/learningCoach";
@@ -299,6 +299,7 @@ export function MainPanel() {
           />
         ) : (
           <RecordDetail
+            key={getRecordDetailInstanceKey(selectedRecord?.id ?? null)}
             record={selectedRecord}
             loading={recordsLoading}
             onUpdate={handleUpdate}

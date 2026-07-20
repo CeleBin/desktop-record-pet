@@ -5,6 +5,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type ReactNode,
 } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
@@ -27,6 +28,7 @@ import type {
   TaskStatus,
   UpdateRecordRequest,
 } from "../../types";
+import { MarkdownEditor } from "./MarkdownEditor";
 
 interface RecordDetailProps {
   record: RecordWithRelations | null;
@@ -55,6 +57,78 @@ const SOURCE_LABELS: Record<string, string> = {
   "clipboard-paste": "剪贴板粘贴",
   "file-picker": "文件选择",
 };
+
+export function getDocumentSaveStatus({
+  titleDraft,
+  savedTitle,
+  contentDraft,
+  savedContent,
+}: {
+  titleDraft: string;
+  savedTitle: string;
+  contentDraft: string;
+  savedContent: string;
+}): string {
+  return titleDraft.trim() !== savedTitle.trim() || contentDraft.trim() !== savedContent.trim()
+    ? "有未保存更改"
+    : "所有更改已保存";
+}
+
+export function getDefaultDocumentEditorMode(): "wysiwyg" {
+  return "wysiwyg";
+}
+
+export function shouldFlushRichEditorForRecord(
+  richEditorRecordId: string | null,
+  targetRecordId: string,
+): boolean {
+  return richEditorRecordId === targetRecordId;
+}
+
+export function shouldMountRichEditorForRecord(
+  draftRecordId: string | null,
+  recordId: string,
+): boolean {
+  return draftRecordId === recordId;
+}
+
+export function getRecordDetailInstanceKey(recordId: string | null): string {
+  return recordId ?? "empty-record";
+}
+
+export function clearDocumentPendingSaves(): { content: null; title: null } {
+  return { content: null, title: null };
+}
+
+export function getTocHeadingSelector(richHeadingCount: number): string {
+  return richHeadingCount > 0 ? '[data-content-type="heading"]' : "h1, h2, h3";
+}
+
+export async function saveDocumentWithLatestMarkdown(
+  flush: (() => Promise<string>) | null,
+  persist: (markdown?: string) => Promise<void>,
+): Promise<void> {
+  await persist(await flush?.());
+}
+
+export function createDocumentWriteQueue() {
+  let generation = 0;
+  let tail: Promise<void> = Promise.resolve();
+  return {
+    beginSession: () => ++generation,
+    invalidate: () => ++generation,
+    enqueue: (session: number, write: () => Promise<void>): Promise<boolean> => {
+      const result = tail.then(async () => {
+        if (session !== generation) return false;
+        await write();
+        return true;
+      });
+      tail = result.then(() => undefined, () => undefined);
+      return result;
+    },
+    settle: () => tail,
+  };
+}
 
 const TASK_STATUS_OPTIONS: { label: string; value: TaskStatus; activeClasses: string; dot: string }[] = [
   { label: "待办", value: "todo", activeClasses: "bg-primary/20 text-primary ring-1 ring-primary/30", dot: "bg-primary" },
@@ -203,9 +277,15 @@ export function RecordDetail({
 }: RecordDetailProps) {
   const [editingTitle, setEditingTitle] = useState(false);
   const [editingContent, setEditingContent] = useState(false);
+  const [draftRecordId, setDraftRecordId] = useState<string | null>(null);
+  // WYSIWYG (BlockNote) vs raw-Markdown source mode. Source mode preserves
+  // the original textarea + live-preview split with sync-scroll.
+  const [editorMode, setEditorMode] = useState<"wysiwyg" | "source">(getDefaultDocumentEditorMode);
   const [showPreview, setShowPreview] = useState(true);
   const [titleDraft, setTitleDraft] = useState("");
   const [contentDraft, setContentDraft] = useState("");
+  const [isSavingContent, setIsSavingContent] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [converting, setConverting] = useState(false);
   const [updatingStatus, setUpdatingStatus] = useState(false);
   const [aiAnalyzing, setAiAnalyzing] = useState(false);
@@ -216,11 +296,12 @@ export function RecordDetail({
   const aiSectionRef = useRef<HTMLElement | null>(null);
 
   // ── Editor / preview split ratio (persisted, proportional resize) ──
+  // Only used in source mode.
   const { ratio: editorRatio, startResize: startEditorResize, resetRatio: resetEditorRatio } =
     useEditorPreviewResize();
 
   // ── Editor / preview scroll sync (toggled, proportional) ──
-  // Only active while editing AND the preview pane is visible.
+  // Only active while editing in source mode AND the preview pane is visible.
   const [scrollAnchors, setScrollAnchors] = useState<{ editor: number[]; preview: number[] }>({
     editor: [],
     preview: [],
@@ -231,7 +312,7 @@ export function RecordDetail({
     editorRef: syncEditorRef,
     previewRef: syncPreviewRef,
     scrollToHeading: scrollToSyncedHeading,
-  } = useEditorPreviewSyncScroll(editingContent && showPreview, scrollAnchors);
+  } = useEditorPreviewSyncScroll(editingContent && showPreview && editorMode === "source", scrollAnchors);
 
   // ── TOC rail width (persisted, clamped px resize) ──
   const { width: tocWidth, startResize: startTocResize, resetWidth: resetTocWidth } =
@@ -371,7 +452,7 @@ export function RecordDetail({
     contentDraftRef.current = contentDraft;
   }, [contentDraft]);
 
-  // Mirrors record + editingContent for the window-level drag-drop listener.
+  // Mirrors record + editingContent + editorMode for the window-level drag-drop listener.
   const recordRef = useRef(record);
   useEffect(() => {
     recordRef.current = record;
@@ -380,6 +461,10 @@ export function RecordDetail({
   useEffect(() => {
     editingContentRef.current = editingContent;
   }, [editingContent]);
+  const editorModeRef = useRef(editorMode);
+  useEffect(() => {
+    editorModeRef.current = editorMode;
+  }, [editorMode]);
 
   // ── Auto-save infrastructure ──────────────────────────────────────
   // The auto-save system works as follows:
@@ -405,6 +490,12 @@ export function RecordDetail({
   // finishEditContent ("取消") to revert any auto-saved intermediate versions
   // back to the pre-edit content.
   const editStartContentRef = useRef<string>("");
+  const editStartTitleRef = useRef<string>("");
+  const flushRichEditorRef = useRef<(() => Promise<string>) | null>(null);
+  const richEditorRecordIdRef = useRef<string | null>(null);
+  const contentSaveInFlightRef = useRef(false);
+  const writeQueueRef = useRef(createDocumentWriteQueue());
+  const editSessionRef = useRef(0);
 
   // Mirror titleDraft for use in async flush callbacks.
   const titleDraftRef = useRef("");
@@ -416,29 +507,39 @@ export function RecordDetail({
 
   // Flush a single pending content save. Reads from ref → safe to call from
   // any effect cleanup or callback without stale-closure issues.
-  const flushContentSave = useCallback(() => {
+  const flushContentSave = useCallback(async () => {
     const pending = pendingContentSaveRef.current;
     if (!pending) return;
     pendingContentSaveRef.current = null;
+    if (draftRecordIdRef.current !== pending.recordId) return;
     const trimmed = pending.content.trim();
     if (trimmed === lastSavedContentRef.current.trim()) return;
-    lastSavedContentRef.current = trimmed;
-    void onUpdate(pending.recordId, {
-      content: trimmed,
-    });
+    try {
+      const applied = await writeQueueRef.current.enqueue(editSessionRef.current, async () => {
+        await onUpdate(pending.recordId, { content: trimmed });
+      });
+      if (applied) lastSavedContentRef.current = trimmed;
+    } catch {
+      pendingContentSaveRef.current = pending;
+    }
   }, [onUpdate]);
 
   // Flush a single pending title save.
-  const flushTitleSave = useCallback(() => {
+  const flushTitleSave = useCallback(async () => {
     const pending = pendingTitleSaveRef.current;
     if (!pending) return;
     pendingTitleSaveRef.current = null;
+    if (draftRecordIdRef.current !== pending.recordId) return;
     const trimmed = pending.title.trim();
     if (trimmed === lastSavedTitleRef.current.trim()) return;
-    lastSavedTitleRef.current = trimmed;
-    void onUpdate(pending.recordId, {
-      title: trimmed,
-    });
+    try {
+      const applied = await writeQueueRef.current.enqueue(editSessionRef.current, async () => {
+        await onUpdate(pending.recordId, { title: trimmed });
+      });
+      if (applied) lastSavedTitleRef.current = trimmed;
+    } catch {
+      pendingTitleSaveRef.current = pending;
+    }
   }, [onUpdate]);
 
   // Points at whichever markdown container is currently rendered (view body or
@@ -446,15 +547,16 @@ export function RecordDetail({
   const markdownContainerRef = useRef<HTMLDivElement>(null);
 
   const scrollToHeading = useCallback((index: number) => {
-    if (editingContent && scrollToSyncedHeading(index)) return;
+    if (editingContent && editorMode === "source" && scrollToSyncedHeading(index)) return;
     const container = markdownContainerRef.current;
     if (!container) return;
-    const headings = container.querySelectorAll("h1, h2, h3");
+    const richHeadings = container.querySelectorAll('[data-content-type="heading"]');
+    const headings = container.querySelectorAll(getTocHeadingSelector(richHeadings.length));
     const target = headings[index];
     if (target) {
       target.scrollIntoView({ behavior: "smooth", block: "start" });
     }
-  }, [editingContent, scrollToSyncedHeading]);
+  }, [editingContent, editorMode, scrollToSyncedHeading]);
 
   const mdComponents = useMemo(
     () => ({
@@ -524,17 +626,39 @@ export function RecordDetail({
         </pre>
       ),
       table: ({ children }: { children?: ReactNode }) => (
-        <div className="overflow-x-auto my-3">
-          <table className="w-full border-collapse text-[13px]">{children}</table>
+        <div className="my-3 overflow-x-auto">
+          <table className="mx-auto w-fit max-w-full border-collapse text-[13px]">
+            {children}
+          </table>
         </div>
       ),
-      th: ({ children }: { children?: ReactNode }) => (
-        <th className="border border-border px-3 py-1.5 text-left text-text bg-white/5">
+      th: ({
+        children,
+        style,
+      }: {
+        children?: ReactNode;
+        style?: CSSProperties;
+      }) => (
+        <th
+          style={style}
+          className="border border-border px-3 py-1.5 align-middle text-text bg-white/5"
+        >
           {children}
         </th>
       ),
-      td: ({ children }: { children?: ReactNode }) => (
-        <td className="border border-border px-3 py-1.5 text-text-muted">{children}</td>
+      td: ({
+        children,
+        style,
+      }: {
+        children?: ReactNode;
+        style?: CSSProperties;
+      }) => (
+        <td
+          style={style}
+          className="border border-border px-3 py-1.5 align-middle text-text-muted"
+        >
+          {children}
+        </td>
       ),
       hr: () => <hr className="border-border my-6" />,
       img: ({ src, alt }: { src?: string; alt?: string }) => {
@@ -560,11 +684,11 @@ export function RecordDetail({
   const tocSource = editingContent ? contentDraft : (record?.content ?? "");
   const toc = useMemo(() => extractMarkdownToc(tocSource), [tocSource]);
 
-  // Measure matching headings in both scroll panes. The textarea mirror is
-  // necessary because soft wrapping makes source character/line offsets
-  // different from its pixel scroll positions.
+  // Measure matching headings in both scroll panes (source mode only). The
+  // textarea mirror is necessary because soft wrapping makes source
+  // character/line offsets different from its pixel scroll positions.
   useLayoutEffect(() => {
-    if (!editingContent || !showPreview || toc.length === 0) {
+    if (!editingContent || !showPreview || editorMode !== "source" || toc.length === 0) {
       setScrollAnchors((current) => (
         current.editor.length === 0 && current.preview.length === 0
           ? current
@@ -661,7 +785,7 @@ export function RecordDetail({
       cancelAnimationFrame(frame);
       resizeObserver.disconnect();
     };
-  }, [contentDraft, editingContent, showPreview, toc]);
+  }, [contentDraft, editingContent, showPreview, editorMode, toc]);
 
   // Keep lastSaved* refs in sync with the record from the server.
   useEffect(() => {
@@ -681,14 +805,14 @@ export function RecordDetail({
     }
     pendingContentSaveRef.current = { recordId: record.id, content: draft };
     const timer = setTimeout(() => {
-      flushContentSave();
+      void flushContentSave();
     }, 1200);
     return () => clearTimeout(timer);
   }, [editingContent, contentDraft, record, flushContentSave]);
 
   // Debounced auto-save for title while editing.
   useEffect(() => {
-    if (!editingTitle || !record) return;
+    if ((!editingTitle && !editingContent) || !record) return;
     if (draftRecordIdRef.current !== record.id) return;
     const draft = titleDraft;
     if (draft.trim() === lastSavedTitleRef.current.trim()) {
@@ -697,7 +821,7 @@ export function RecordDetail({
     }
     pendingTitleSaveRef.current = { recordId: record.id, title: draft };
     const timer = setTimeout(() => {
-      flushTitleSave();
+      void flushTitleSave();
     }, 800);
     return () => clearTimeout(timer);
   }, [editingTitle, titleDraft, record, flushTitleSave]);
@@ -706,21 +830,43 @@ export function RecordDetail({
   // record before resetting editing state. Also invalidate the draft so the
   // auto-save effect doesn't fire against the new record with stale content.
   useEffect(() => {
-    flushContentSave();
-    flushTitleSave();
+    void flushContentSave();
+    void flushTitleSave();
     draftRecordIdRef.current = null;
+    setDraftRecordId(null);
     pendingContentSaveRef.current = null;
     pendingTitleSaveRef.current = null;
     setEditingTitle(false);
-    setEditingContent(false);
+    if (record) {
+      editSessionRef.current = writeQueueRef.current.beginSession();
+      draftRecordIdRef.current = record.id;
+      setDraftRecordId(record.id);
+      editStartContentRef.current = record.content ?? "";
+      editStartTitleRef.current = record.title ?? "";
+      setContentDraft(record.content ?? "");
+      setTitleDraft(record.title ?? "");
+      setEditorMode(getDefaultDocumentEditorMode());
+      setEditingContent(true);
+    } else {
+      setDraftRecordId(null);
+      setEditingContent(false);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [record?.id]);
+  }, [record?.id, onUpdate]);
 
   // Flush pending saves on unmount (e.g. navigating to settings / closing panel)
   useEffect(() => {
     return () => {
-      flushContentSave();
-      flushTitleSave();
+      if (editingContentRef.current && editorModeRef.current === "wysiwyg") {
+        void flushRichEditorRef.current?.().then((markdown) => {
+          const recordId = draftRecordIdRef.current;
+          if (!recordId) return;
+          pendingContentSaveRef.current = { recordId, content: markdown };
+          void flushContentSave();
+        });
+      }
+      void flushContentSave();
+      void flushTitleSave();
     };
   }, [flushContentSave, flushTitleSave]);
 
@@ -732,12 +878,13 @@ export function RecordDetail({
     }
   }, [editingTitle]);
 
+  // Focus the textarea when entering source-mode editing.
   useEffect(() => {
-    if (editingContent && contentRef.current) {
+    if (editingContent && editorMode === "source" && contentRef.current) {
       contentRef.current.focus();
       contentRef.current.select();
     }
-  }, [editingContent]);
+  }, [editingContent, editorMode]);
 
   const startEditTitle = useCallback(() => {
     draftRecordIdRef.current = record?.id ?? null;
@@ -750,14 +897,18 @@ export function RecordDetail({
   }, [record]);
 
   const startEditContent = useCallback(() => {
+    editSessionRef.current = writeQueueRef.current.beginSession();
     draftRecordIdRef.current = record?.id ?? null;
+    setDraftRecordId(record?.id ?? null);
     const original = record?.content ?? "";
     editStartContentRef.current = original;
+    editStartTitleRef.current = record?.title ?? "";
     if (!record?.content) {
       setContentDraft("");
     } else {
       setContentDraft(record.content);
     }
+    setTitleDraft(record?.title ?? "");
     setEditingContent(true);
   }, [record]);
 
@@ -773,18 +924,53 @@ export function RecordDetail({
     lastSavedTitleRef.current = trimmed;
   }, [record, titleDraft, onUpdate]);
 
-  const saveContent = useCallback(async () => {
-    if (!record) return;
-    const trimmed = contentDraft.trim();
-    if (trimmed !== lastSavedContentRef.current.trim()) {
-      pendingContentSaveRef.current = null;
-      await onUpdate(record.id, {
-        content: trimmed,
-      });
-      lastSavedContentRef.current = trimmed;
+  const saveContent = useCallback(async (latestContent?: string) => {
+    if (!record || contentSaveInFlightRef.current) return;
+    contentSaveInFlightRef.current = true;
+    setIsSavingContent(true);
+    setSaveError(null);
+    const trimmed = (latestContent ?? contentDraft).trim();
+    const trimmedTitle = titleDraft.trim();
+    try {
+      if (trimmed !== lastSavedContentRef.current.trim()) {
+        pendingContentSaveRef.current = null;
+        const applied = await writeQueueRef.current.enqueue(editSessionRef.current, async () => {
+          await onUpdate(record.id, { content: trimmed });
+        });
+        if (applied) lastSavedContentRef.current = trimmed;
+      }
+      if (trimmedTitle !== lastSavedTitleRef.current.trim()) {
+        pendingTitleSaveRef.current = null;
+        const applied = await writeQueueRef.current.enqueue(editSessionRef.current, async () => {
+          await onUpdate(record.id, { title: trimmedTitle });
+        });
+        if (applied) lastSavedTitleRef.current = trimmedTitle;
+      }
+      // Rich text is the default document surface; saving must not throw the
+      // user back into a separate read-only state.
+    } catch {
+      setSaveError("保存失败，请重试。");
+    } finally {
+      contentSaveInFlightRef.current = false;
+      setIsSavingContent(false);
     }
-    setEditingContent(false);
-  }, [record, contentDraft, onUpdate]);
+  }, [record, contentDraft, titleDraft, onUpdate]);
+
+  const saveDocument = useCallback(async () => {
+    await saveDocumentWithLatestMarkdown(
+      editorMode === "wysiwyg" ? flushRichEditorRef.current : null,
+      saveContent,
+    );
+  }, [editorMode, saveContent]);
+
+  const switchEditorMode = useCallback(async (nextMode: "wysiwyg" | "source") => {
+    if (nextMode === editorMode) return;
+    if (editorMode === "wysiwyg") {
+      const latestMarkdown = await flushRichEditorRef.current?.();
+      if (latestMarkdown !== undefined) setContentDraft(latestMarkdown);
+    }
+    setEditorMode(nextMode);
+  }, [editorMode]);
 
   // Exit edit mode, discarding ALL changes made during this edit session.
   // "取消" acts as a true cancel: any pending auto-save is dropped, and if
@@ -797,23 +983,64 @@ export function RecordDetail({
       return;
     }
     const original = editStartContentRef.current;
+    const originalTitle = editStartTitleRef.current;
     // Drop any pending auto-save so it can't fire after we cancel.
-    pendingContentSaveRef.current = null;
+    const clearedPendingSaves = clearDocumentPendingSaves();
+    pendingContentSaveRef.current = clearedPendingSaves.content;
+    pendingTitleSaveRef.current = clearedPendingSaves.title;
     draftRecordIdRef.current = null;
-    // If auto-save already wrote a version different from edit-start, revert.
-    const persisted = lastSavedContentRef.current.trim();
-    if (persisted !== original.trim()) {
+    // Invalidate queued edit writes, then append a compensating revert after
+    // any in-flight transaction settles so cancellation always wins.
+    writeQueueRef.current.invalidate();
+    const revertSession = writeQueueRef.current.beginSession();
+    void writeQueueRef.current.enqueue(revertSession, async () => {
+      await onUpdate(record.id, { content: original, title: originalTitle });
       lastSavedContentRef.current = original;
-      // Pass the string directly (even if empty) so Rust deserializes to
-      // Some("...") / Some("") and db.update_record overwrites the column.
-      // Passing null → None → Option::or falls back to current → no clear.
-      void onUpdate(record.id, {
-        content: original,
-      });
-    }
-    setEditingContent(false);
+      lastSavedTitleRef.current = originalTitle;
+    }).catch(() => {
+      setSaveError("取消编辑时还原失败，请重试。");
+    });
+    setEditingContent(true);
   }, [record, onUpdate]);
 
+  // Register on-disk image file paths in the DB and return convertFileSrc
+  // URLs for the newly-added images. Caller (MarkdownEditor) handles
+  // insertion into the editor.
+  const registerImagePaths = useCallback(
+    async (paths: string[]): Promise<string[]> => {
+      if (!record || paths.length === 0) return [];
+      await addAttachmentsToRecord(record.id, paths);
+      const updated = await getRecordDetail(record.id);
+      const oldIds = new Set(record.attachments.map((a) => a.id));
+      const newAttachments = updated.attachments.filter(
+        (a) => !oldIds.has(a.id) && (a.file_type === "image" || a.file_type === "screenshot"),
+      );
+      await selectRecord(record.id);
+      // Store convertFileSrc URLs (http://asset.localhost/...) in the
+      // markdown so ReactMarkdown's default urlTransform doesn't strip them
+      // and the img renderer can display them directly.
+      return newAttachments.map((a) => convertFileSrc(a.local_path));
+    },
+    [record, selectRecord],
+  );
+
+  // Save a pasted image blob (clipboard) to disk + DB and return its
+  // convertFileSrc URL. Used by MarkdownEditor for Ctrl+V image paste in
+  // both WYSIWYG (via BlockNote's uploadFile) and source mode (textarea
+  // onPaste).
+  const registerImageBlob = useCallback(
+    async (file: File): Promise<string> => {
+      if (!record) throw new Error("no active record");
+      const { rgba, width, height } = await blobToRgba(file);
+      const tempPath = await saveClipboardImage(Array.from(rgba), width, height);
+      const [url] = await registerImagePaths([tempPath]);
+      if (!url) throw new Error("image registration failed");
+      return url;
+    },
+    [record, registerImagePaths],
+  );
+
+  // Insert text at the textarea cursor (source mode only).
   const insertMarkdownAtCursor = useCallback((text: string) => {
     const textarea = contentRef.current;
     if (!textarea) return;
@@ -822,7 +1049,7 @@ export function RecordDetail({
     const draft = contentDraftRef.current;
     const prefix = draft.slice(0, start);
     const suffix = draft.slice(end);
-    // Add newlines around the image if we're not at the start of a line.
+    // Add newlines around the inserted block if we're not at the start of a line.
     const needsLeadingNewline = prefix.length > 0 && !prefix.endsWith("\n");
     const needsTrailingNewline = suffix.length > 0 && !suffix.startsWith("\n");
     const insertion =
@@ -839,29 +1066,8 @@ export function RecordDetail({
     });
   }, []);
 
-  const addImagePathsToRecord = useCallback(
-    async (paths: string[]) => {
-      if (!record) return;
-      const oldIds = new Set(record.attachments.map((a) => a.id));
-      await addAttachmentsToRecord(record.id, paths);
-      const updated = await getRecordDetail(record.id);
-      const newAttachments = updated.attachments.filter(
-        (a) => !oldIds.has(a.id) && (a.file_type === "image" || a.file_type === "screenshot"),
-      );
-      if (newAttachments.length > 0) {
-        // Store the convertFileSrc URL (http://asset.localhost/...) in the
-        // markdown so ReactMarkdown's default urlTransform doesn't strip it
-        // and the img renderer can display it directly.
-        const markdown = newAttachments
-          .map((a) => `![](${convertFileSrc(a.local_path)})`)
-          .join("\n\n");
-        insertMarkdownAtCursor(markdown);
-      }
-      await selectRecord(record.id);
-    },
-    [record, selectRecord, insertMarkdownAtCursor],
-  );
-
+  // Source-mode paste: intercept clipboard images. (WYSIWYG paste is handled
+  // by BlockNote via uploadFile inside MarkdownEditor.)
   const handlePaste = useCallback(
     async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
       if (!record) return;
@@ -872,30 +1078,31 @@ export function RecordDetail({
       if (!blob) return;
       e.preventDefault();
       try {
-        const { rgba, width, height } = await blobToRgba(blob);
-        const tempPath = await saveClipboardImage(
-          Array.from(rgba),
-          width,
-          height,
-        );
-        await addImagePathsToRecord([tempPath]);
+        const url = await registerImageBlob(blob);
+        if (url) insertMarkdownAtCursor(`![](${url})`);
       } catch (error) {
         console.error("Failed to paste image:", error);
       }
     },
-    [record, addImagePathsToRecord],
+    [record, registerImageBlob, insertMarkdownAtCursor],
   );
 
-  const addImagePathsToRecordRef = useRef(addImagePathsToRecord);
+  // Ref mirror so the window-level drop listener always sees the latest
+  // registerImagePaths without re-binding on every render.
+  const registerImagePathsRef = useRef(registerImagePaths);
   useEffect(() => {
-    addImagePathsToRecordRef.current = addImagePathsToRecord;
-  }, [addImagePathsToRecord]);
+    registerImagePathsRef.current = registerImagePaths;
+  }, [registerImagePaths]);
 
+  // OS file drops (Tauri onDragDropEvent) — source mode only. WYSIWYG
+  // drops are handled inside MarkdownEditor. Tauri intercepts native file
+  // drops at the window level, so the textarea's HTML5 drop handler never
+  // sees them; we route through here.
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let cancelled = false;
     void listenForFileDrops(async ({ paths }) => {
-      if (!editingContentRef.current) return;
+      if (!editingContentRef.current || editorModeRef.current !== "source") return;
       const currentRecord = recordRef.current;
       if (!currentRecord) return;
       const imagePaths = paths.filter((p) =>
@@ -903,7 +1110,10 @@ export function RecordDetail({
       );
       if (imagePaths.length === 0) return;
       try {
-        await addImagePathsToRecordRef.current(imagePaths);
+        const urls = await registerImagePathsRef.current(imagePaths);
+        if (urls.length > 0) {
+          insertMarkdownAtCursor(urls.map((u) => `![](${u})`).join("\n\n"));
+        }
       } catch (error) {
         console.error("Failed to drop images:", error);
       }
@@ -918,7 +1128,7 @@ export function RecordDetail({
       cancelled = true;
       unlisten?.();
     };
-  }, []);
+  }, [insertMarkdownAtCursor]);
 
   const handleConvertToTask = useCallback(async () => {
     if (!record || converting) return;
@@ -1178,11 +1388,125 @@ export function RecordDetail({
   }
 
   const hasTask = !!record.task;
+  const documentSaveStatus = getDocumentSaveStatus({
+    titleDraft,
+    savedTitle: lastSavedTitleRef.current,
+    contentDraft,
+    savedContent: lastSavedContentRef.current,
+  });
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
       {/* Header */}
-      <div className="shrink-0 border-b border-border px-5 py-3">
+      <div className={`shrink-0 border-b border-border px-5 py-3 ${
+        editingContent ? "sticky top-0 z-20 bg-bg/95 backdrop-blur" : ""
+      }`}>
+        {editingContent && shouldMountRichEditorForRecord(draftRecordId, record.id) ? (
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={finishEditContent}
+                title="丢弃本次编辑改动并退出"
+                className="inline-flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium text-text-muted transition hover:bg-surface-2 hover:text-text"
+              >
+                取消
+              </button>
+              <input
+                type="text"
+                value={titleDraft}
+                onChange={(event) => setTitleDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Escape") {
+                    event.preventDefault();
+                    finishEditContent();
+                  }
+                  if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+                    event.preventDefault();
+                    void saveDocument();
+                  }
+                }}
+                placeholder="无标题"
+                aria-label="文档标题"
+                className="min-w-40 flex-1 bg-transparent px-1 py-1 text-base font-medium text-text outline-none placeholder:text-text-muted"
+              />
+              <span className="text-[10px] text-text-muted" aria-live="polite">
+                {saveError ?? (isSavingContent ? "保存中…" : documentSaveStatus)}
+              </span>
+              <button
+                type="button"
+                onClick={() => void saveDocument()}
+                disabled={isSavingContent}
+                className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-secondary/15 px-3.5 py-1.5 text-xs font-medium text-secondary transition hover:bg-secondary/25"
+              >
+                {isSavingContent ? "保存中…" : "保存"}
+              </button>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="flex overflow-hidden rounded-md border border-border">
+                <button
+                  type="button"
+                  onClick={() => void switchEditorMode("wysiwyg")}
+                  title="所见即所得 富文本编辑"
+                  className={`px-2.5 py-1 text-xs transition ${
+                    editorMode === "wysiwyg"
+                      ? "bg-primary/20 text-primary"
+                      : "bg-transparent text-text-muted hover:bg-surface-2"
+                  }`}
+                >
+                  富文本
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void switchEditorMode("source")}
+                  title="Markdown 源码 + 实时预览"
+                  className={`px-2.5 py-1 text-xs transition ${
+                    editorMode === "source"
+                      ? "bg-primary/20 text-primary"
+                      : "bg-transparent text-text-muted hover:bg-surface-2"
+                  }`}
+                >
+                  源码
+                </button>
+              </div>
+              {editorMode === "source" && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setShowPreview((previous) => !previous)}
+                    aria-pressed={showPreview}
+                    className={`rounded-full px-3 py-1 text-xs font-medium transition ${
+                      showPreview
+                        ? "bg-secondary/10 text-secondary hover:bg-secondary/20"
+                        : "text-text-muted hover:bg-surface-2 hover:text-text"
+                    }`}
+                  >
+                    {showPreview ? "预览中" : "预览"}
+                  </button>
+                  {showPreview && (
+                    <button
+                      type="button"
+                      onClick={toggleSyncScroll}
+                      aria-pressed={syncScroll}
+                      className={`rounded-full px-3 py-1 text-xs font-medium transition ${
+                        syncScroll
+                          ? "bg-secondary/10 text-secondary hover:bg-secondary/20"
+                          : "text-text-muted hover:bg-surface-2 hover:text-text"
+                      }`}
+                    >
+                      {syncScroll ? "同步中" : "同步"}
+                    </button>
+                  )}
+                </>
+              )}
+              <span className="text-[10px] text-text-muted">Ctrl+Enter 保存 · Esc 取消</span>
+            </div>
+          </div>
+        ) : editingContent ? (
+          <div className="flex flex-1 items-center justify-center text-sm text-text-muted">
+            正在载入笔记…
+          </div>
+        ) : (
         <div className="flex items-center gap-2">
           {!editingContent && (
             <button
@@ -1254,71 +1578,93 @@ export function RecordDetail({
             </button>
           )}
         </div>
+        )}
       </div>
 
       {/* Body + TOC rail */}
       <div className="flex min-h-0 flex-1">
         {editingContent ? (
-          /* ── Focus edit view: split editor + live preview ── */
-          <div className="flex min-w-0 flex-1">
-            <textarea
-              ref={(el) => {
-                contentRef.current = el;
-                syncEditorRef.current = el;
+          editorMode === "wysiwyg" ? (
+            /* ── WYSIWYG edit view: BlockNote rich-text editor ── */
+            <MarkdownEditor
+              key={record.id}
+              markdown={contentDraft}
+              onChange={setContentDraft}
+              onSave={(latestMarkdown) => saveContent(latestMarkdown)}
+              onCancel={finishEditContent}
+              onFlushReady={(flush) => {
+                flushRichEditorRef.current = flush;
+                richEditorRecordIdRef.current = flush ? record.id : null;
               }}
-              value={contentDraft}
-              onChange={(e) => setContentDraft(e.target.value)}
-              onPaste={handlePaste}
-              onKeyDown={(e) => {
-                if (e.key === "Escape") {
-                  e.preventDefault();
-                  finishEditContent();
-                }
-                if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
-                  e.preventDefault();
-                  void saveContent();
-                }
+              onContainerReady={(element) => {
+                markdownContainerRef.current = element;
               }}
-              placeholder="使用 Markdown 编写…  自动保存已开启 · Ctrl+Enter 立即保存 · Esc 取消"
-              className={`${
-                showPreview ? "border-r border-border" : "w-full"
-              } resize-none bg-surface/60
-                px-5 py-4 text-sm leading-6 text-text outline-none
-                font-mono placeholder:text-text-muted`}
-              style={
-                showPreview
-                  ? { flex: `${editorRatio} 1 0%` }
-                  : undefined
-              }
+              onAddImagePaths={registerImagePaths}
+              onAddImageFile={registerImageBlob}
+              className="document-editor min-w-0 flex-1"
             />
-            {showPreview && (
-              <>
-                <div
-                  className="col-resize-handle shrink-0"
-                  onPointerDown={startEditorResize}
-                  onDoubleClick={resetEditorRatio}
-                  role="separator"
-                  aria-orientation="vertical"
-                  aria-label="调整编辑器与预览宽度"
-                />
-                <div
-                  ref={syncPreviewRef}
-                  className="overflow-y-auto overscroll-contain p-5"
-                  style={{ flex: `${1 - editorRatio} 1 0%` }}
-                >
-                  {contentDraft.trim() ? (
-                    <div className="markdown-body" ref={markdownContainerRef}>
-                      <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents} urlTransform={markdownUrlTransform}>
-                        {contentDraft}
-                      </ReactMarkdown>
-                    </div>
-                  ) : (
-                    <p className="text-sm italic text-text0">实时预览…</p>
-                  )}
-                </div>
-              </>
-            )}
-          </div>
+          ) : (
+            /* ── Source edit view: split editor + live preview ── */
+            <div className="flex min-w-0 flex-1">
+              <textarea
+                ref={(el) => {
+                  contentRef.current = el;
+                  syncEditorRef.current = el;
+                }}
+                value={contentDraft}
+                onChange={(e) => setContentDraft(e.target.value)}
+                onPaste={handlePaste}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") {
+                    e.preventDefault();
+                    finishEditContent();
+                  }
+                  if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+                    e.preventDefault();
+                    void saveContent();
+                  }
+                }}
+                placeholder="使用 Markdown 编写…  自动保存已开启 · Ctrl+Enter 立即保存 · Esc 取消"
+                className={`${
+                  showPreview ? "border-r border-border" : "w-full"
+                } resize-none bg-surface/60
+                  px-5 py-4 text-sm leading-6 text-text outline-none
+                  font-mono placeholder:text-text-muted`}
+                style={
+                  showPreview
+                    ? { flex: `${editorRatio} 1 0%` }
+                    : undefined
+                }
+              />
+              {showPreview && (
+                <>
+                  <div
+                    className="col-resize-handle shrink-0"
+                    onPointerDown={startEditorResize}
+                    onDoubleClick={resetEditorRatio}
+                    role="separator"
+                    aria-orientation="vertical"
+                    aria-label="调整编辑器与预览宽度"
+                  />
+                  <div
+                    ref={syncPreviewRef}
+                    className="overflow-y-auto overscroll-contain p-5"
+                    style={{ flex: `${1 - editorRatio} 1 0%` }}
+                  >
+                    {contentDraft.trim() ? (
+                      <div className="markdown-body" ref={markdownContainerRef}>
+                        <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents} urlTransform={markdownUrlTransform}>
+                          {contentDraft}
+                        </ReactMarkdown>
+                      </div>
+                    ) : (
+                      <p className="text-sm italic text-text0">实时预览…</p>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+          )
         ) : (
           /* ── View mode: scrollable body ── */
           <div className="flex-1 overflow-y-auto overscroll-contain">
@@ -1876,74 +2222,6 @@ export function RecordDetail({
           </aside>
         )}
       </div>
-
-      {/* Action bar */}
-      {editingContent && (
-        <div className="shrink-0 border-t border-border px-5 py-3">
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => void saveContent()}
-              className="inline-flex items-center gap-1.5 rounded-full bg-secondary/15 px-4 py-1.5
-                text-xs font-medium text-secondary transition hover:bg-secondary/25"
-            >
-              <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-              </svg>
-              保存
-            </button>
-            <button
-              type="button"
-              onClick={finishEditContent}
-              title="丢弃本次编辑改动并退出"
-              className="inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5
-                text-xs font-medium text-text-muted transition hover:bg-white/5 hover:text-text"
-            >
-              取消
-            </button>
-            <button
-              type="button"
-              onClick={() => setShowPreview((prev) => !prev)}
-              title={showPreview ? "关闭预览" : "开启预览"}
-              className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5
-                text-xs font-medium transition ${
-                  showPreview
-                    ? "bg-secondary/10 text-secondary hover:bg-secondary/20"
-                    : "text-text-muted hover:bg-white/5 hover:text-text"
-                }`}
-            >
-              <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" />
-                <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-              </svg>
-              {showPreview ? "预览中" : "预览"}
-            </button>
-            {showPreview && (
-              <button
-                type="button"
-                onClick={toggleSyncScroll}
-                title={syncScroll ? "关闭同步滚动" : "开启同步滚动"}
-                aria-pressed={syncScroll}
-                className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5
-                  text-xs font-medium transition ${
-                    syncScroll
-                      ? "bg-secondary/10 text-secondary hover:bg-secondary/20"
-                      : "text-text-muted hover:bg-white/5 hover:text-text"
-                  }`}
-              >
-                <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M7 10l5-5 5 5M7 14l5 5 5-5" />
-                </svg>
-                {syncScroll ? "同步中" : "同步"}
-              </button>
-            )}
-            <div className="flex-1" />
-            <span className="text-[10px] text-text-muted">
-              自动保存已开启 · Ctrl+Enter 立即保存 · Esc 取消
-            </span>
-          </div>
-        </div>
-      )}
 
       {/* 全屏图片预览 */}
       {previewSrc && (
