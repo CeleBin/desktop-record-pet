@@ -383,12 +383,6 @@ export function Navigation({
           </svg>
           {settingsOpen ? "关闭设置" : "设置"}
         </button>
-
-        <div className="flex-1" />
-
-        <p className="text-[10px] text-text-muted">
-          Ctrl+N 新建
-        </p>
       </div>
     </nav>
   );
