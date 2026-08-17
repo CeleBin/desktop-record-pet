@@ -107,6 +107,39 @@ export function RecordItemContent({ record, onDelete }: RecordItemContentProps) 
               <span>{attachmentCount} 个附件</span>
             </>
           )}
+          {record.tags && record.tags.length > 0 && (
+            <>
+              <span className="text-text-muted">·</span>
+              <span className="inline-flex flex-wrap items-center gap-1">
+                {record.tags.slice(0, 3).map((tag) => {
+                  const hasColor = !!tag.color;
+                  return (
+                    <span
+                      key={tag.id}
+                      className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium ${
+                        !hasColor ? "bg-white/5 text-text-muted" : ""
+                      }`}
+                      style={
+                        hasColor
+                          ? {
+                              backgroundColor: `${tag.color}1a`,
+                              color: tag.color!,
+                            }
+                          : undefined
+                      }
+                    >
+                      {tag.name}
+                    </span>
+                  );
+                })}
+                {record.tags.length > 3 && (
+                  <span className="text-[10px] text-text-muted">
+                    +{record.tags.length - 3}
+                  </span>
+                )}
+              </span>
+            </>
+          )}
         </div>
       </div>
 

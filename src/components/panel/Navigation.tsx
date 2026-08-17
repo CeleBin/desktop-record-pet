@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-import type { RecordType, TaskStatus } from "../../types";
+import type { RecordType, Tag, TaskStatus } from "../../types";
 import { useTagsStore } from "../../store/tags";
 
 type ViewMode = "notes" | "tasks";
@@ -76,8 +76,20 @@ export function Navigation({
   const [newTagColor, setNewTagColor] = useState(TAG_COLORS[0]);
   const tags = useTagsStore((s) => s.tags);
   const createTag = useTagsStore((s) => s.createTag);
+  const updateTag = useTagsStore((s) => s.updateTag);
+  const deleteTag = useTagsStore((s) => s.deleteTag);
 
   const tagPopoverRef = useRef<HTMLDivElement>(null);
+
+  // ── Tag context menu (right-click on a tag filter button) ──
+  const [tagMenu, setTagMenu] = useState<{ tagId: string; x: number; y: number } | null>(null);
+  const tagMenuRef = useRef<HTMLDivElement>(null);
+
+  // ── Tag edit popover (rename / recolor) ──
+  const [editingTag, setEditingTag] = useState<Tag | null>(null);
+  const [editTagName, setEditTagName] = useState("");
+  const [editTagColor, setEditTagColor] = useState(TAG_COLORS[0]);
+  const editPopoverRef = useRef<HTMLDivElement>(null);
 
   // Close popover on outside click
   useEffect(() => {
@@ -91,6 +103,30 @@ export function Navigation({
     return () => document.removeEventListener("mousedown", handler);
   }, [showTagPopover]);
 
+  // Close context menu on outside click
+  useEffect(() => {
+    if (!tagMenu) return;
+    const handler = (e: MouseEvent) => {
+      if (tagMenuRef.current && !tagMenuRef.current.contains(e.target as Node)) {
+        setTagMenu(null);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [tagMenu]);
+
+  // Close edit popover on outside click
+  useEffect(() => {
+    if (!editingTag) return;
+    const handler = (e: MouseEvent) => {
+      if (editPopoverRef.current && !editPopoverRef.current.contains(e.target as Node)) {
+        setEditingTag(null);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [editingTag]);
+
   const handleCreateTag = async () => {
     const trimmed = newTagName.trim();
     if (!trimmed) return;
@@ -99,6 +135,35 @@ export function Navigation({
       setNewTagName("");
       setNewTagColor(TAG_COLORS[0]);
       setShowTagPopover(false);
+    } catch {
+      // error handled by store
+    }
+  };
+
+  const handleStartEditTag = (tag: Tag) => {
+    setEditTagName(tag.name);
+    setEditTagColor(tag.color ?? TAG_COLORS[0]);
+    setEditingTag(tag);
+    setTagMenu(null);
+  };
+
+  const handleSaveEditTag = async () => {
+    if (!editingTag) return;
+    const trimmed = editTagName.trim();
+    if (!trimmed) return;
+    try {
+      await updateTag(editingTag.id, trimmed, editTagColor);
+      setEditingTag(null);
+    } catch {
+      // error handled by store
+    }
+  };
+
+  const handleDeleteTag = async (tag: Tag) => {
+    setTagMenu(null);
+    if (!window.confirm(`确认删除标签「${tag.name}」？该标签将从所有相关笔记中移除。`)) return;
+    try {
+      await deleteTag(tag.id);
     } catch {
       // error handled by store
     }
@@ -213,6 +278,10 @@ export function Navigation({
                       key={tag.id}
                       type="button"
                       onClick={() => onToggleTagFilter(tag.id)}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        setTagMenu({ tagId: tag.id, x: e.clientX, y: e.clientY });
+                      }}
                       className={`
                         rounded-full px-3 py-1.5 text-xs font-medium transition-all duration-150
                         ${!hasColor
@@ -304,6 +373,53 @@ export function Navigation({
                   </button>
                 </div>
               )}
+
+              {/* Tag edit popover (rename / recolor) */}
+              {editingTag && (
+                <div ref={editPopoverRef} className="absolute left-0 z-50 mt-1 w-56 rounded-xl border border-border bg-surface/95 p-3 shadow-2xl backdrop-blur-xl">
+                  <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.2em] text-text0">编辑标签</p>
+                  <input
+                    type="text"
+                    value={editTagName}
+                    onChange={(e) => setEditTagName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        void handleSaveEditTag();
+                      }
+                      if (e.key === "Escape") {
+                        setEditingTag(null);
+                      }
+                    }}
+                    placeholder="标签名称…"
+                    className="mb-2 w-full rounded-lg border border-border bg-white/5 px-2.5 py-1.5 text-xs text-text placeholder-text-muted outline-none transition focus:border-secondary/40 focus:ring-2 focus:ring-secondary/20"
+                    autoFocus
+                  />
+                  <div className="mb-2 flex gap-1.5">
+                    {TAG_COLORS.map((color) => (
+                      <button
+                        key={color}
+                        type="button"
+                        onClick={() => setEditTagColor(color)}
+                        className={`h-5 w-5 rounded-full transition-all duration-150 ${
+                          editTagColor === color
+                            ? "ring-2 ring-white ring-offset-1 ring-offset-surface/95"
+                            : "ring-1 ring-white/10"
+                        }`}
+                        style={{ backgroundColor: color }}
+                      />
+                    ))}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void handleSaveEditTag()}
+                    disabled={!editTagName.trim()}
+                    className="w-full rounded-lg bg-secondary/15 px-3 py-1.5 text-xs font-medium text-secondary transition hover:bg-secondary/25 disabled:opacity-40"
+                  >
+                    保存
+                  </button>
+                </div>
+              )}
             </div>
           </section>
         </>
@@ -384,6 +500,38 @@ export function Navigation({
           {settingsOpen ? "关闭设置" : "设置"}
         </button>
       </div>
+
+      {/* Tag context menu (right-click) */}
+      {tagMenu && (
+        <div
+          ref={tagMenuRef}
+          className="fixed z-50 w-32 rounded-xl border border-border bg-surface/95 p-1 shadow-2xl backdrop-blur-xl"
+          style={{ left: tagMenu.x, top: tagMenu.y }}
+        >
+          {(() => {
+            const tag = tags.find((t) => t.id === tagMenu.tagId);
+            if (!tag) return null;
+            return (
+              <>
+                <button
+                  type="button"
+                  onClick={() => handleStartEditTag(tag)}
+                  className="block w-full rounded-lg px-2.5 py-1.5 text-left text-xs text-text transition hover:bg-white/5"
+                >
+                  编辑…
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleDeleteTag(tag)}
+                  className="block w-full rounded-lg px-2.5 py-1.5 text-left text-xs text-danger transition hover:bg-danger/10"
+                >
+                  删除
+                </button>
+              </>
+            );
+          })()}
+        </div>
+      )}
     </nav>
   );
 }

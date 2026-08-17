@@ -353,7 +353,8 @@ pub fn list_records(
         .into_iter()
         .map(|record| {
             let task = db::get_task_for_record(&conn, &record.id).unwrap_or(None);
-            RecordWithRelations::from_record(record, task, vec![], vec![], vec![], vec![], vec![])
+            let tags = db::list_record_tags(&conn, &record.id).unwrap_or_default();
+            RecordWithRelations::from_record(record, task, vec![], vec![], vec![], vec![], tags)
         })
         .collect();
     Ok(result)
