@@ -20,7 +20,7 @@ import { SettingsPanel } from "../settings/SettingsPanel";
 import { useLearningCoachStore } from "../../store/learningCoach";
 import { useSettingsStore } from "../../store/settings";
 
-type ViewMode = "all" | "notes" | "tasks";
+type ViewMode = "notes" | "tasks";
 type ContentMode = "records" | "memory" | "settings" | "chat";
 
 export function MainPanel() {
@@ -46,32 +46,14 @@ export function MainPanel() {
   // ── Resizable column widths (persisted to localStorage) ──
   const { widths, startResize, resetColumn } = useColumnResize();
 
-  // ── Type filter (multi-select: 笔记 + 待办, both selected = all) ──
-  const [selectedTypes, setSelectedTypes] = useState<Set<RecordType>>(
-    () => new Set<RecordType>(["note", "task"]),
-  );
-  const toggleTypeFilter = useCallback((type: RecordType) => {
-    setSelectedTypes((prev) => {
-      const next = new Set(prev);
-      if (next.has(type)) {
-        next.delete(type);
-      } else {
-        next.add(type);
-      }
-      return next;
-    });
-  }, []);
+  // ── Type filter (single-select: 笔记 OR 待办, never both) ──
+  const [selectedType, setSelectedType] = useState<RecordType>("note");
 
   // Derived view mode for child components (RecordList text, Navigation status section)
-  const viewMode: ViewMode =
-    selectedTypes.size === 1
-      ? selectedTypes.has("note")
-        ? "notes"
-        : "tasks"
-      : "all";
+  const viewMode: ViewMode = selectedType === "note" ? "notes" : "tasks";
 
-  // Server-side type filter: only filter when exactly one type is selected
-  const typeFilter = selectedTypes.size === 1 ? Array.from(selectedTypes)[0] : undefined;
+  // Server-side type filter: always filter to the single selected type
+  const typeFilter = selectedType;
 
   // ── Local filter state ──
   const [activeStatus, setActiveStatus] = useState<RecordStatus | null>(null);
@@ -117,7 +99,7 @@ export function MainPanel() {
       statusFilter: activeStatus ?? undefined,
       searchQuery: debouncedQuery.length > 0 ? debouncedQuery : undefined,
       tagIds: activeTagIds.length > 0 ? activeTagIds : undefined,
-      viewKey: viewMode !== "all" ? viewMode : undefined,
+      viewKey: viewMode,
     });
   }, [typeFilter, activeStatus, debouncedQuery, activeTagIds, viewMode, fetchRecords]);
 
@@ -173,7 +155,6 @@ export function MainPanel() {
 
   const handleReorder = useCallback(
     (activeId: string, overId: string) => {
-      if (viewMode === "all") return;
       reorderRecords(viewMode, activeId, overId);
     },
     [viewMode, reorderRecords],
@@ -215,8 +196,8 @@ export function MainPanel() {
         style={{ width: widths.nav }}
       >
         <Navigation
-          selectedTypes={selectedTypes}
-          onToggleTypeFilter={toggleTypeFilter}
+          selectedType={selectedType}
+          onSelectType={setSelectedType}
           viewMode={viewMode}
           activeStatus={activeStatus}
           taskStatusFilter={taskStatusFilter}

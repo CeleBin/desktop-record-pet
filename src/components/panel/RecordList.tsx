@@ -11,7 +11,7 @@ import type { RecordWithRelations } from "../../types";
 import { RecordItemContent } from "./RecordItemContent";
 import { SortableRecordItem } from "./SortableRecordItem";
 
-type ViewMode = "all" | "notes" | "tasks";
+type ViewMode = "notes" | "tasks";
 
 interface RecordListProps {
   records: RecordWithRelations[];
@@ -60,7 +60,7 @@ export function RecordList({
       <div className="flex h-full items-center justify-center px-4">
         <div className="text-center">
           <p className="text-sm text-text0">
-            {viewMode === "tasks" ? "暂无任务" : viewMode === "notes" ? "暂无笔记" : "暂无记录"}
+            {viewMode === "tasks" ? "暂无任务" : "暂无笔记"}
           </p>
           <p className="mt-1 text-xs text-text-muted">
             {viewMode === "tasks"
@@ -72,19 +72,18 @@ export function RecordList({
     );
   }
 
-  const sortable = viewMode !== "all" && onReorder;
+  const sortable = onReorder != null;
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
       {/* Column header */}
       <div className="shrink-0 border-b border-border px-4 py-3">
         <p className="text-[10px] font-medium uppercase tracking-[0.2em] text-text0">
-          {viewMode === "tasks" ? "任务列表" : viewMode === "notes" ? "笔记列表" : "记录列表"}
+          {viewMode === "tasks" ? "任务列表" : "笔记列表"}
         </p>
         <p className="mt-0.5 text-xs text-text-muted">
           {records.length}{" "}
-          {viewMode === "tasks" ? "项任务" : viewMode === "notes" ? "条笔记" : "条记录"}
-          {viewMode === "all" && " · 按时间排序"}
+          {viewMode === "tasks" ? "项任务" : "条笔记"}
         </p>
       </div>
 

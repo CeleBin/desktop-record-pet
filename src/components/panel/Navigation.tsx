@@ -3,11 +3,11 @@ import { useEffect, useRef, useState } from "react";
 import type { RecordStatus, RecordType, TaskStatus } from "../../types";
 import { useTagsStore } from "../../store/tags";
 
-type ViewMode = "all" | "notes" | "tasks";
+type ViewMode = "notes" | "tasks";
 
 interface NavigationProps {
-  selectedTypes: Set<RecordType>;
-  onToggleTypeFilter: (type: RecordType) => void;
+  selectedType: RecordType;
+  onSelectType: (type: RecordType) => void;
   viewMode: ViewMode;
   activeStatus: RecordStatus | null;
   taskStatusFilter: TaskStatus | null;
@@ -59,8 +59,8 @@ const TASK_STATUS_STYLES: Record<string, string> = {
 };
 
 export function Navigation({
-  selectedTypes,
-  onToggleTypeFilter,
+  selectedType,
+  onSelectType,
   viewMode,
   activeStatus,
   taskStatusFilter,
@@ -117,15 +117,15 @@ export function Navigation({
   return (
     <nav className="flex h-full flex-col gap-5 overflow-y-auto p-4">
       <button type="button" onClick={onToggleChat} className={`rounded-xl border px-3 py-2 text-xs font-medium transition ${chatOpen ? "border-primary/40 bg-primary/10 text-primary" : "border-border text-text-muted hover:text-text"}`}>和搭子聊聊</button>
-      {/* ── Type filter (multi-select: both active = all) ── */}
+      {/* ── Type filter (single-select: 笔记 OR 待办) ── */}
       <div className="flex rounded-xl bg-surface/60 p-0.5 ring-1 ring-white/[5%]">
         <button
           type="button"
-          onClick={() => onToggleTypeFilter("note")}
+          onClick={() => onSelectType("note")}
           className={`
             flex-1 rounded-lg px-3 py-1.5 text-xs font-medium transition-all duration-150
             ${
-              selectedTypes.has("note")
+              selectedType === "note"
                 ? "bg-secondary/15 text-secondary shadow-sm shadow-secondary/10"
                 : "text-text-muted hover:text-text"
             }
@@ -140,11 +140,11 @@ export function Navigation({
         </button>
         <button
           type="button"
-          onClick={() => onToggleTypeFilter("task")}
+          onClick={() => onSelectType("task")}
           className={`
             flex-1 rounded-lg px-3 py-1.5 text-xs font-medium transition-all duration-150
             ${
-              selectedTypes.has("task")
+              selectedType === "task"
                 ? "bg-secondary/15 text-secondary shadow-sm shadow-secondary/10"
                 : "text-text-muted hover:text-text"
             }
@@ -186,7 +186,7 @@ export function Navigation({
             onChange={(e) => onSearchChange(e.target.value)}
             onFocus={() => setFocused(true)}
             onBlur={() => setFocused(false)}
-            placeholder={viewMode === "tasks" ? "搜索任务…" : viewMode === "notes" ? "搜索笔记…" : "搜索记录…"}
+            placeholder={viewMode === "tasks" ? "搜索任务…" : "搜索笔记…"}
             className="min-w-0 flex-1 bg-transparent text-sm text-text placeholder-text-muted outline-none"
           />
           {searchQuery.length > 0 && (
