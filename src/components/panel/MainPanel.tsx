@@ -5,7 +5,6 @@ import { useRecordsStore } from "../../store/records";
 import { initTagsListener, useTagsStore } from "../../store/tags";
 import { useTasksStore } from "../../store/tasks";
 import type {
-  RecordStatus,
   RecordType,
   TaskStatus,
   UpdateRecordRequest,
@@ -56,7 +55,6 @@ export function MainPanel() {
   const typeFilter = selectedType;
 
   // ── Local filter state ──
-  const [activeStatus, setActiveStatus] = useState<RecordStatus | null>(null);
   const [taskStatusFilter, setTaskStatusFilter] = useState<TaskStatus | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
@@ -96,12 +94,11 @@ export function MainPanel() {
   useEffect(() => {
     void fetchRecords({
       typeFilter: typeFilter,
-      statusFilter: activeStatus ?? undefined,
       searchQuery: debouncedQuery.length > 0 ? debouncedQuery : undefined,
       tagIds: activeTagIds.length > 0 ? activeTagIds : undefined,
       viewKey: viewMode,
     });
-  }, [typeFilter, activeStatus, debouncedQuery, activeTagIds, viewMode, fetchRecords]);
+  }, [typeFilter, debouncedQuery, activeTagIds, viewMode, fetchRecords]);
 
   // Fetch tasks on mount
   useEffect(() => {
@@ -114,11 +111,9 @@ export function MainPanel() {
     initTagsListener();
   }, [fetchTagsStore]);
 
-  // Clear conflicting status filters when view mode changes
+  // Clear task status filter when leaving tasks view
   useEffect(() => {
-    if (viewMode === "tasks") {
-      setActiveStatus(null);
-    } else {
+    if (viewMode !== "tasks") {
       setTaskStatusFilter(null);
     }
   }, [viewMode]);
@@ -199,14 +194,12 @@ export function MainPanel() {
           selectedType={selectedType}
           onSelectType={setSelectedType}
           viewMode={viewMode}
-          activeStatus={activeStatus}
           taskStatusFilter={taskStatusFilter}
           searchQuery={searchQuery}
           settingsOpen={contentMode === "settings"}
           memoryOpen={contentMode === "memory"}
           chatOpen={contentMode === "chat"}
           growthPreviewEnabled={growthPreviewEnabled}
-          onStatusChange={setActiveStatus}
           onTaskStatusFilterChange={setTaskStatusFilter}
           onSearchChange={setSearchQuery}
           onToggleSettings={() => setContentMode((current) => current === "settings" ? "records" : "settings")}

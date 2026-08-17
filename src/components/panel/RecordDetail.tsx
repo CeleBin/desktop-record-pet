@@ -974,7 +974,7 @@ export function RecordDetail({
     }).catch(() => {
       setSaveError("取消编辑时还原失败，请重试。");
     });
-    setEditingContent(true);
+    setEditingContent(false);
   }, [record, onUpdate]);
 
   // Register on-disk image file paths in the DB and return convertFileSrc
@@ -1378,14 +1378,6 @@ export function RecordDetail({
         {editingContent && shouldMountRichEditorForRecord(draftRecordId, record.id) ? (
           <div className="space-y-2">
             <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                onClick={finishEditContent}
-                title="丢弃本次编辑改动并退出"
-                className="inline-flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium text-text-muted transition hover:bg-surface-2 hover:text-text"
-              >
-                取消
-              </button>
               <input
                 type="text"
                 value={titleDraft}
@@ -1404,17 +1396,6 @@ export function RecordDetail({
                 aria-label="文档标题"
                 className="min-w-40 flex-1 bg-transparent px-1 py-1 text-base font-medium text-text outline-none placeholder:text-text-muted"
               />
-              <span className="text-[10px] text-text-muted" aria-live="polite">
-                {saveError ?? (isSavingContent ? "保存中…" : documentSaveStatus)}
-              </span>
-              <button
-                type="button"
-                onClick={() => void saveDocument()}
-                disabled={isSavingContent}
-                className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-secondary/15 px-3.5 py-1.5 text-xs font-medium text-secondary transition hover:bg-secondary/25"
-              >
-                {isSavingContent ? "保存中…" : "保存"}
-              </button>
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <div className="flex overflow-hidden rounded-md border border-border">
@@ -1474,6 +1455,17 @@ export function RecordDetail({
                 </>
               )}
               <span className="text-[10px] text-text-muted">Ctrl+Enter 保存 · Esc 取消</span>
+              <span className="ml-auto text-[10px] text-text-muted" aria-live="polite">
+                {saveError ?? (isSavingContent ? "保存中…" : documentSaveStatus)}
+              </span>
+              <button
+                type="button"
+                onClick={() => void saveDocument()}
+                disabled={isSavingContent}
+                className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-secondary/15 px-3.5 py-1.5 text-xs font-medium text-secondary transition hover:bg-secondary/25"
+              >
+                {isSavingContent ? "保存中…" : "保存"}
+              </button>
             </div>
           </div>
         ) : editingContent ? (

@@ -10,22 +10,13 @@ interface SettingDef {
   description: string;
   type: "text" | "boolean" | "select" | "shortcut" | "api-key";
   options?: { label: string; value: string }[];
-  category: "general" | "capture" | "ai" | "notification" | "pet" | "overlay";
+  category: "general" | "capture" | "ai" | "pet";
   placeholder?: string;
   mask?: boolean; // mask input value
+  stacked?: boolean;
 }
 
 const SETTING_DEFS: Record<string, SettingDef> = {
-  language: {
-    label: "界面语言",
-    description: "应用界面显示语言",
-    type: "select",
-    options: [
-      { label: "中文", value: "zh-CN" },
-      { label: "English", value: "en" },
-    ],
-    category: "general",
-  },
   theme: {
     label: "主题",
     description: "选择应用配色风格",
@@ -35,7 +26,6 @@ const SETTING_DEFS: Record<string, SettingDef> = {
       { label: "樱花薄雾", value: "sakura-mist" },
       { label: "抹茶清晨", value: "matcha-morning" },
       { label: "薰衣草梦境", value: "lavender-dream" },
-      { label: "暮色暖阳", value: "sunset-warm" },
     ],
     category: "general",
   },
@@ -50,23 +40,6 @@ const SETTING_DEFS: Record<string, SettingDef> = {
     ],
     category: "general",
   },
-  auto_ocr: {
-    label: "自动 OCR",
-    description: "截图后自动识别图片中的文字",
-    type: "boolean",
-    category: "capture",
-  },
-  screenshot_quality: {
-    label: "截图质量",
-    description: "截图图片保存质量（1-3）",
-    type: "select",
-    options: [
-      { label: "标准", value: "2" },
-      { label: "高清", value: "3" },
-      { label: "压缩", value: "1" },
-    ],
-    category: "capture",
-  },
   quick_capture_shortcut: {
     label: "笔记快捷键",
     description: "点击后按组合键设置，用于快速打开笔记/速记输入框",
@@ -74,13 +47,16 @@ const SETTING_DEFS: Record<string, SettingDef> = {
     category: "capture",
     placeholder: "Ctrl+Shift+1",
   },
-  screenshot_shortcut: {
-    label: "截图快捷键",
-    description: "点击后按组合键设置，用于启动截图覆盖层",
-    type: "shortcut",
-    category: "capture",
-    placeholder: "Ctrl+Shift+2",
-  },
+  // screenshot_shortcut — DISABLED: screenshot feature temporarily turned off.
+  // Uncomment this def (and the shortcut registration block in src-tauri/src/lib.rs)
+  // to restore the screenshot capture shortcut.
+  // screenshot_shortcut: {
+  //   label: "截图快捷键",
+  //   description: "点击后按组合键设置，用于启动截图覆盖层",
+  //   type: "shortcut",
+  //   category: "capture",
+  //   placeholder: "Ctrl+Shift+2",
+  // },
   recording_shortcut: {
     label: "录音快捷键",
     description: "点击后按组合键设置，用于一键开始/停止麦克风录音（WAV）",
@@ -106,19 +82,6 @@ const SETTING_DEFS: Record<string, SettingDef> = {
     placeholder: "claude-sonnet-4-20250514",
     category: "ai",
   },
-  ai_model_variant: {
-    label: "模型变体",
-    description: "按任务区分的模型变体或预设名称",
-    type: "text",
-    placeholder: "default / deepseek-v4-flash-free",
-    category: "ai",
-  },
-  ai_auto_analyze: {
-    label: "自动分析",
-    description: "新增记录后自动进行 AI 分析",
-    type: "boolean",
-    category: "ai",
-  },
   ai_api_key: {
     label: "API 密钥",
     description: "仅保存在系统凭据管理器中，不会写入应用数据库",
@@ -132,28 +95,7 @@ const SETTING_DEFS: Record<string, SettingDef> = {
     type: "text",
     placeholder: "https://opencode.ai/zen/v1",
     category: "ai",
-  },
-  reminder_channel: {
-    label: "提醒方式",
-    description: "任务提醒的推送渠道",
-    type: "select",
-    options: [
-      { label: "宠物气泡", value: "pet-bubble" },
-      { label: "系统通知", value: "system-notification" },
-    ],
-    category: "notification",
-  },
-  pet_always_on_top: {
-    label: "置顶显示",
-    description: "宠物窗口始终置顶",
-    type: "boolean",
-    category: "pet",
-  },
-  pet_visible: {
-    label: "启动时显示",
-    description: "应用启动时自动显示宠物",
-    type: "boolean",
-    category: "pet",
+    stacked: true,
   },
   pet_persona: {
     label: "搭子人格",
@@ -172,16 +114,11 @@ const SETTING_DEFS: Record<string, SettingDef> = {
     type: "text",
     placeholder: "例如：用简短、有行动感的方式和我说话",
     category: "pet",
+    stacked: true,
   },
   pet_proactive_ai_enabled: {
     label: "主动 AI 互动",
     description: "开启后桌宠会按人格和允许的本地内容主动发起短气泡，使用你的 API",
-    type: "boolean",
-    category: "pet",
-  },
-  pet_meal_companion_enabled: {
-    label: "饭点陪伴",
-    description: "午餐和晚餐时间显示本地短提醒，不调用 AI",
     type: "boolean",
     category: "pet",
   },
@@ -191,54 +128,6 @@ const SETTING_DEFS: Record<string, SettingDef> = {
     type: "text",
     placeholder: "22:00-08:00",
     category: "pet",
-  },
-
-  // ── Todo-overlay settings ──
-
-  todo_overlay_visibility_mode: {
-    label: "覆盖层显示模式",
-    description: "待办覆盖层显示哪些任务",
-    type: "select",
-    options: [
-      { label: "仅未完成", value: "unfinished-only" },
-      { label: "所有任务", value: "all-tasks" },
-    ],
-    category: "overlay",
-  },
-  todo_overlay_always_on_top: {
-    label: "覆盖层置顶",
-    description: "待办覆盖层窗口始终置顶",
-    type: "boolean",
-    category: "overlay",
-  },
-  todo_overlay_opacity: {
-    label: "覆盖层透明度",
-    description: "待办覆盖层背景透明度（0.0~1.0）",
-    type: "select",
-    options: [
-      { label: "20%", value: "0.2" },
-      { label: "40%", value: "0.4" },
-      { label: "60%", value: "0.6" },
-      { label: "80%", value: "0.8" },
-      { label: "100%", value: "1.0" },
-    ],
-    category: "overlay",
-  },
-  todo_overlay_auto_collapse: {
-    label: "自动折叠",
-    description: "打开覆盖层时自动折叠列表",
-    type: "boolean",
-    category: "overlay",
-  },
-  todo_overlay_open_behavior: {
-    label: "点击打开方式",
-    description: "点击待办条目时默认打开方式",
-    type: "select",
-    options: [
-      { label: "侧边抽屉", value: "drawer" },
-      { label: "主面板", value: "main-panel" },
-    ],
-    category: "overlay",
   },
 };
 
@@ -252,29 +141,19 @@ const CATEGORY_META: Record<
     description: "语言、外观等基础设置",
   },
   capture: {
-    label: "截取",
+    label: "快捷键设置",
     icon: "M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0112 15a9.065 9.065 0 00-6.23.693L5 14.5m14.8.8l1.402 1.402c1.232 1.232.65 3.318-1.067 3.611A48.309 48.309 0 0112 21c-2.773 0-5.491-.235-8.135-.687-1.718-.293-2.3-2.379-1.067-3.61L5 14.5",
-    description: "截图、拖放等采集行为",
+    description: "应用内快捷键配置",
   },
   ai: {
     label: "智能分析",
     icon: "M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.455 2.456L21.75 6l-1.036.259a3.375 3.375 0 00-2.455 2.456zM16.894 20.567L16.5 21.75l-.394-1.183a2.25 2.25 0 00-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 001.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 001.423 1.423l1.183.394-1.183.394a2.25 2.25 0 00-1.423 1.423z",
     description: "AI 提供商、模型与分析行为",
   },
-  notification: {
-    label: "通知",
-    icon: "M14.857 17.082a23.848 23.848 0 005.454-1.31A8.967 8.967 0 0118 9.75V9A6 6 0 006 9v.75a8.967 8.967 0 01-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 01-5.714 0m5.714 0a3 3 0 11-5.714 0",
-    description: "提醒推送渠道与行为",
-  },
   pet: {
     label: "宠物",
     icon: "M15.182 15.182a4.5 4.5 0 01-6.364 0M21 12a9 9 0 11-18 0 9 9 0 0118 0zM9.75 9.75c0 .414-.168.75-.375.75S9 10.164 9 9.75 9.168 9 9.375 9s.375.336.375.75zm-.375 0h.008v.015h-.008V9.75zm5.625 0c0 .414-.168.75-.375.75s-.375-.336-.375-.75.168-.75.375-.75.375.336.375.75zm-.375 0h.008v.015h-.008V9.75z",
     description: "桌面宠物的显示与行为",
-  },
-  overlay: {
-    label: "待办覆盖层",
-    icon: "M9 17.25v1.007a3 3 0 01-.879 2.122L7.5 21h9l-.621-.621A3 3 0 0115 18.257V17.25m6-12V15a2.25 2.25 0 01-2.25 2.25H5.25A2.25 2.25 0 013 15V5.25m18 0A2.25 2.25 0 0018.75 3H5.25A2.25 2.25 0 003 5.25m18 0V12a2.25 2.25 0 01-2.25 2.25H5.25A2.25 2.25 0 013 12V5.25",
-    description: "桌面待办覆盖层的显示与行为",
   },
 };
 
@@ -538,8 +417,8 @@ function ApiKeyRow({
   };
 
   return (
-    <div className="group flex flex-row items-center justify-between gap-4 rounded-xl px-4 py-3 transition hover:bg-white/[3%]">
-      <div className="min-w-0 flex-1">
+    <div className="group flex flex-col gap-2 rounded-xl px-4 py-3 transition hover:bg-white/[3%]">
+      <div className="min-w-0">
         <p className="text-sm font-medium text-text">API 密钥</p>
         <p className="mt-0.5 text-[11px] leading-4 text-text0">
           仅保存在系统凭据管理器中，不会写入应用数据库
@@ -548,7 +427,7 @@ function ApiKeyRow({
           {configured ? "已安全配置" : "尚未配置"}
         </p>
       </div>
-      <div className="flex shrink-0 items-center gap-2">
+      <div className="flex items-center gap-2">
         <input
           type="password"
           value={value}
@@ -560,13 +439,13 @@ function ApiKeyRow({
             }
           }}
           placeholder={configured ? "输入新密钥以替换" : "sk-…"}
-          className="w-40 rounded-lg border border-border bg-surface-2/80 px-3 py-1.5 text-xs text-text outline-none transition placeholder:text-text-muted hover:border-white/20 focus:border-primary/40 focus:ring-2 focus:ring-primary/20"
+          className="flex-1 rounded-lg border border-border bg-surface-2/80 px-3 py-1.5 text-xs text-text outline-none transition placeholder:text-text-muted hover:border-white/20 focus:border-primary/40 focus:ring-2 focus:ring-primary/20"
         />
         <button
           type="button"
           disabled={loading || !value.trim()}
           onClick={() => void save()}
-          className="rounded-lg bg-primary/15 px-2.5 py-1.5 text-xs font-medium text-primary transition hover:bg-primary/25 disabled:cursor-not-allowed disabled:opacity-40"
+          className="shrink-0 whitespace-nowrap rounded-lg bg-primary/15 px-2.5 py-1.5 text-xs font-medium text-primary transition hover:bg-primary/25 disabled:cursor-not-allowed disabled:opacity-40"
         >
           保存
         </button>
@@ -575,7 +454,7 @@ function ApiKeyRow({
             type="button"
             disabled={loading}
             onClick={() => void onClear()}
-            className="rounded-lg px-2.5 py-1.5 text-xs text-text0 transition hover:bg-danger/10 hover:text-danger disabled:cursor-not-allowed disabled:opacity-40"
+            className="shrink-0 whitespace-nowrap rounded-lg px-2.5 py-1.5 text-xs text-text0 transition hover:bg-danger/10 hover:text-danger disabled:cursor-not-allowed disabled:opacity-40"
           >
             清除
           </button>
@@ -615,9 +494,10 @@ function SettingRow({
 
   const isThemeSelect = def === SETTING_DEFS.theme;
   const isThemeModeSelect = def === SETTING_DEFS.theme_mode;
+  const isStacked = def.stacked === true;
 
   return (
-    <div className={`group flex ${isThemeSelect ? "flex-col items-stretch" : "flex-row items-center justify-between"} gap-4 rounded-xl px-4 py-3 transition hover:bg-white/[3%]`}>
+    <div className={`group flex ${isThemeSelect || isStacked ? "flex-col items-stretch" : "flex-row items-center justify-between"} gap-4 rounded-xl px-4 py-3 transition hover:bg-white/[3%]`}>
       <div className="min-w-0 flex-1">
         <p className="text-sm font-medium text-text">{def.label}</p>
         <p className="mt-0.5 text-[11px] leading-4 text-text0">
@@ -625,7 +505,7 @@ function SettingRow({
         </p>
       </div>
 
-      <div className={isThemeSelect ? "w-full" : "shrink-0"}>
+      <div className={isThemeSelect || isStacked ? "w-full" : "shrink-0"}>
         {def.type === "boolean" ? (
           <Toggle
             enabled={value === "true"}
@@ -681,10 +561,10 @@ function SettingRow({
                 }
               }}
               placeholder={def.placeholder ?? ""}
-              className="w-48 rounded-lg border border-border bg-surface-2/80
+              className={`${isStacked ? "w-full" : "w-40"} rounded-lg border border-border bg-surface-2/80
                 px-3 py-1.5 text-xs text-text outline-none transition
                 placeholder:text-text-muted
-                hover:border-white/20 focus:border-primary/40 focus:ring-2 focus:ring-primary/20"
+                hover:border-white/20 focus:border-primary/40 focus:ring-2 focus:ring-primary/20`}
             />
             {def.mask && value && (
               <button
@@ -788,9 +668,7 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
     "general",
     "capture",
     "ai",
-    "notification",
     "pet",
-    "overlay",
   ] as const;
 
   // ── Render ──
@@ -867,7 +745,7 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
       </div>
 
       {/* Scrollable content */}
-      <div className="flex-1 overflow-y-auto overscroll-contain">
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
         {!loading && Object.keys(settings).length === 0 && !error ? (
           <div className="flex h-full items-center justify-center px-6">
             <div className="text-center">
@@ -991,7 +869,7 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
 
       {/* Footer action bar */}
       <div className="shrink-0 border-t border-border px-5 py-3">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center justify-end gap-2">
           <button
             type="button"
             onClick={() => void handleReset()}
@@ -1010,12 +888,6 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
             )}
             重置
           </button>
-
-          <div className="flex-1" />
-
-          <p className="text-[10px] text-text-muted">
-            {Object.keys(settings).length} 项设置
-          </p>
         </div>
       </div>
     </div>

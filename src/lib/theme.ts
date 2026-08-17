@@ -8,8 +8,7 @@ export type ThemeName =
   | "midnight-amber"
   | "sakura-mist"
   | "matcha-morning"
-  | "lavender-dream"
-  | "sunset-warm";
+  | "lavender-dream";
 
 export type ThemeMode = "light" | "dark" | "system";
 
@@ -59,14 +58,6 @@ export const THEME_OPTIONS: ThemeOption[] = [
     displayFont: "Cormorant Garamond",
     bodyFont: "Quicksand",
     description: "梦幻虹彩 × 软发光",
-  },
-  {
-    label: "暮色暖阳",
-    value: "sunset-warm",
-    swatch: { bg: "#180c06", surface: "#261610", primary: "#c75d29", accent: "#d48a5a" },
-    displayFont: "Archivo Black",
-    bodyFont: "Work Sans",
-    description: "暖色粗野 × 赤陶",
   },
 ];
 

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-import type { RecordStatus, RecordType, TaskStatus } from "../../types";
+import type { RecordType, TaskStatus } from "../../types";
 import { useTagsStore } from "../../store/tags";
 
 type ViewMode = "notes" | "tasks";
@@ -9,14 +9,12 @@ interface NavigationProps {
   selectedType: RecordType;
   onSelectType: (type: RecordType) => void;
   viewMode: ViewMode;
-  activeStatus: RecordStatus | null;
   taskStatusFilter: TaskStatus | null;
   searchQuery: string;
   settingsOpen: boolean;
   memoryOpen: boolean;
   chatOpen: boolean;
   growthPreviewEnabled: boolean;
-  onStatusChange: (status: RecordStatus | null) => void;
   onTaskStatusFilterChange: (status: TaskStatus | null) => void;
   onSearchChange: (query: string) => void;
   onToggleSettings: () => void;
@@ -25,12 +23,6 @@ interface NavigationProps {
   activeTagIds: string[];
   onToggleTagFilter: (id: string) => void;
 }
-
-const STATUS_OPTIONS: { label: string; value: RecordStatus | null }[] = [
-  { label: "所有状态", value: null },
-  { label: "活跃", value: "active" },
-  { label: "归档", value: "archived" },
-];
 
 const TASK_STATUS_OPTIONS: { label: string; value: TaskStatus | null }[] = [
   { label: "全部任务", value: null },
@@ -62,7 +54,6 @@ export function Navigation({
   selectedType,
   onSelectType,
   viewMode,
-  activeStatus,
   taskStatusFilter,
   searchQuery,
   settingsOpen,
@@ -70,7 +61,6 @@ export function Navigation({
   chatOpen,
   growthPreviewEnabled,
   activeTagIds,
-  onStatusChange,
   onTaskStatusFilterChange,
   onSearchChange,
   onToggleSettings,
@@ -206,35 +196,6 @@ export function Navigation({
       {/* ── Record filters ── */}
       {viewMode !== "tasks" ? (
         <>
-          {/* Status filter */}
-          <section>
-            <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.2em] text-text0">
-              状态
-            </p>
-            <div className="flex flex-wrap gap-1.5">
-              {STATUS_OPTIONS.map((opt) => {
-                const isActive = activeStatus === opt.value;
-                return (
-                  <button
-                    key={opt.label}
-                    type="button"
-                    onClick={() => onStatusChange(opt.value)}
-                    className={`
-                      rounded-full px-3 py-1.5 text-xs font-medium transition-all duration-150
-                      ${
-                        isActive
-                          ? "bg-sky-400/15 text-sky-300 ring-1 ring-sky-400/30"
-                          : "bg-white/5 text-text-muted hover:bg-white/10 hover:text-text"
-                      }
-                    `}
-                  >
-                    {opt.label}
-                  </button>
-                );
-              })}
-            </div>
-          </section>
-
           {/* Tags filter */}
           <section>
             <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.2em] text-text0">

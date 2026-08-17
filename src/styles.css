@@ -209,58 +209,6 @@
   --font-body: "Quicksand", system-ui, sans-serif;
 }
 
-/* ── Sunset Warm (暮色暖阳): 暖色粗野 + 赤陶
-   Distinct from Midnight Amber: leans into orange/coral sunset tones
-   (Midnight Amber is gold-on-navy; Sunset Warm is orange-on-warm-brown). ── */
-:root[data-theme="sunset-warm"][data-mode="light"] {
-  --bg: #f5ede4;
-  --surface: #fcf5ee;
-  --surface-2: #ece0d0;
-  --surface-3: #e0d0bc;
-  --primary: #aa5020;
-  --primary-fg: #ffffff;
-  --secondary: #6a5a4a;
-  --accent: #d48a5a;
-  --danger: #b54a3a;
-  --text: #2a1e14;
-  --text-strong: #1a100a;
-  --text-muted: #7a6a55;
-  --text0: rgba(122, 106, 85, 0.4);
-  --border: rgba(170, 80, 32, 0.08);
-  --pet-from: rgba(170, 80, 32, 0.90);
-  --pet-to: rgba(130, 55, 20, 0.35);
-  --pet-glow: rgba(170, 80, 32, 0.50);
-  --shadow-glow: 0 8px 32px rgba(170, 80, 32, 0.12);
-  --grain-opacity: 0.07;
-  --radius-shape: 2px;
-  --font-display: "Archivo Black", system-ui, sans-serif;
-  --font-body: "Work Sans", system-ui, sans-serif;
-}
-:root[data-theme="sunset-warm"][data-mode="dark"] {
-  --bg: #180c06;
-  --surface: #261610;
-  --surface-2: #34221a;
-  --surface-3: #423020;
-  --primary: #c75d29;
-  --primary-fg: #180c06;
-  --secondary: #5a4a3a;
-  --accent: #d48a5a;
-  --danger: #c45a4a;
-  --text: #e0d0c0;
-  --text-strong: #f0e4d8;
-  --text-muted: #8a7a6a;
-  --text0: rgba(138, 122, 106, 0.4);
-  --border: rgba(199, 93, 41, 0.14);
-  --pet-from: rgba(199, 93, 41, 0.92);
-  --pet-to: rgba(130, 50, 18, 0.35);
-  --pet-glow: rgba(199, 93, 41, 0.55);
-  --shadow-glow: 0 8px 32px rgba(199, 93, 41, 0.15);
-  --grain-opacity: 0.07;
-  --radius-shape: 2px;
-  --font-display: "Archivo Black", system-ui, sans-serif;
-  --font-body: "Work Sans", system-ui, sans-serif;
-}
-
 /* ════════════════════════════════════════════════════════════════════
    Fallback (no data-* attributes yet) — mirrors midnight-amber/dark
    ════════════════════════════════════════════════════════════════════ */
@@ -455,13 +403,13 @@ select {
 }
 
 .markdown-body h1 {
-  font-size: 32px;
+  font-size: 24px;
   font-weight: 700;
-  margin: 48px 0 24px;
+  margin: 32px 0 16px;
 }
 
 .markdown-body h2 {
-  font-size: 24px;
+  font-size: 22px;
   font-weight: 700;
   margin: 36px 0 18px;
 }

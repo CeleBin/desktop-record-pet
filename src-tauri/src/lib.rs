@@ -131,23 +131,25 @@ pub fn run() {
                 })?;
             }
 
-            // Screenshot overlay
-            {
-                let shortcut: Shortcut = screenshot_accel
-                    .parse()
-                    .map_err(|error| format!("failed to parse screenshot shortcut: {error}"))?;
-
-                register_shortcut_best_effort("screenshot capture", || {
-                    app.global_shortcut()
-                        .on_shortcut(shortcut, |app, _shortcut, event| {
-                            if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
-                                let _ =
-                                    windows::show_window(app, windows::SCREENSHOT_OVERLAY_LABEL);
-                            }
-                        })
-                        .map_err(|error| format!("failed to register screenshot shortcut: {error}"))
-                })?;
-            }
+            // Screenshot overlay — DISABLED: screenshot feature temporarily turned off.
+            // Uncomment this block (and the screenshot_shortcut setting in SettingsPanel.tsx)
+            // to restore the screenshot capture shortcut.
+            // {
+            //     let shortcut: Shortcut = screenshot_accel
+            //         .parse()
+            //         .map_err(|error| format!("failed to parse screenshot shortcut: {error}"))?;
+            //
+            //     register_shortcut_best_effort("screenshot capture", || {
+            //         app.global_shortcut()
+            //             .on_shortcut(shortcut, |app, _shortcut, event| {
+            //                 if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+            //                     let _ =
+            //                         windows::show_window(app, windows::SCREENSHOT_OVERLAY_LABEL);
+            //                 }
+            //             })
+            //             .map_err(|error| format!("failed to register screenshot shortcut: {error}"))
+            //     })?;
+            // }
 
             // Microphone recording toggle
             {
