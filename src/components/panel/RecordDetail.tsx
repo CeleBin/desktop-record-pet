@@ -561,47 +561,37 @@ export function RecordDetail({
   const mdComponents = useMemo(
     () => ({
       h1: ({ children }: { children?: ReactNode }) => (
-        <h1 className="text-xl font-semibold mt-6 mb-3 text-text scroll-mt-4">
-          {children}
-        </h1>
+        <h1 className="scroll-mt-4">{children}</h1>
       ),
       h2: ({ children }: { children?: ReactNode }) => (
-        <h2 className="text-lg font-semibold mt-5 mb-2 text-text scroll-mt-4">
-          {children}
-        </h2>
+        <h2 className="scroll-mt-4">{children}</h2>
       ),
       h3: ({ children }: { children?: ReactNode }) => (
-        <h3 className="text-base font-semibold mt-4 mb-2 text-text scroll-mt-4">
-          {children}
-        </h3>
+        <h3 className="scroll-mt-4">{children}</h3>
       ),
-      p: ({ children }: { children?: ReactNode }) => (
-        <p className="text-sm leading-6 text-text my-2">{children}</p>
+      h4: ({ children }: { children?: ReactNode }) => (
+        <h4 className="scroll-mt-4">{children}</h4>
       ),
+      p: ({ children }: { children?: ReactNode }) => <p>{children}</p>,
       ul: ({ children }: { children?: ReactNode }) => (
-        <ul className="list-disc pl-5 space-y-1 text-sm text-text my-2">{children}</ul>
+        <ul className="list-disc">{children}</ul>
       ),
       ol: ({ children }: { children?: ReactNode }) => (
-        <ol className="list-decimal pl-5 space-y-1 text-sm text-text my-2">{children}</ol>
+        <ol className="list-decimal">{children}</ol>
       ),
-      li: ({ children }: { children?: ReactNode }) => (
-        <li className="text-sm leading-6 text-text">{children}</li>
-      ),
+      li: ({ children }: { children?: ReactNode }) => <li>{children}</li>,
       a: ({ children, href }: { children?: ReactNode; href?: string }) => (
         <a
           href={href}
           target="_blank"
           rel="noreferrer"
           onClick={(e) => e.stopPropagation()}
-          className="text-secondary hover:text-secondary underline underline-offset-2"
         >
           {children}
         </a>
       ),
       blockquote: ({ children }: { children?: ReactNode }) => (
-        <blockquote className="border-l-2 border-secondary/30 bg-white/[2%] pl-4 py-2 my-3 text-text-muted italic text-sm">
-          {children}
-        </blockquote>
+        <blockquote>{children}</blockquote>
       ),
       code: ({
         className,
@@ -614,22 +604,12 @@ export function RecordDetail({
         if (isBlock) {
           return <code className={className}>{children}</code>;
         }
-        return (
-          <code className="rounded bg-surface-2/80 px-1.5 py-0.5 text-[0.85em] text-secondary">
-            {children}
-          </code>
-        );
+        return <code>{children}</code>;
       },
-      pre: ({ children }: { children?: ReactNode }) => (
-        <pre className="rounded-xl border border-border bg-surface/80 px-4 py-3 overflow-x-auto text-[13px] my-3">
-          {children}
-        </pre>
-      ),
+      pre: ({ children }: { children?: ReactNode }) => <pre>{children}</pre>,
       table: ({ children }: { children?: ReactNode }) => (
-        <div className="my-3 overflow-x-auto">
-          <table className="mx-auto w-fit max-w-full border-collapse text-[13px]">
-            {children}
-          </table>
+        <div className="overflow-x-auto">
+          <table>{children}</table>
         </div>
       ),
       th: ({
@@ -639,10 +619,7 @@ export function RecordDetail({
         children?: ReactNode;
         style?: CSSProperties;
       }) => (
-        <th
-          style={style}
-          className="border border-border px-3 py-1.5 align-middle text-text bg-white/5"
-        >
+        <th style={style} className="text-left">
           {children}
         </th>
       ),
@@ -653,14 +630,11 @@ export function RecordDetail({
         children?: ReactNode;
         style?: CSSProperties;
       }) => (
-        <td
-          style={style}
-          className="border border-border px-3 py-1.5 align-middle text-text-muted"
-        >
+        <td style={style} className="text-left">
           {children}
         </td>
       ),
-      hr: () => <hr className="border-border my-6" />,
+      hr: () => <hr />,
       img: ({ src, alt }: { src?: string; alt?: string }) => {
         if (!src) return null;
         const resolved = /^(https?:|data:|asset:|blob:)/i.test(src)
@@ -672,7 +646,7 @@ export function RecordDetail({
             src={resolved}
             alt={alt}
             onClick={() => setPreviewSrc(resolved)}
-            className="max-h-96 w-full cursor-zoom-in rounded-xl border border-border object-contain my-3"
+            className="max-h-96 cursor-zoom-in"
           />
         );
       },
