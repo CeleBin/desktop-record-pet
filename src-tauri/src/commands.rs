@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use image::RgbaImage;
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
 
 use crate::credentials;
@@ -1046,6 +1046,51 @@ pub fn set_shortcut(
                 },
             }
         }
+        "recording_shortcut" => {
+            let old_accel = shortcut_state
+                .recording
+                .lock()
+                .map(|g| g.clone())
+                .unwrap_or_default();
+
+            match app
+                .global_shortcut()
+                .on_shortcut(new_shortcut, |app, _shortcut, event| {
+                    if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                        let data_dir = match app.path().app_local_data_dir() {
+                            Ok(dir) => dir,
+                            Err(error) => {
+                                crate::emit_recording_error(app, error.to_string());
+                                return;
+                            }
+                        };
+                        if let Err(error) = crate::audio::toggle_recording(app, &data_dir) {
+                            crate::emit_recording_error(app, error.to_string());
+                        }
+                    }
+                }) {
+                Ok(_) => {
+                    if let Ok(old) = old_accel.parse::<Shortcut>() {
+                        let _ = app.global_shortcut().unregister(old);
+                    }
+                    persist_and_update(
+                        &database,
+                        &shortcut_state,
+                        "recording_shortcut",
+                        &accelerator,
+                    );
+                    let _ = emit_settings_changed(&app);
+                    SetShortcutResult {
+                        ok: true,
+                        error: None,
+                    }
+                }
+                Err(e) => SetShortcutResult {
+                    ok: false,
+                    error: Some(e.to_string()),
+                },
+            }
+        }
         _ => SetShortcutResult {
             ok: false,
             error: Some(format!("unknown shortcut name: {name}")),
@@ -1072,6 +1117,11 @@ fn persist_and_update(
         }
         "screenshot_shortcut" => {
             if let Ok(mut g) = shortcut_state.screenshot.lock() {
+                *g = accelerator.to_string();
+            }
+        }
+        "recording_shortcut" => {
+            if let Ok(mut g) = shortcut_state.recording.lock() {
                 *g = accelerator.to_string();
             }
         }

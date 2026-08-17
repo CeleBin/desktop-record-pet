@@ -1,4 +1,5 @@
 mod ai;
+mod audio;
 mod commands;
 mod credentials;
 mod db;
@@ -10,6 +11,7 @@ mod windows;
 use std::sync::Mutex;
 
 use tauri::menu::{IsMenuItem, Menu, MenuItem};
+use tauri::Emitter;
 use tauri::Manager;
 use tauri::WindowEvent;
 // 引入 Image 类型
@@ -21,6 +23,7 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
 pub struct ShortcutState {
     pub quick_capture: Mutex<String>,
     pub screenshot: Mutex<String>,
+    pub recording: Mutex<String>,
 }
 
 fn register_shortcut_best_effort<F>(shortcut_name: &str, register: F) -> Result<(), String>
@@ -36,6 +39,18 @@ where
             Ok(())
         }
     }
+}
+
+fn emit_recording_error(app: &tauri::AppHandle, message: String) {
+    let _ = app.emit_to(
+        windows::PET_LABEL,
+        "recording:status",
+        audio::RecordingStatusPayload {
+            recording: false,
+            path: None,
+            error: Some(message),
+        },
+    );
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -63,11 +78,18 @@ pub fn run() {
                 db::get_setting_or(&conn, "screenshot_shortcut", "Alt+Shift+S")
                     .map_err(|e| e.to_string())?
             };
+            let recording_accel = {
+                let conn = database.conn.lock().map_err(|e| e.to_string())?;
+                db::get_setting_or(&conn, "recording_shortcut", "Alt+Shift+M")
+                    .map_err(|e| e.to_string())?
+            };
 
             app.manage(database);
+            app.manage(audio::RecordingState::default());
             app.manage(ShortcutState {
                 quick_capture: Mutex::new(quick_accel.clone()),
                 screenshot: Mutex::new(screenshot_accel.clone()),
+                recording: Mutex::new(recording_accel.clone()),
             });
             windows::ensure_window_runtime_ready().map_err(|error| error.to_string())?;
 
@@ -124,6 +146,32 @@ pub fn run() {
                             }
                         })
                         .map_err(|error| format!("failed to register screenshot shortcut: {error}"))
+                })?;
+            }
+
+            // Microphone recording toggle
+            {
+                let shortcut: Shortcut = recording_accel
+                    .parse()
+                    .map_err(|error| format!("failed to parse recording shortcut: {error}"))?;
+
+                register_shortcut_best_effort("recording toggle", || {
+                    app.global_shortcut()
+                        .on_shortcut(shortcut, |app, _shortcut, event| {
+                            if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                                let data_dir = match app.path().app_local_data_dir() {
+                                    Ok(dir) => dir,
+                                    Err(error) => {
+                                        emit_recording_error(app, error.to_string());
+                                        return;
+                                    }
+                                };
+                                if let Err(error) = audio::toggle_recording(app, &data_dir) {
+                                    emit_recording_error(app, error.to_string());
+                                }
+                            }
+                        })
+                        .map_err(|error| format!("failed to register recording shortcut: {error}"))
                 })?;
             }
 

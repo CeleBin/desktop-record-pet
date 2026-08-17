@@ -81,6 +81,13 @@ const SETTING_DEFS: Record<string, SettingDef> = {
     category: "capture",
     placeholder: "Ctrl+Shift+2",
   },
+  recording_shortcut: {
+    label: "录音快捷键",
+    description: "点击后按组合键设置，用于一键开始/停止麦克风录音（WAV）",
+    type: "shortcut",
+    category: "capture",
+    placeholder: "Alt+Shift+M",
+  },
   ai_provider: {
     label: "AI 提供商",
     description: "用于智能分析的 AI 服务",

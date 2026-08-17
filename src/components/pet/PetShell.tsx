@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { LogicalSize } from "@tauri-apps/api/dpi";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 
 import { listRecords, runAiTask, showMainPanel } from "../../lib/tauri";
 import { createProactivePetChatRequest } from "../../lib/petProactive";
 import { getPetWindowSize } from "../../lib/petWindowSize";
+import { getRecordingBubbleText, type RecordingStatusPayload } from "../../lib/recordingBubble";
 import { useSettingsStore } from "../../store/settings";
 import { PetMenu } from "./PetMenu";
 
@@ -52,6 +54,15 @@ export function PetShell() {
       // Keep the pet usable if a platform declines a transparent-window resize.
     });
   }, [bubble, menuOpen]);
+
+  useEffect(() => {
+    const unlistenPromise = listen("recording:status", (event) => {
+      setBubble(getRecordingBubbleText(event.payload as RecordingStatusPayload));
+    });
+    return () => {
+      void unlistenPromise.then((unlisten) => unlisten());
+    };
+  }, []);
 
   const startProactiveChat = useCallback(async (manual: boolean) => {
     if (!manual && (settings.pet_proactive_ai_enabled !== "true" || bubble)) return;
