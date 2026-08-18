@@ -70,6 +70,43 @@ export function shouldSerializeDocumentChange(isHydrating: boolean): boolean {
   return !isHydrating;
 }
 
+/**
+ * U+200B zero-width space — invisible to readers and to `.trim()`, but
+ * non-empty to BlockNote's markdown tokenizer and its HTML block parser.
+ *
+ * Empty paragraph blocks are structurally unrepresentable in markdown:
+ * BlockNote's tokenizer drops blank lines, and its HTML parser drops empty
+ * `<p></p>` elements. Writing a single zero-width space instead survives
+ * the whole round-trip, so blank lines persist across save/load. It is not
+ * ECMAScript whitespace, so it passes through every `.trim()` untouched.
+ */
+export const BLANK_LINE_MARKER = "\u200b";
+
+/**
+ * Rewrites empty paragraph blocks (no inline content) to paragraphs holding
+ * a single zero-width space, so blank lines survive serialization to
+ * markdown instead of being dropped. Recurses into `children`. Returns a
+ * new block tree; the input blocks are never mutated.
+ */
+export function encodeEmptyParagraphBlocks(
+  blocks: PartialBlock[],
+): PartialBlock[] {
+  return blocks.map((block) => {
+    const children =
+      block.children && block.children.length > 0
+        ? encodeEmptyParagraphBlocks(block.children)
+        : block.children;
+    const hasContent =
+      block.content !== undefined &&
+      block.content !== "" &&
+      !(Array.isArray(block.content) && block.content.length === 0);
+    if (block.type !== "paragraph" || hasContent) {
+      return block.children === children ? block : { ...block, children };
+    }
+    return { ...block, children, content: BLANK_LINE_MARKER };
+  });
+}
+
 const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|bmp|svg)$/i;
 
 function detectColorScheme(): "light" | "dark" {
@@ -194,7 +231,9 @@ export function MarkdownEditor({
       let revision = serializeRevisionRef.current;
       while (true) {
         try {
-          const md = await editor.blocksToMarkdownLossy();
+          const md = await editor.blocksToMarkdownLossy(
+            encodeEmptyParagraphBlocks(editor.document),
+          );
           if (!shouldApplySerializedRevision(revision, serializeRevisionRef.current)) {
             revision = serializeRevisionRef.current;
             continue;
