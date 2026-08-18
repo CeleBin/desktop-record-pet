@@ -592,6 +592,11 @@ select {
 
 .document-editor .bn-side-menu {
   left: -34px;
+  /* The side-menu is clipped by .bn-wrapper's horizontal overflow but its DOM
+     still overlays the table's left edge and intercepts mouse events, making
+     tables unselectable. Disable pointer events so drags reach the table
+     cells below; the menu stays invisible (clipped) and non-interactive. */
+  pointer-events: none;
 }
 
 /* BlockNote selection toolbar: make the floating controls feel like a real
