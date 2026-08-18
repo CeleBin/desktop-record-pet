@@ -7,9 +7,9 @@
 
 import type { RecordWithRelations } from "../../types";
 
-const TYPE_LABELS: Record<string, { label: string; dot: string }> = {
-  note: { label: "笔记", dot: "bg-text-muted" },
-  task: { label: "待办", dot: "bg-secondary" },
+const TYPE_LABELS: Record<string, { dot: string }> = {
+  note: { dot: "bg-text-muted" },
+  task: { dot: "bg-secondary" },
 };
 
 const TASK_STATUS_BADGE: Record<
@@ -75,8 +75,6 @@ export function RecordItemContent({ record, onDelete }: RecordItemContentProps) 
 
         {/* Meta row */}
         <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[11px] text-text0">
-          <span>{meta.label}</span>
-          <span className="text-text-muted">·</span>
           <span>{formatDate(record.created_at)}</span>
           {hasTask && ts && (
             <>

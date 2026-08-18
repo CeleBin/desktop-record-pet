@@ -21,7 +21,7 @@ interface MarkdownEditorProps {
   markdown: string;
   /** Fired with new markdown on every BlockNote edit (debounced). */
   onChange: (md: string) => void;
-  /** Ctrl+Enter handler, supplied with the latest serialized markdown. */
+  /** Ctrl+S handler, supplied with the latest serialized markdown. */
   onSave?: (markdown: string) => void | Promise<void>;
   /** Escape handler for cancelling the document workspace. */
   onCancel?: () => void;
@@ -183,7 +183,7 @@ export function MarkdownEditor({
   const serializeRevisionRef = useRef(0);
   const serializePromiseRef = useRef<Promise<string> | null>(null);
   const serializeMarkdown = useCallback(async (): Promise<string> => {
-    // Ctrl+Enter / record switching may request a flush while initialization
+    // Ctrl+S / record switching may request a flush while initialization
     // is still running. Returning the source Markdown is safe; serializing
     // BlockNote's temporary empty document is not.
     if (!shouldSerializeDocumentChange(isHydratingRef.current)) {
@@ -332,7 +332,8 @@ export function MarkdownEditor({
           onCancelRef.current();
           return;
         }
-        if ((e.ctrlKey || e.metaKey) && e.key === "Enter" && onSaveRef.current) {
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s" && onSaveRef.current) {
+          // preventDefault stops the browser's native "Save Page" dialog.
           e.preventDefault();
           e.stopPropagation();
           void saveLatestDocument(

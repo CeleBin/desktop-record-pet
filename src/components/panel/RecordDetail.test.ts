@@ -5,16 +5,12 @@ import {
   getDocumentSaveStatus,
   getTocHeadingSelector,
   saveDocumentWithLatestMarkdown,
-  getDefaultDocumentEditorMode,
   shouldFlushRichEditorForRecord,
   shouldMountRichEditorForRecord,
   getRecordDetailInstanceKey,
 } from "./RecordDetail";
 
 describe("document workspace save status", () => {
-  it("opens every selected document in WYSIWYG mode", () => {
-    expect(getDefaultDocumentEditorMode()).toBe("wysiwyg");
-  });
   it("shows unsaved changes whenever either editable document field differs from its persisted value", () => {
     expect(getDocumentSaveStatus({
       titleDraft: "Revised title",
