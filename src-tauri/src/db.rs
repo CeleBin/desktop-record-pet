@@ -348,21 +348,12 @@ pub fn update_record(
     Ok(updated)
 }
 
-/// Remove a task by deleting the task row and reverting the linked record
-/// type to `note`. The linked record itself is preserved.
+/// Remove a task by physically deleting the linked record. The record
+/// cascade removes the task row, attachments, and other linked rows, so
+/// the removed todo never resurfaces in another category.
 pub fn remove_task(conn: &Connection, task_id: &str) -> AppResult<Task> {
     let task = get_task(conn, task_id)?;
-    let record_id = task.record_id.clone();
-
-    conn.execute("DELETE FROM tasks WHERE id = ?1", params![task_id])?;
-
-    // Revert the linked record type back to note
-    let now = Utc::now();
-    conn.execute(
-        "UPDATE records SET type = 'note', updated_at = ?2 WHERE id = ?1",
-        params![record_id, now.to_rfc3339()],
-    )?;
-
+    delete_record_physical(conn, &task.record_id)?;
     Ok(task)
 }
 
@@ -2499,7 +2490,7 @@ mod tests {
     // ── Task 1: remove-task semantics ─────────────────────────────
 
     #[test]
-    fn remove_task_deletes_task_only_and_reverts_record_type() {
+    fn remove_task_deletes_task_and_linked_record() {
         let conn = in_memory();
         let record = insert_record(
             &conn,
@@ -2536,14 +2527,12 @@ mod tests {
         let removed = remove_task(&conn, &task.id).expect("remove_task");
         assert_eq!(removed.id, task.id);
 
-        // Assert: task row is gone
+        // Assert: task row is gone (cascade from record deletion)
         assert!(get_task(&conn, &task.id).is_err());
 
-        // Assert: record still exists
-        let rec = get_record(&conn, &record.id).expect("record still exists");
-
-        // Assert: record type reverted to note
-        assert_eq!(rec.record_type, RecordType::Note);
+        // Assert: linked record is physically deleted too — it must never
+        // resurface in another category
+        assert!(get_record(&conn, &record.id).is_err());
     }
 
     // ── Task 1: physical delete semantics ─────────────────────────
