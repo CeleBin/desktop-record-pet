@@ -24,7 +24,7 @@ import type {
   TaskStatus,
   UpdateRecordRequest,
 } from "../../types";
-import { MarkdownEditor } from "./MarkdownEditor";
+import { MarkdownEditor, isBlankMarkdown } from "./MarkdownEditor";
 
 interface RecordDetailProps {
   record: RecordWithRelations | null;
@@ -620,7 +620,11 @@ export function RecordDetail({
     // Safety net: never auto-save an empty draft over a non-empty saved
     // document. An empty serialization usually means the editor failed to
     // hydrate/parse the document, not that the user deleted everything.
-    if (draft.trim() === "" && lastSavedContentRef.current.trim() !== "") {
+    // A draft holding only blank-line markers (U+200B) is equally empty.
+    if (
+      isBlankMarkdown(draft) &&
+      lastSavedContentRef.current.trim() !== ""
+    ) {
       console.warn(
         "[RecordDetail] Blocked empty auto-save for record",
         record.id,
@@ -690,7 +694,7 @@ export function RecordDetail({
         const recordId = draftRecordIdRef.current;
         if (!recordId) return;
         if (
-          (markdown ?? "").trim() === "" &&
+          isBlankMarkdown(markdown ?? "") &&
           lastSavedContentRef.current.trim() !== ""
         ) {
           console.warn(

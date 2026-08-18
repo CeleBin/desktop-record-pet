@@ -3,6 +3,7 @@ import type { PartialBlock } from "@blocknote/core";
 import {
   BLANK_LINE_MARKER,
   encodeEmptyParagraphBlocks,
+  isBlankMarkdown,
   isDocumentCancelKey,
   saveLatestDocument,
   shouldApplySerializedRevision,
@@ -47,10 +48,13 @@ describe("blank line preservation", () => {
     expect(BLANK_LINE_MARKER).toBe("\u200b");
   });
 
-  it("encodes an empty paragraph block as a zero-width space", () => {
-    const encoded = encodeEmptyParagraphBlocks([{ type: "paragraph" }]);
-    expect(encoded).toHaveLength(1);
-    expect(encoded[0].content).toBe(BLANK_LINE_MARKER);
+  it("encodes an empty paragraph block as a zero-width space when the document has content", () => {
+    const encoded = encodeEmptyParagraphBlocks([
+      { type: "paragraph", content: "lead" },
+      { type: "paragraph" },
+    ]);
+    expect(encoded).toHaveLength(2);
+    expect(encoded[1].content).toBe(BLANK_LINE_MARKER);
   });
 
   it("passes a paragraph with content through unchanged", () => {
@@ -84,5 +88,48 @@ describe("blank line preservation", () => {
     const snapshot = JSON.stringify(input);
     encodeEmptyParagraphBlocks(input);
     expect(JSON.stringify(input)).toBe(snapshot);
+  });
+
+  it("leaves a document with no real content unencoded", () => {
+    const input: PartialBlock[] = [{ type: "paragraph" }];
+    expect(encodeEmptyParagraphBlocks(input)).toBe(input);
+  });
+
+  it("leaves a document holding only blank-line markers unencoded", () => {
+    const input: PartialBlock[] = [
+      { type: "paragraph", content: BLANK_LINE_MARKER },
+    ];
+    expect(encodeEmptyParagraphBlocks(input)).toBe(input);
+  });
+
+  it("still encodes empty paragraphs when the document has real content", () => {
+    const input: PartialBlock[] = [
+      { type: "heading", content: "Title" },
+      { type: "paragraph" },
+    ];
+    const encoded = encodeEmptyParagraphBlocks(input);
+    expect(encoded[1].content).toBe(BLANK_LINE_MARKER);
+  });
+});
+
+describe("blank markdown detection", () => {
+  it("treats an empty string as blank", () => {
+    expect(isBlankMarkdown("")).toBe(true);
+  });
+
+  it("treats whitespace as blank", () => {
+    expect(isBlankMarkdown("  \n\t ")).toBe(true);
+  });
+
+  it("treats a lone blank-line marker as blank", () => {
+    expect(isBlankMarkdown(BLANK_LINE_MARKER)).toBe(true);
+  });
+
+  it("treats repeated markers and whitespace as blank", () => {
+    expect(isBlankMarkdown(`\u200b\n\u200b\u200b`)).toBe(true);
+  });
+
+  it("treats real text as non-blank", () => {
+    expect(isBlankMarkdown("# 标题")).toBe(false);
   });
 });

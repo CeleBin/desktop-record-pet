@@ -83,14 +83,48 @@ export function shouldSerializeDocumentChange(isHydrating: boolean): boolean {
 export const BLANK_LINE_MARKER = "\u200b";
 
 /**
+ * True when a serialized document holds no real content once blank-line
+ * markers are removed. The auto-save safety net in the parent treats only
+ * truly empty documents as "nothing to save"; a lone zero-width space is
+ * the marker for an empty paragraph block, so it must not count as content.
+ */
+export function isBlankMarkdown(markdown: string): boolean {
+  return markdown.replace(/\u200b/g, "").trim() === "";
+}
+
+/**
+ * True when a block (recursively) holds real content — i.e. inline content
+ * other than a blank-line marker, or any child block that does. Used to
+ * decide whether empty paragraphs deserve the marker at all: a document
+ * that is empty (or only holds markers) must serialize back to "", so the
+ * auto-save empty-guard in the parent still works.
+ */
+function hasRealContent(block: PartialBlock): boolean {
+  const content = block.content;
+  const hasInlineContent =
+    content !== undefined &&
+    content !== "" &&
+    !(Array.isArray(content) && content.length === 0) &&
+    !(typeof content === "string" && isBlankMarkdown(content));
+  if (hasInlineContent) return true;
+  return block.children?.some(hasRealContent) ?? false;
+}
+
+/**
  * Rewrites empty paragraph blocks (no inline content) to paragraphs holding
  * a single zero-width space, so blank lines survive serialization to
  * markdown instead of being dropped. Recurses into `children`. Returns a
  * new block tree; the input blocks are never mutated.
+ *
+ * A document with no real content at all (a freshly created note, or an
+ * editor whose initial parse failed) is returned unchanged: encoding its
+ * lone empty paragraph would turn "" into BLANK_LINE_MARKER, which serial
+ * auto-save guards in the parent can no longer recognize as "empty".
  */
 export function encodeEmptyParagraphBlocks(
   blocks: PartialBlock[],
 ): PartialBlock[] {
+  if (!blocks.some(hasRealContent)) return blocks;
   return blocks.map((block) => {
     const children =
       block.children && block.children.length > 0
