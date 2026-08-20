@@ -9,6 +9,7 @@ import type {
   TaskStatus,
   UpdateRecordRequest,
 } from "../../types";
+import { ConfirmDialog } from "../common/ConfirmDialog";
 import { Navigation } from "./Navigation";
 import { KnowledgeMemoryPanel } from "./KnowledgeMemoryPanel";
 import { PetLearningPanel } from "./PetLearningPanel";
@@ -141,11 +142,25 @@ export function MainPanel() {
     [selectRecord],
   );
 
+  // ── Delete confirmation dialog ──
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+
+  // Title preview for the delete-confirm dialog（沿用原有截断逻辑）
+  const pendingDeletePreview = useMemo(() => {
+    if (!pendingDeleteId) return "";
+    const record = records.find((r) => r.id === pendingDeleteId);
+    const title =
+      record?.title?.trim() ||
+      record?.content?.trim().split("\n")[0] ||
+      "此记录";
+    return title.length > 40 ? `${title.slice(0, 40)}…` : title;
+  }, [pendingDeleteId, records]);
+
   const handleDelete = useCallback(
     (id: string) => {
-      void deleteRecord(id);
+      setPendingDeleteId(id);
     },
-    [deleteRecord],
+    [],
   );
 
   const handleReorder = useCallback(
@@ -284,6 +299,18 @@ export function MainPanel() {
           />
         )}
       </section>
+
+      {/* ── Delete confirm dialog ── */}
+      <ConfirmDialog
+        open={pendingDeleteId !== null}
+        message={`确定要删除「${pendingDeletePreview}」吗？\n此操作不可撤销，关联的附件、标签关联和 AI 结果都会一并删除。`}
+        confirmLabel="确认删除"
+        onConfirm={() => {
+          if (pendingDeleteId) void deleteRecord(pendingDeleteId);
+          setPendingDeleteId(null);
+        }}
+        onCancel={() => setPendingDeleteId(null)}
+      />
     </div>
   );
 }

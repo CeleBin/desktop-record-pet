@@ -52,6 +52,7 @@ import { SortableTodoItem } from "./SortableTodoItem";
 import { CategorySection } from "./CategorySection";
 import { CategoryManager } from "./CategoryManager";
 import { useFolderStore } from "../../store/folderStore";
+import { ConfirmDialog } from "../common/ConfirmDialog";
 
 // 当前 WebView 窗口的单例缓存（模块级），避免每次调用都重新获取
 const appWindow = getCurrentWebviewWindow();
@@ -110,6 +111,9 @@ export function TodoOverlay() {
   // 分类管理浮层显示状态
   const [showCategoryManager, setShowCategoryManager] = useState(false);
   const [dropTargetFolderId, setDropTargetFolderId] = useState<string | null>(null);
+
+  // ── 移除待办确认对话框 ──
+  const [pendingRemoveTaskId, setPendingRemoveTaskId] = useState<string | null>(null);
 
   // ── 从 settings 读取遮罩背景透明度 (0.0–1.0，默认 0.8) ──
   // 从存设置中获取原始字符串值，做安全解析，若非法则回退到 0.8
@@ -251,21 +255,30 @@ export function TodoOverlay() {
   // 因此折叠前先保存当前窗口尺寸，展开时直接恢复保存值
   const expandedSizeRef = useRef<{ width: number; height: number } | null>(null);
 
+  // 仅当"展开→折叠"过渡时保存展开尺寸；组件以折叠态重挂载
+  //（HMR/刷新时窗口仍是折叠尺寸）时不得覆盖，否则展开永远恢复不了原大小
+  const prevCollapsedRef = useRef(collapsed);
+
   // ── 折叠/展开时自动调整窗口尺寸 ──
   // 折叠：根 div 添加 w-fit 使宽度塌缩到内容自然宽度，
   //        然后测量 header 的 getBoundingClientRect 即可得到真实窄宽度
   // 展开：先恢复保存的窗口尺寸（宽度为用户之前的展开宽度），
   //        再设置最小尺寸约束
   useEffect(() => {
+    const wasExpanded = !prevCollapsedRef.current;
+    prevCollapsedRef.current = collapsed;
+
     const adjustSize = async () => {
       await new Promise((resolve) => setTimeout(resolve, 50));
 
       if (collapsed && headerRef.current) {
-        // 折叠前保存当前窗口尺寸，以便展开时恢复
-        expandedSizeRef.current = {
-          width: window.innerWidth,
-          height: window.innerHeight,
-        };
+        // 仅当从展开状态转入折叠时才保存当前（展开态）窗口尺寸，以便展开时恢复
+        if (wasExpanded) {
+          expandedSizeRef.current = {
+            width: window.innerWidth,
+            height: window.innerHeight,
+          };
+        }
 
         // w-fit 使根 div 宽度塌缩到 header 自然内容宽度
         // 此时 getBoundingClientRect().width 返回真实窄宽度（而非铺满视口的宽度）
@@ -332,6 +345,22 @@ export function TodoOverlay() {
     },
     [fetchItems],
   );
+
+  // 移除待办：仅打开确认对话框，实际删除由对话框的 onConfirm 触发
+  const handleRemoveTask = useCallback((taskId: string) => {
+    setPendingRemoveTaskId(taskId);
+  }, []);
+
+  // 移除确认对话框的标题预览（沿用 MainPanel 的截断逻辑）
+  const pendingRemovePreview = useMemo(() => {
+    if (!pendingRemoveTaskId) return "";
+    const item = items.find((i) => i.task_id === pendingRemoveTaskId);
+    const title =
+      item?.record_title?.trim() ||
+      item?.record_content?.trim().split("\n")[0] ||
+      "此待办";
+    return title.length > 40 ? `${title.slice(0, 40)}…` : title;
+  }, [pendingRemoveTaskId, items]);
 
   // ── 派生数据 ──
   // 根据 drawerRecordId 从 items 中找到对应的记录对象，
@@ -431,6 +460,7 @@ export function TodoOverlay() {
    * 注意：非折叠时使用 h-screen 填充窗口高度，折叠时使用 w-fit 收缩。
    */
   return (
+    <>
     <div className={`relative flex flex-col overflow-hidden${collapsed ? " w-fit" : " h-screen"}`}>
       {/* ── 半透明遮罩背景 ── */}
       {/*
@@ -699,7 +729,7 @@ export function TodoOverlay() {
                         isFading={(taskId) => fadingTaskIds.includes(taskId)}
                         onToggleComplete={completeTask}
                         onOpen={openDrawer}
-                        onRemoveTask={removeTaskAction}
+                        onRemoveTask={handleRemoveTask}
                       />
                     );
                   })}
@@ -715,7 +745,7 @@ export function TodoOverlay() {
                     isFading={(taskId) => fadingTaskIds.includes(taskId)}
                     onToggleComplete={completeTask}
                     onOpen={openDrawer}
-                    onRemoveTask={removeTaskAction}
+                    onRemoveTask={handleRemoveTask}
                   />
                 </div>
               </SortableContext>
@@ -771,6 +801,19 @@ export function TodoOverlay() {
       )}
     </div>
   </div>
+
+    {/* 移除待办确认对话框 */}
+    <ConfirmDialog
+      open={pendingRemoveTaskId !== null}
+      message={`确定要删除「${pendingRemovePreview}」吗？\n此操作不可撤销，关联的记录、附件和 AI 结果都会一并删除。`}
+      confirmLabel="确认删除"
+      onConfirm={() => {
+        if (pendingRemoveTaskId) void removeTaskAction(pendingRemoveTaskId);
+        setPendingRemoveTaskId(null);
+      }}
+      onCancel={() => setPendingRemoveTaskId(null)}
+    />
+    </>
   );
 }
 

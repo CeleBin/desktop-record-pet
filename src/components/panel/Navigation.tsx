@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 
 import type { RecordType, Tag, TaskStatus } from "../../types";
 import { useTagsStore } from "../../store/tags";
+import { ConfirmDialog } from "../common/ConfirmDialog";
 
 type ViewMode = "notes" | "tasks";
 
@@ -91,6 +92,9 @@ export function Navigation({
   const [editTagColor, setEditTagColor] = useState(TAG_COLORS[0]);
   const editPopoverRef = useRef<HTMLDivElement>(null);
 
+  // ── Tag delete confirmation dialog ──
+  const [pendingDeleteTag, setPendingDeleteTag] = useState<{ id: string; name: string } | null>(null);
+
   // Close popover on outside click
   useEffect(() => {
     if (!showTagPopover) return;
@@ -159,18 +163,14 @@ export function Navigation({
     }
   };
 
-  const handleDeleteTag = async (tag: Tag) => {
+  const handleDeleteTag = (tag: Tag) => {
     setTagMenu(null);
-    if (!window.confirm(`确认删除标签「${tag.name}」？该标签将从所有相关笔记中移除。`)) return;
-    try {
-      await deleteTag(tag.id);
-    } catch {
-      // error handled by store
-    }
+    setPendingDeleteTag({ id: tag.id, name: tag.name });
   };
 
   return (
-    <nav className="flex h-full flex-col gap-5 overflow-y-auto p-4">
+    <>
+      <nav className="flex h-full flex-col gap-5 overflow-y-auto p-4">
       <button type="button" onClick={onToggleChat} className={`rounded-xl border px-3 py-2 text-xs font-medium transition ${chatOpen ? "border-primary/40 bg-primary/10 text-primary" : "border-border text-text-muted hover:text-text"}`}>和搭子聊聊</button>
       {/* ── Type filter (single-select: 笔记 OR 待办) ── */}
       <div className="flex rounded-xl bg-surface/60 p-0.5 ring-1 ring-white/[5%]">
@@ -533,5 +533,22 @@ export function Navigation({
         </div>
       )}
     </nav>
+
+      {/* Tag delete confirm dialog */}
+      <ConfirmDialog
+        open={pendingDeleteTag !== null}
+        message={
+          pendingDeleteTag
+            ? `确认删除标签「${pendingDeleteTag.name}」？\n该标签将从所有相关笔记中移除。`
+            : ""
+        }
+        confirmLabel="确认删除"
+        onConfirm={() => {
+          if (pendingDeleteTag) void deleteTag(pendingDeleteTag.id);
+          setPendingDeleteTag(null);
+        }}
+        onCancel={() => setPendingDeleteTag(null)}
+      />
+    </>
   );
 }
