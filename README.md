@@ -1,4 +1,19 @@
-# Desktop Record Pet
+<p align="center">
+  <img src="src/assets/dog_logo.png" alt="Desktop Record Pet" width="180" />
+</p>
+
+<h1 align="center">Desktop Record Pet</h1>
+
+<p align="center">
+  一个本地优先的桌面记录与学习助手，把文字、截图、文件和待办收进同一个可回看的工作记忆里。
+</p>
+
+<p align="center">
+  <a href="#功能特性">功能</a> ·
+  <a href="#快速开始">快速开始</a> ·
+  <a href="#隐私与数据">隐私与数据</a> ·
+  <a href="#参与贡献">参与贡献</a>
+</p>
 
 ![Tauri](https://img.shields.io/badge/Tauri-2.x-FFC131)
 ![React](https://img.shields.io/badge/React-19-61DAFB)
@@ -7,11 +22,17 @@
 ![Vite](https://img.shields.io/badge/Vite-7-646CFF)
 ![Tailwind CSS](https://img.shields.io/badge/Tailwind-v4-06B6D4)
 
-> 一只常驻桌面的宠物，帮你随手记录灵感、截图与待办，并在需要时让 AI 为你整理它们。
+> 一只常驻桌面的宠物，帮你在信息出现的瞬间把它记录下来，再交给 AI 整理成任务、摘要和可复习的知识。
 
-Desktop Record Pet 把「记录」这件事做得尽可能轻：一只透明置顶的小宠物常驻桌面，配合全局快捷键，随时唤起快速输入或区域截图，把文字、图片、文件统一收进本地 SQLite。记录可以一键转为待办，待办支持分类、优先级、截止日期、重复规则和拖拽排序。接上 Claude API key 后，还能让 AI 为任意记录生成摘要、标签和行动建议。
+Desktop Record Pet 把「记录」这件事做得尽可能轻：一只透明置顶的小宠物常驻桌面，配合全局快捷键，随时唤起快速输入或区域截图，把文字、图片、文件统一收进本地 SQLite。记录可以一键转为待办，待办支持分类、优先级、截止日期、重复规则和拖拽排序。接入 Anthropic、OpenAI-compatible 或其他兼容服务后，还能让 AI 为记录生成摘要、标签、行动建议，并围绕知识点进行学习对话。
 
-除 AI 调用外，全部数据都留在本地机器上，不上传任何云端。
+项目的核心不是“再做一个笔记应用”，而是连接三个瞬间：
+
+**捕获**：降低记录文字、截图和文件的阻力。  
+**行动**：把值得处理的记录转成带截止日期和提醒的任务。  
+**理解**：让 AI 基于已有记录生成摘要、知识点和复习线索。
+
+除 AI 请求外，记录、附件、任务和知识记忆都留在本地机器上，不依赖云端账户或服务端数据库。
 
 ---
 
@@ -39,11 +60,26 @@ Desktop Record Pet 把「记录」这件事做得尽可能轻：一只透明置�
 
 ### AI 增强
 
-在设置中填入 Anthropic API key 后，可对任意记录发起 AI 分析。请求会携带记录文本与首张图片（视觉输入），由 Claude 返回结构化的摘要、标签、建议任务、研究洞察与敏感度标记，并存回记录详情。
+在设置中配置 AI Provider 和 API key 后，可对任意记录发起分析。请求会携带记录文本与首张图片（视觉输入），返回结构化的摘要、标签、建议任务、研究洞察与敏感度标记，并存回记录详情。学习教练会把知识点、证据和掌握状态关联起来，支持基于原始记录继续追问。
 
 ### 全局快捷键与设置
 
-快速捕获和截图两个全局快捷键均可在设置面板中自定义，修改时会进行冲突检测并即时生效。设置面板同时管理 API key 等配置项，支持一键重置。
+快速捕获和截图快捷键设计为可在设置面板中自定义，修改时会进行冲突检测并即时生效。设置面板同时管理 AI Provider、模型、API 地址和 API key 等配置项，支持一键重置。
+
+---
+
+## 隐私与数据
+
+- 记录、任务、标签、知识记忆和附件保存在本地 SQLite 与附件目录中。
+- 默认不需要登录，也没有内置云端同步或遥测服务。
+- 只有在主动使用 AI 功能时，相关记录内容和图片才会发送到你配置的 AI 服务。
+- API key 不会通过设置列表直接返回到前端；使用自定义 Provider 时，请确认对应服务的隐私政策和数据保留规则。
+
+## 当前状态
+
+项目目前处于早期开发阶段（`v0.1.0`），主要在 Windows 上开发和验证。核心记录、附件、任务、桌面宠物、AI 分析和知识记忆功能已具备，但仍可能发生数据模型、交互和跨平台行为变化。
+
+当前优先级是打磨 Windows 使用体验、完善安装与备份流程，并逐步开放更多 Provider 和导入导出能力。
 
 ---
 
@@ -98,6 +134,7 @@ Desktop Record Pet 把「记录」这件事做得尽可能轻：一只透明置�
 ```
 desktop-record-pet/
 ├── src/                       # 前端
+│   ├── assets/                # 品牌图标与前端静态资源
 │   ├── components/
 │   │   ├── capture/           # 快速输入、截图覆盖层、补充框
 │   │   ├── panel/             # 主面板、记录列表、记录详情
@@ -162,6 +199,12 @@ npm run build
 
 # Rust 编译检查
 cargo check --manifest-path src-tauri/Cargo.toml
+
+# 运行前端测试
+npm test -- --run
+
+# 运行 Rust 测试
+cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
 ---
@@ -175,6 +218,18 @@ cargo check --manifest-path src-tauri/Cargo.toml
 - `docs/superpowers/` — 设计方案与计划文档
 
 这些笔记体现了项目演进过程中的架构决策，例如「全链路 Tauri feature 模式」（DB 列 → Rust 命令 → TS 类型 → Tauri 封装 → Zustand store → React 组件）如何在多个功能中反复出现并逐步被识别为一个可复用的心智模型。
+
+## 参与贡献
+
+欢迎通过 Issue 分享使用反馈、复现步骤和功能建议，也欢迎提交 Pull Request。对于较大的改动，建议先创建 Issue 讨论目标和实现范围。
+
+比较适合社区参与的方向包括：
+
+- macOS / Linux 适配与桌面窗口行为修复
+- Ollama、OpenAI-compatible 等本地或第三方 Provider 适配
+- 数据导入、导出、备份与迁移工具
+- 宠物动画、主题和无障碍体验
+- 截图、快捷键、附件存储等边界场景的测试
 
 ---
 
