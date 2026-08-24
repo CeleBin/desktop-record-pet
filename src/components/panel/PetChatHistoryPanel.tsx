@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 
 import { countPetChatSessions, deletePetChatSessions, listPetChatSessions, updatePetChatSessionTitle } from "../../lib/tauri";
 import { ConfirmDialog } from "../common/ConfirmDialog";
@@ -27,7 +28,11 @@ export function PetChatHistoryPanel() {
   useEffect(() => {
     refresh();
     window.addEventListener(PET_CHAT_HISTORY_REFRESH_EVENT, refresh);
-    return () => window.removeEventListener(PET_CHAT_HISTORY_REFRESH_EVENT, refresh);
+    const unlistenPromise = listen("data-changed", refresh);
+    return () => {
+      window.removeEventListener(PET_CHAT_HISTORY_REFRESH_EVENT, refresh);
+      void unlistenPromise.then((unlisten) => unlisten());
+    };
   }, []);
 
   const saveTitle = async (sessionId: string) => {

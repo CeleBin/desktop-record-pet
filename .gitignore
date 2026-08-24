@@ -30,3 +30,4 @@ data-recovery-backup-*/
 *.sln
 *.sw?
 .omo
+.codex-verify-target

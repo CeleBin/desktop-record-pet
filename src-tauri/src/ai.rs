@@ -1489,7 +1489,7 @@ async fn run_pet_chat(database: &Database, payload: serde_json::Value) -> AppRes
     let (session_id, messages, context_text, settings) = {
         let conn = database.conn.lock()?;
         let session = if payload.proactive {
-            payload.session_id.clone().unwrap_or_else(|| Uuid::new_v4().to_string())
+            db::create_pet_chat_session(&conn, Some("宠物主动问候".into()))?.id
         } else {
             match payload.session_id.as_deref().filter(|id| !id.trim().is_empty()) {
                 Some(id) => id.to_string(),
@@ -1557,9 +1557,7 @@ async fn run_pet_chat(database: &Database, payload: serde_json::Value) -> AppRes
         created_at: Utc::now(),
     };
     let conn = database.conn.lock()?;
-    if !payload.proactive {
-        db::append_pet_chat_message(&conn, &session_id, "assistant", &response.reply, "[]")?;
-    }
+    db::append_pet_chat_message(&conn, &session_id, "assistant", &response.reply, "[]")?;
     db::insert_ai_task_run(&conn, run.clone())?;
     Ok(run)
 }

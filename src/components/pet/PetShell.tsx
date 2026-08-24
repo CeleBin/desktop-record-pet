@@ -3,6 +3,8 @@ import { LogicalSize } from "@tauri-apps/api/dpi";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 
+import { emit } from "@tauri-apps/api/event";
+
 import { listRecords, runAiTask, showMainPanel } from "../../lib/tauri";
 import { createProactivePetChatRequest } from "../../lib/petProactive";
 import { getPetWindowSize } from "../../lib/petWindowSize";
@@ -90,6 +92,11 @@ export function PetShell() {
       // A scheduled invitation is optional; model failures must stay silent.
     }
   }, [bubble, settings.pet_custom_prompt, settings.pet_persona, settings.pet_proactive_ai_enabled, settings.pet_proactive_min_interval_minutes]);
+
+  const openPetChat = useCallback(async () => {
+    await showMainPanel();
+    await emit("open-pet-chat");
+  }, []);
 
   useEffect(() => {
     const maybeStartProactiveChat = () => {
@@ -226,7 +233,7 @@ export function PetShell() {
         <div className="absolute bottom-28 left-1/2 z-40 w-52 -translate-x-1/2 rounded-2xl border border-primary/25 bg-surface/95 p-3 text-xs leading-5 text-text shadow-xl backdrop-blur" onMouseDown={(event) => event.stopPropagation()} onMouseUp={(event) => event.stopPropagation()}>
           <button type="button" onClick={() => setBubble(null)} className="absolute right-2 top-1 text-text-muted hover:text-text">×</button>
           <p className="pr-3">{bubble}</p>
-          <button type="button" onClick={() => { setBubble(null); void showMainPanel(); }} className="mt-2 rounded-full bg-primary/15 px-2.5 py-1 text-[10px] text-primary hover:bg-primary/25">聊聊</button>
+          <button type="button" onClick={() => { setBubble(null); void openPetChat(); }} className="mt-2 rounded-full bg-primary/15 px-2.5 py-1 text-[10px] text-primary hover:bg-primary/25">聊聊</button>
         </div>
       )}
 
@@ -244,8 +251,7 @@ export function PetShell() {
           }}
           onOpenChat={() => {
             handleCloseMenu();
-            localStorage.setItem("open-pet-chat", "true");
-            void showMainPanel();
+            void openPetChat();
           }}
         />
       )}

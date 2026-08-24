@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 
 import { useColumnResize } from "../../lib/useColumnResize";
 import { updateTaskDueAt, updateTaskRepeatRule } from "../../lib/tauri";
@@ -78,6 +79,13 @@ export function MainPanel() {
     localStorage.removeItem("open-pet-chat");
     return openChat ? "chat" : "records";
   });
+
+  useEffect(() => {
+    const unlistenPromise = listen("open-pet-chat", () => setContentMode("chat"));
+    return () => {
+      void unlistenPromise.then((unlisten) => unlisten());
+    };
+  }, []);
 
   useEffect(() => {
     if (growthPreviewEnabled) return;
