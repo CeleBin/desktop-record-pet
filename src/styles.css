@@ -580,6 +580,18 @@ select {
   line-height: 1.65;
 }
 
+/* Task-type (待办) editing: match the TodoOverlay floating-bar glass look —
+   frosted translucent surface with border and rounded corners. */
+.document-editor.todo-editor .bn-wrapper {
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 20px;
+  overflow-y: auto;
+}
+
 .document-editor .bn-editor > * + * {
   margin-top: 0.9em;
 }

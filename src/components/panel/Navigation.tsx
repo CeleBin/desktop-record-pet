@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 
 import type { RecordType, Tag, TaskStatus } from "../../types";
 import { useTagsStore } from "../../store/tags";
+import { useSettingsStore } from "../../store/settings";
 import { ConfirmDialog } from "../common/ConfirmDialog";
 
 type ViewMode = "notes" | "tasks";
@@ -70,6 +71,8 @@ export function Navigation({
   onToggleTagFilter,
 }: NavigationProps) {
   const [focused, setFocused] = useState(false);
+  const settings = useSettingsStore((state) => state.settings);
+  const petName = settings.pet_name?.trim() || "小宠物";
 
   // ── Tag create popover ──
   const [showTagPopover, setShowTagPopover] = useState(false);
@@ -171,7 +174,7 @@ export function Navigation({
   return (
     <>
       <nav className="flex h-full flex-col gap-5 overflow-y-auto p-4">
-      <button type="button" onClick={onToggleChat} className={`rounded-xl border px-3 py-2 text-xs font-medium transition ${chatOpen ? "border-primary/40 bg-primary/10 text-primary" : "border-border text-text-muted hover:text-text"}`}>和搭子聊聊</button>
+      <button type="button" onClick={onToggleChat} className={`rounded-xl border px-3 py-2 text-xs font-medium transition ${chatOpen ? "border-primary/40 bg-primary/10 text-primary" : "border-border text-text-muted hover:text-text"}`}>和{petName}聊聊</button>
       {/* ── Type filter (single-select: 笔记 OR 待办) ── */}
       <div className="flex rounded-xl bg-surface/60 p-0.5 ring-1 ring-white/[5%]">
         <button

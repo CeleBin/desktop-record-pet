@@ -1,6 +1,7 @@
 ﻿import { invoke } from "@tauri-apps/api/core";
 
 import type {
+  AiProfile,
   AiTaskRunItem,
   AiResultItem,
   ClipboardImageRequest,
@@ -135,8 +136,34 @@ export async function listUnfinishedTasks(): Promise<UnfinishedTaskItem[]> {
   return invoke<UnfinishedTaskItem[]>("list_unfinished_tasks");
 }
 
-export async function listPetChatSessions(limit = 20): Promise<PetChatSession[]> {
-  return invoke<PetChatSession[]>("list_pet_chat_sessions", { limit });
+export async function listPetChatSessions(limit?: number): Promise<PetChatSession[]> {
+  return invoke<PetChatSession[]>("list_pet_chat_sessions", limit === undefined ? {} : { limit });
+}
+
+export async function countPetChatSessions(): Promise<number> {
+  return invoke<number>("count_pet_chat_sessions");
+}
+
+export async function updatePetChatSessionTitle(sessionId: string, title: string): Promise<PetChatSession> {
+  return invoke<PetChatSession>("update_pet_chat_session_title", { sessionId, title });
+}
+
+export async function generatePetChatTitle(
+  sessionId: string,
+  userMessage: string,
+  assistantReply: string,
+  profileId?: string | null,
+  model?: string | null,
+): Promise<string> {
+  return invoke<string>("generate_pet_chat_title", { sessionId, userMessage, assistantReply, profileId, model });
+}
+
+export async function deletePetChatSession(sessionId: string): Promise<void> {
+  return invoke<void>("delete_pet_chat_session", { sessionId });
+}
+
+export async function deletePetChatSessions(sessionIds: string[]): Promise<void> {
+  await Promise.all(sessionIds.map((sessionId) => deletePetChatSession(sessionId)));
 }
 
 export async function getLatestPetChatSession(): Promise<PetChatSession | null> {
@@ -215,6 +242,36 @@ export async function insertAiResult(
 
 export async function getAllSettings(): Promise<SettingsEntry[]> {
   return invoke<SettingsEntry[]>("get_all_settings");
+}
+
+export async function listAiProfiles(): Promise<AiProfile[]> {
+  return invoke<AiProfile[]>("list_ai_profiles");
+}
+
+export async function createAiProfile(
+  request: Omit<AiProfile, "id" | "apiKeyConfigured" | "created_at" | "updated_at">,
+  apiKey?: string,
+): Promise<AiProfile> {
+  return invoke<AiProfile>("create_ai_profile", { request, apiKey: apiKey || null });
+}
+
+export async function updateAiProfile(
+  profileId: string,
+  request: Omit<AiProfile, "id" | "apiKeyConfigured" | "created_at" | "updated_at">,
+): Promise<void> {
+  return invoke<void>("update_ai_profile", { profileId, request });
+}
+
+export async function deleteAiProfile(profileId: string): Promise<void> {
+  return invoke<void>("delete_ai_profile", { profileId });
+}
+
+export async function setAiProfileApiKey(profileId: string, value: string): Promise<void> {
+  return invoke<void>("set_ai_profile_api_key", { profileId, value });
+}
+
+export async function clearAiProfileApiKey(profileId: string): Promise<void> {
+  return invoke<void>("clear_ai_profile_api_key", { profileId });
 }
 
 export async function updateSetting(key: string, value: string): Promise<void> {

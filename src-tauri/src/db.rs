@@ -18,7 +18,7 @@ use crate::models::{
     KnowledgeTopic, LearningDialogSession, PetChatContextCandidate, PetChatMessage, PetChatSession,
     Record, RecordAttachmentLink, RecordFilter,
     RecordKnowledgeTopic, RecordSource, RecordStatus, RecordType, RecordWithRelations, RepeatRule,
-    SettingsEntry, Tag, Task, TaskFilter, TaskPriority, TaskStatus, UnfinishedTaskItem,
+    AiProfile, CreateAiProfileRequest, SettingsEntry, Tag, Task, TaskFilter, TaskPriority, TaskStatus, UnfinishedTaskItem,
     UpdateRecordRequest,
 };
 
@@ -194,6 +194,26 @@ pub fn run_migrations(conn: &Connection) -> AppResult<()> {
         CREATE TABLE IF NOT EXISTS settings (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS ai_profiles (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            base_url TEXT,
+            default_model TEXT NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS ai_profile_models (
+            id TEXT PRIMARY KEY,
+            profile_id TEXT NOT NULL,
+            model TEXT NOT NULL,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            UNIQUE(profile_id, model),
+            FOREIGN KEY(profile_id) REFERENCES ai_profiles(id) ON DELETE CASCADE
         );
 
         CREATE TABLE IF NOT EXISTS folders (
@@ -1099,6 +1119,125 @@ pub fn get_all_settings(conn: &Connection) -> AppResult<Vec<SettingsEntry>> {
     Ok(entries)
 }
 
+pub fn create_ai_profile(
+    conn: &Connection,
+    request: &CreateAiProfileRequest,
+) -> AppResult<AiProfile> {
+    if request.name.trim().is_empty() {
+        return Err(AppError::Validation("AI profile name is required".into()));
+    }
+    if request.provider.trim().is_empty() {
+        return Err(AppError::Validation("AI profile provider is required".into()));
+    }
+    let models = normalize_ai_models(&request.models, &request.default_model)?;
+    let default_model = request.default_model.trim().to_string();
+    let now = Utc::now();
+    let id = Uuid::new_v4().to_string();
+    conn.execute(
+        "INSERT INTO ai_profiles (id, name, provider, base_url, default_model, enabled, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)",
+        params![id, request.name.trim(), request.provider.trim(), request.base_url.as_deref().map(str::trim), default_model, request.enabled, now],
+    )?;
+    for (sort_order, model) in models.iter().enumerate() {
+        conn.execute(
+            "INSERT INTO ai_profile_models (id, profile_id, model, sort_order) VALUES (?1, ?2, ?3, ?4)",
+            params![Uuid::new_v4().to_string(), id, model, sort_order as i64],
+        )?;
+    }
+    Ok(AiProfile {
+        id,
+        name: request.name.trim().into(),
+        provider: request.provider.trim().into(),
+        base_url: request.base_url.as_ref().map(|value| value.trim().to_string()).filter(|value| !value.is_empty()),
+        default_model,
+        models,
+        enabled: request.enabled,
+        api_key_configured: false,
+        created_at: now,
+        updated_at: now,
+    })
+}
+
+pub fn list_ai_profiles(conn: &Connection) -> AppResult<Vec<AiProfile>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, name, provider, base_url, default_model, enabled, created_at, updated_at FROM ai_profiles ORDER BY datetime(created_at) ASC, rowid ASC",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        let id: String = row.get(0)?;
+        let mut model_stmt = conn
+            .prepare("SELECT model FROM ai_profile_models WHERE profile_id = ?1 ORDER BY sort_order ASC, rowid ASC")
+            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+        let models = model_stmt
+            .query_map(params![id], |model_row| model_row.get(0))
+            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?
+            .collect::<Result<Vec<String>, _>>()?;
+        Ok(AiProfile {
+            id,
+            name: row.get(1)?,
+            provider: row.get(2)?,
+            base_url: row.get(3)?,
+            default_model: row.get(4)?,
+            models,
+            enabled: row.get::<_, i64>(5)? != 0,
+            api_key_configured: false,
+            created_at: row.get(6)?,
+            updated_at: row.get(7)?,
+        })
+    })?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
+pub fn update_ai_profile(
+    conn: &Connection,
+    id: &str,
+    request: &CreateAiProfileRequest,
+) -> AppResult<()> {
+    if request.name.trim().is_empty() || request.provider.trim().is_empty() {
+        return Err(AppError::Validation("AI profile name and provider are required".into()));
+    }
+    let models = normalize_ai_models(&request.models, &request.default_model)?;
+    let now = Utc::now();
+    let changed = conn.execute(
+        "UPDATE ai_profiles SET name = ?2, provider = ?3, base_url = ?4, default_model = ?5, enabled = ?6, updated_at = ?7 WHERE id = ?1",
+        params![id, request.name.trim(), request.provider.trim(), request.base_url.as_deref().map(str::trim), request.default_model.trim(), request.enabled, now],
+    )?;
+    if changed == 0 {
+        return Err(AppError::NotFound(format!("ai profile {id}")));
+    }
+    conn.execute("DELETE FROM ai_profile_models WHERE profile_id = ?1", params![id])?;
+    for (sort_order, model) in models.iter().enumerate() {
+        conn.execute(
+            "INSERT INTO ai_profile_models (id, profile_id, model, sort_order) VALUES (?1, ?2, ?3, ?4)",
+            params![Uuid::new_v4().to_string(), id, model, sort_order as i64],
+        )?;
+    }
+    Ok(())
+}
+
+pub fn delete_ai_profile(conn: &Connection, id: &str) -> AppResult<()> {
+    let changed = conn.execute("DELETE FROM ai_profiles WHERE id = ?1", params![id])?;
+    if changed == 0 {
+        return Err(AppError::NotFound(format!("ai profile {id}")));
+    }
+    Ok(())
+}
+
+fn normalize_ai_models(models: &[String], default_model: &str) -> AppResult<Vec<String>> {
+    let mut normalized = models
+        .iter()
+        .map(|model| model.trim().to_string())
+        .filter(|model| !model.is_empty())
+        .collect::<Vec<_>>();
+    let default_model = default_model.trim();
+    if default_model.is_empty() {
+        return Err(AppError::Validation("AI profile default model is required".into()));
+    }
+    if !normalized.iter().any(|model| model == default_model) {
+        normalized.insert(0, default_model.to_string());
+    }
+    normalized.dedup();
+    Ok(normalized)
+}
+
 pub fn default_settings() -> Vec<SettingsEntry> {
     vec![
         SettingsEntry {
@@ -1124,6 +1263,10 @@ pub fn default_settings() -> Vec<SettingsEntry> {
         SettingsEntry {
             key: "ai_provider".into(),
             value: "claude".into(),
+        },
+        SettingsEntry {
+            key: "ai_default_profile_id".into(),
+            value: "".into(),
         },
         SettingsEntry {
             key: "ai_model".into(),
@@ -1157,6 +1300,7 @@ pub fn default_settings() -> Vec<SettingsEntry> {
             key: "pet_visible".into(),
             value: "true".into(),
         },
+        SettingsEntry { key: "pet_name".into(), value: "小宠物".into() },
         SettingsEntry { key: "pet_persona".into(), value: "gentle-companion".into() },
         SettingsEntry { key: "pet_custom_prompt".into(), value: "".into() },
         SettingsEntry { key: "pet_proactive_ai_enabled".into(), value: "false".into() },
@@ -1238,6 +1382,37 @@ pub fn create_pet_chat_session(
     Ok(session)
 }
 
+pub fn update_pet_chat_session_title(
+    conn: &Connection,
+    session_id: &str,
+    title: &str,
+) -> AppResult<PetChatSession> {
+    let title = title.trim();
+    if title.is_empty() {
+        return Err(AppError::Validation("conversation title cannot be empty".into()));
+    }
+    let changed = conn.execute(
+        "UPDATE pet_chat_sessions SET title = ?2 WHERE id = ?1",
+        params![session_id, title],
+    )?;
+    if changed == 0 {
+        return Err(AppError::NotFound(format!("pet_chat_session {session_id}")));
+    }
+    conn.query_row(
+        "SELECT id, title, created_at, updated_at FROM pet_chat_sessions WHERE id = ?1",
+        params![session_id],
+        map_pet_chat_session,
+    ).map_err(AppError::from)
+}
+
+pub fn delete_pet_chat_session(conn: &Connection, session_id: &str) -> AppResult<()> {
+    let changed = conn.execute("DELETE FROM pet_chat_sessions WHERE id = ?1", params![session_id])?;
+    if changed == 0 {
+        return Err(AppError::NotFound(format!("pet_chat_session {session_id}")));
+    }
+    Ok(())
+}
+
 pub fn append_pet_chat_message(
     conn: &Connection,
     session_id: &str,
@@ -1268,14 +1443,25 @@ pub fn list_pet_chat_sessions(
     conn: &Connection,
     limit: i64,
 ) -> AppResult<Vec<PetChatSession>> {
-    if limit <= 0 {
+    if limit == 0 {
         return Ok(vec![]);
+    }
+    if limit < 0 {
+        let mut stmt = conn.prepare(
+            "SELECT id, title, created_at, updated_at FROM pet_chat_sessions ORDER BY datetime(updated_at) DESC, rowid DESC",
+        )?;
+        let rows = stmt.query_map([], map_pet_chat_session)?;
+        return Ok(rows.collect::<Result<Vec<_>, _>>()?);
     }
     let mut stmt = conn.prepare(
         "SELECT id, title, created_at, updated_at FROM pet_chat_sessions ORDER BY datetime(updated_at) DESC, rowid DESC LIMIT ?1",
     )?;
     let rows = stmt.query_map(params![limit], map_pet_chat_session)?;
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
+pub fn count_pet_chat_sessions(conn: &Connection) -> AppResult<i64> {
+    Ok(conn.query_row("SELECT COUNT(*) FROM pet_chat_sessions", [], |row| row.get(0))?)
 }
 
 pub fn get_latest_pet_chat_session(conn: &Connection) -> AppResult<Option<PetChatSession>> {
@@ -2049,7 +2235,8 @@ fn parse_optional_datetime(value: Option<String>) -> rusqlite::Result<Option<Dat
 mod tests {
     use super::*;
     use crate::models::{
-        AttachmentRole, CreateAttachmentRequest, CreateRecordRequest, CreateTaskRequest,
+        AttachmentRole, CreateAiProfileRequest, CreateAttachmentRequest, CreateRecordRequest, CreateTaskRequest,
+        UpdateAiProfileRequest,
         RecordSource, RecordType, TaskPriority, TaskStatus,
     };
 
@@ -3148,6 +3335,70 @@ mod tests {
         assert_eq!(switched.task_status, TaskStatus::Doing);
         // completed_at should still be set from the previous update
         assert!(switched.completed_at.is_some());
+    }
+
+    #[test]
+    fn ai_profiles_schema_supports_multiple_profiles_and_models() {
+        let conn = Connection::open_in_memory().expect("connection");
+        run_migrations(&conn).expect("migrations");
+
+        let profile = create_ai_profile(
+            &conn,
+            &CreateAiProfileRequest {
+                name: "OpenAI 工作".into(),
+                provider: "openai".into(),
+                base_url: None,
+                default_model: "gpt-4.1".into(),
+                models: vec!["gpt-4.1".into(), "gpt-4o".into()],
+                enabled: true,
+            },
+        )
+        .expect("profile");
+
+        let profiles = list_ai_profiles(&conn).expect("profiles");
+        assert_eq!(profiles.len(), 1);
+        assert_eq!(profiles[0].id, profile.id);
+        assert_eq!(profiles[0].models, vec!["gpt-4.1", "gpt-4o"]);
+        assert_eq!(profiles[0].default_model, "gpt-4.1");
+    }
+
+    #[test]
+    fn ai_profile_update_and_delete_are_scoped_to_profile() {
+        let conn = Connection::open_in_memory().expect("connection");
+        run_migrations(&conn).expect("migrations");
+        let profile = create_ai_profile(
+            &conn,
+            &CreateAiProfileRequest {
+                name: "旧名称".into(),
+                provider: "openai".into(),
+                base_url: None,
+                default_model: "gpt-4o".into(),
+                models: vec!["gpt-4o".into()],
+                enabled: true,
+            },
+        )
+        .expect("profile");
+
+        update_ai_profile(
+            &conn,
+            &profile.id,
+            &UpdateAiProfileRequest {
+                name: "新名称".into(),
+                provider: "openai".into(),
+                base_url: Some("https://example.test/v1".into()),
+                default_model: "gpt-4.1".into(),
+                models: vec!["gpt-4.1".into()],
+                enabled: false,
+            },
+        )
+        .expect("update");
+        let updated = list_ai_profiles(&conn).expect("profiles");
+        assert_eq!(updated[0].name, "新名称");
+        assert!(!updated[0].enabled);
+        assert_eq!(updated[0].models, vec!["gpt-4.1"]);
+
+        delete_ai_profile(&conn, &profile.id).expect("delete");
+        assert!(list_ai_profiles(&conn).expect("profiles").is_empty());
     }
 
     // ── Task 2: unfinished-task query ──────────────────────────────

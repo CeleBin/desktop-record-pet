@@ -508,6 +508,37 @@ pub struct SettingsEntry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AiProfile {
+    pub id: String,
+    pub name: String,
+    pub provider: String,
+    #[serde(rename = "baseUrl")]
+    pub base_url: Option<String>,
+    #[serde(rename = "defaultModel")]
+    pub default_model: String,
+    pub models: Vec<String>,
+    pub enabled: bool,
+    #[serde(rename = "apiKeyConfigured")]
+    pub api_key_configured: bool,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CreateAiProfileRequest {
+    pub name: String,
+    pub provider: String,
+    #[serde(rename = "baseUrl")]
+    pub base_url: Option<String>,
+    #[serde(rename = "defaultModel")]
+    pub default_model: String,
+    pub models: Vec<String>,
+    pub enabled: bool,
+}
+
+pub type UpdateAiProfileRequest = CreateAiProfileRequest;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CreateRecordRequest {
     #[serde(rename = "type")]
     pub record_type: Option<RecordType>,
@@ -621,6 +652,12 @@ pub struct PetChatPayload {
     pub persona: String,
     #[serde(rename = "customPrompt")]
     pub custom_prompt: Option<String>,
+    #[serde(default, rename = "profileId")]
+    pub profile_id: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub proactive: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

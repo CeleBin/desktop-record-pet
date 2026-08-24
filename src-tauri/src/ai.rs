@@ -1,4 +1,4 @@
-use std::{path::Path, time::Duration};
+use std::{error::Error as StdError, path::Path, time::Duration};
 
 use chrono::Utc;
 use reqwest::Client;
@@ -52,7 +52,7 @@ impl AiRuntimeSettings {
                 "opencode" if !base.ends_with("/responses") => {
                     format!("{}/responses", base.trim_end_matches('/'))
                 }
-                "openai" if !base.ends_with("/chat/completions") => {
+                "openai" | "deepseek" | "custom-openai" | "ollama" if !base.ends_with("/chat/completions") => {
                     format!("{}/chat/completions", base.trim_end_matches('/'))
                 }
                 "claude" | "anthropic" if !base.ends_with("/messages") => {
@@ -65,6 +65,8 @@ impl AiRuntimeSettings {
         match self.provider.as_str() {
             "opencode" => "https://opencode.ai/zen/v1/responses".into(),
             "openai" => "https://api.openai.com/v1/chat/completions".into(),
+            "deepseek" => "https://api.deepseek.com/v1/chat/completions".into(),
+            "ollama" => "http://127.0.0.1:11434/v1/chat/completions".into(),
             _ => "https://api.anthropic.com/v1/messages".into(),
         }
     }
@@ -75,6 +77,23 @@ fn build_http_client() -> AppResult<Client> {
         .timeout(Duration::from_secs(60))
         .build()
         .map_err(|error| AppError::State(format!("failed to build AI client: {error}")))
+}
+
+fn describe_ai_request_error(error: &reqwest::Error) -> String {
+    let mut detail = error.to_string();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        if !detail.contains(&cause.to_string()) {
+            detail.push_str(&format!("; cause: {cause}"));
+        }
+        source = cause.source();
+    }
+    if error.is_timeout() {
+        detail.push_str("; suggestion: check the network or proxy and try again");
+    } else if error.is_connect() {
+        detail.push_str("; suggestion: check DNS, firewall, VPN, or proxy settings");
+    }
+    format!("AI request failed: {detail}")
 }
 
 fn ensure_task_allowed_for_product_mode(mode: ProductMode, task_type: AiTaskType) -> AppResult<()> {
@@ -116,6 +135,14 @@ pub async fn run_task(database: &Database, request: RunAiTaskRequest) -> AppResu
 }
 
 pub fn load_ai_runtime_settings(conn: &rusqlite::Connection) -> AppResult<AiRuntimeSettings> {
+    if let Some(profile_id) = db::get_setting(conn, "ai_default_profile_id")?.map(|entry| entry.value) {
+        if !profile_id.trim().is_empty() {
+            return load_ai_runtime_settings_for_profile(conn, &profile_id, None);
+        }
+    }
+    if let Some(profile) = db::list_ai_profiles(conn)?.into_iter().find(|profile| profile.enabled) {
+        return load_ai_runtime_settings_for_profile(conn, &profile.id, None);
+    }
     let secure_api_key = credentials::get_ai_api_key()?;
     let legacy_api_key = db::get_setting(conn, "ai_api_key")?
         .map(|entry| entry.value)
@@ -140,6 +167,85 @@ pub fn load_ai_runtime_settings(conn: &rusqlite::Connection) -> AppResult<AiRunt
     };
 
     load_ai_runtime_settings_with_api_key(conn, api_key)
+}
+
+pub fn load_ai_runtime_settings_for_profile(
+    conn: &rusqlite::Connection,
+    profile_id: &str,
+    model_override: Option<&str>,
+) -> AppResult<AiRuntimeSettings> {
+    let profile = db::list_ai_profiles(conn)?
+        .into_iter()
+        .find(|profile| profile.id == profile_id)
+        .ok_or_else(|| AppError::NotFound(format!("ai profile {profile_id}")))?;
+    if !profile.enabled {
+        return Err(AppError::Validation("selected AI profile is disabled".into()));
+    }
+    let model = model_override
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        .unwrap_or(profile.default_model.as_str());
+    if !profile.models.iter().any(|candidate| candidate == model) {
+        return Err(AppError::Validation(format!(
+            "model '{model}' is not configured for AI profile '{}'",
+            profile.name
+        )));
+    }
+    let api_key = credentials::get_ai_profile_api_key(&profile.id)?.unwrap_or_default();
+    if api_key.trim().is_empty() && profile.base_url.is_none() {
+        return Err(AppError::Validation(format!(
+            "API key is not configured for AI profile '{}'",
+            profile.name
+        )));
+    }
+    Ok(AiRuntimeSettings {
+        provider: profile.provider,
+        model: model.into(),
+        model_variant: "default".into(),
+        api_key,
+        base_url: profile.base_url,
+    })
+}
+
+pub async fn generate_pet_chat_title(
+    database: &Database,
+    session_id: &str,
+    user_message: &str,
+    assistant_reply: &str,
+    profile_id: Option<&str>,
+    model: Option<&str>,
+) -> AppResult<String> {
+    let settings = {
+        let conn = database.conn.lock()?;
+        match profile_id.filter(|id| !id.trim().is_empty()) {
+            Some(id) => load_ai_runtime_settings_for_profile(&conn, id, model),
+            None => load_ai_runtime_settings(&conn),
+        }?
+    };
+    let payload = LearningDialogReplyPayload {
+        topic_id: "pet-chat-title".into(),
+        topic_name: "对话标题".into(),
+        source_record_id: session_id.into(),
+        summary: user_message.into(),
+        evidence_text: assistant_reply.into(),
+        note_example: None,
+        suggested_questions: vec![],
+        messages: vec![],
+    };
+    let raw_title = run_learning_dialog_reply_request(&settings, &payload).await?.reply;
+    let title = raw_title
+        .trim()
+        .trim_matches(|character| character == '"' || character == '“' || character == '”')
+        .strip_prefix("标题：")
+        .unwrap_or(raw_title.trim())
+        .trim();
+    if title.is_empty() {
+        return Err(AppError::State("AI title generation returned an empty title".into()));
+    }
+    let title = title.chars().take(20).collect::<String>();
+    let conn = database.conn.lock()?;
+    db::update_pet_chat_session_title(&conn, session_id, &title)?;
+    Ok(title)
 }
 
 fn load_ai_runtime_settings_with_api_key(
@@ -601,7 +707,7 @@ async fn run_model_request(
         "claude" | "anthropic" => {
             run_anthropic_learning_request(settings, title, content, source, attachments).await
         }
-        "openai" | "opencode" => {
+        "openai" | "deepseek" | "custom-openai" | "ollama" | "opencode" => {
             run_openai_compatible_learning_request(settings, title, content, source, attachments)
                 .await
         }
@@ -619,7 +725,7 @@ async fn run_learning_dialog_reply_request(
         "claude" | "anthropic" => {
             run_anthropic_learning_dialog_reply_request(settings, payload).await
         }
-        "openai" | "opencode" => {
+        "openai" | "deepseek" | "custom-openai" | "ollama" | "opencode" => {
             run_openai_compatible_learning_dialog_reply_request(settings, payload).await
         }
         other => Err(AppError::Validation(format!(
@@ -721,7 +827,7 @@ async fn run_anthropic_learning_request(
         .json(&request_body)
         .send()
         .await
-        .map_err(|error| AppError::State(format!("AI request failed: {error}")))?;
+        .map_err(|error| AppError::State(describe_ai_request_error(&error)))?;
 
     let status = response.status();
     let response_text = response
@@ -845,7 +951,7 @@ async fn run_openai_compatible_learning_request(
         .json(&request_body)
         .send()
         .await
-        .map_err(|error| AppError::State(format!("AI request failed: {error}")))?;
+        .map_err(|error| AppError::State(describe_ai_request_error(&error)))?;
 
     let status = response.status();
     eprintln!(
@@ -898,6 +1004,12 @@ async fn run_openai_compatible_learning_request(
 }
 
 fn build_learning_dialog_reply_prompt(payload: &LearningDialogReplyPayload) -> String {
+    if payload.topic_id == "pet-chat-title" {
+        return format!(
+            "根据下面的用户消息和助手回复，生成一个简短的中文对话标题。\n用户消息：{}\n助手回复：{}\n规则：不超过12个字，只返回标题，不要引号、标点解释或其他内容。",
+            payload.summary, payload.evidence_text
+        );
+    }
     let mut prompt = format!(
         "You are a friendly desktop pet helping the user learn one concrete topic.\n\
 Stay focused on the single topic below.\n\
@@ -995,7 +1107,7 @@ async fn run_openai_compatible_learning_dialog_reply_request(
         .json(&request_body)
         .send()
         .await
-        .map_err(|error| AppError::State(format!("AI request failed: {error}")))?;
+        .map_err(|error| AppError::State(describe_ai_request_error(&error)))?;
     let status = response.status();
     let response_text = read_openai_compatible_response_body(response).await?;
     eprintln!(
@@ -1061,7 +1173,7 @@ async fn run_anthropic_learning_dialog_reply_request(
         .json(&request_body)
         .send()
         .await
-        .map_err(|error| AppError::State(format!("AI request failed: {error}")))?;
+        .map_err(|error| AppError::State(describe_ai_request_error(&error)))?;
 
     let status = response.status();
     let response_text = response
@@ -1321,18 +1433,28 @@ fn build_openai_compatible_request_body(
     system_prompt: &str,
     user_content: Vec<serde_json::Value>,
 ) -> serde_json::Value {
+    let user_content = user_content
+        .into_iter()
+        .map(|content| match content.get("type").and_then(serde_json::Value::as_str) {
+            Some("input_text") => serde_json::json!({
+                "type": "text",
+                "text": content["text"].as_str().unwrap_or_default(),
+            }),
+            Some("input_image") => serde_json::json!({
+                "type": "image_url",
+                "image_url": { "url": content["image_url"].as_str().unwrap_or_default() },
+            }),
+            _ => content,
+        })
+        .collect::<Vec<_>>();
+
     serde_json::json!({
         "model": model,
         "stream": false,
-        "input": [
+        "messages": [
             {
                 "role": "system",
-                "content": [
-                    {
-                        "type": "input_text",
-                        "text": system_prompt
-                    }
-                ]
+                "content": system_prompt
             },
             {
                 "role": "user",
@@ -1366,13 +1488,19 @@ async fn run_pet_chat(database: &Database, payload: serde_json::Value) -> AppRes
 
     let (session_id, messages, context_text, settings) = {
         let conn = database.conn.lock()?;
-        let session = match payload.session_id.as_deref().filter(|id| !id.trim().is_empty()) {
-            Some(id) => id.to_string(),
-            None => db::create_pet_chat_session(&conn, None)?.id,
+        let session = if payload.proactive {
+            payload.session_id.clone().unwrap_or_else(|| Uuid::new_v4().to_string())
+        } else {
+            match payload.session_id.as_deref().filter(|id| !id.trim().is_empty()) {
+                Some(id) => id.to_string(),
+                None => db::create_pet_chat_session(&conn, None)?.id,
+            }
         };
         let context_snapshot = serde_json::to_string(&payload.retained_record_ids)
             .map_err(|error| AppError::State(format!("failed to serialize chat context: {error}")))?;
-        db::append_pet_chat_message(&conn, &session, "user", &payload.content, &context_snapshot)?;
+        if !payload.proactive {
+            db::append_pet_chat_message(&conn, &session, "user", &payload.content, &context_snapshot)?;
+        }
         let context_text = payload.retained_record_ids.iter().filter_map(|id| {
             db::get_record(&conn, id).ok().and_then(|record| {
                 (record.status == crate::models::RecordStatus::Active).then(|| format!(
@@ -1382,11 +1510,22 @@ async fn run_pet_chat(database: &Database, payload: serde_json::Value) -> AppRes
                 ))
             })
         }).collect::<Vec<_>>().join("\n\n");
-        let messages = db::list_pet_chat_messages(&conn, &session)?
+        let messages = if payload.proactive {
+            Vec::new()
+        } else {
+            db::list_pet_chat_messages(&conn, &session)?
             .into_iter()
             .map(|message| crate::models::LearningConversationMessage { role: message.role, content: message.content })
-            .collect::<Vec<_>>();
-        let settings = load_ai_runtime_settings(&conn)?;
+            .collect::<Vec<_>>()
+        };
+        let settings = match payload.profile_id.as_deref() {
+            Some(profile_id) => load_ai_runtime_settings_for_profile(
+                &conn,
+                profile_id,
+                payload.model.as_deref(),
+            )?,
+            None => load_ai_runtime_settings(&conn)?,
+        };
         (session, messages, context_text, settings)
     };
 
@@ -1418,7 +1557,9 @@ async fn run_pet_chat(database: &Database, payload: serde_json::Value) -> AppRes
         created_at: Utc::now(),
     };
     let conn = database.conn.lock()?;
-    db::append_pet_chat_message(&conn, &session_id, "assistant", &response.reply, "[]")?;
+    if !payload.proactive {
+        db::append_pet_chat_message(&conn, &session_id, "assistant", &response.reply, "[]")?;
+    }
     db::insert_ai_task_run(&conn, run.clone())?;
     Ok(run)
 }
@@ -1640,8 +1781,10 @@ mod tests {
 
         assert_eq!(request_body["model"], "deepseek-v4-flash-free");
         assert_eq!(request_body["stream"], false);
-        assert_eq!(request_body["input"][0]["role"], "system");
-        assert_eq!(request_body["input"][1]["role"], "user");
+        assert_eq!(request_body["messages"][0]["role"], "system");
+        assert_eq!(request_body["messages"][0]["content"], "system prompt");
+        assert_eq!(request_body["messages"][1]["role"], "user");
+        assert_eq!(request_body["messages"][1]["content"][0]["type"], "text");
     }
 
     #[test]

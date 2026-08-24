@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 
 import { showWindow } from "../../lib/tauri";
+import { useSettingsStore } from "../../store/settings";
 
 const appWindow = getCurrentWebviewWindow();
 
@@ -14,6 +15,8 @@ interface PetMenuProps {
 
 export function PetMenu({ onClose, onManualCompanionInvite, onOpenPanel, onOpenChat }: PetMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
+  const settings = useSettingsStore((state) => state.settings);
+  const petName = settings.pet_name?.trim() || "小宠物";
 
   // Close on click outside
   useEffect(() => {
@@ -70,7 +73,7 @@ export function PetMenu({ onClose, onManualCompanionInvite, onOpenPanel, onOpenC
         className="flex w-full flex-1 items-center gap-2.5 px-3.5 py-2.5 text-xs text-text transition hover:bg-white/[6%]"
       >
         <span className="text-secondary">✦</span>
-        让搭子开场
+        让{petName}开场
       </button>
 
       {/* Todo overlay */}
@@ -80,7 +83,7 @@ export function PetMenu({ onClose, onManualCompanionInvite, onOpenPanel, onOpenC
         className="flex w-full flex-1 items-center gap-2.5 px-3.5 py-2.5 text-xs text-text transition hover:bg-white/[6%]"
       >
         <span className="text-secondary">✦</span>
-        和搭子聊聊
+        和{petName}聊聊
       </button>
 
       {/* Todo overlay */}

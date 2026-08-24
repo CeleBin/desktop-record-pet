@@ -21,9 +21,13 @@ import type {
   AiResultItem,
   LearningAnalysisResult,
   RecordWithRelations,
+  RepeatRule,
   TaskStatus,
   UpdateRecordRequest,
 } from "../../types";
+import { formatRepeatRule, parseRepeatRule } from "../../types";
+import { DatePicker } from "../todo/DatePicker";
+import { RepeatOption, WeeklyRepeatOption } from "../todo/RepeatRuleOptions";
 import { MarkdownEditor, isBlankMarkdown } from "./MarkdownEditor";
 
 interface RecordDetailProps {
@@ -32,6 +36,8 @@ interface RecordDetailProps {
   onUpdate: (id: string, update: UpdateRecordRequest) => Promise<void>;
   onConvertToTask: (recordId: string) => Promise<void>;
   onUpdateTaskStatus: (taskId: string, status: TaskStatus, recordId: string) => Promise<void>;
+  onUpdateDueAt: (recordId: string, taskId: string, dueAt: string | null) => Promise<void>;
+  onUpdateRepeatRule: (taskId: string, repeatRule: string | null) => Promise<void>;
   onDelete: (id: string) => void;
   growthPreviewEnabled: boolean;
 }
@@ -168,6 +174,30 @@ function formatDateTime(iso: string): string {
   }
 }
 
+/**
+ * 将 "YYYY-MM-DD" 字符串解析为中文本地化显示，附带颜色编码。
+ * - 已过期：玫瑰色（text-danger）
+ * - 今天/3天内：琥珀色（text-primary）
+ * - 未来：默认灰色（text-text0）
+ */
+function getDueDisplay(dueAt: string | null): { display: string; className: string } | null {
+  if (!dueAt) return null;
+  const dueDate = new Date(dueAt);
+  if (isNaN(dueDate.getTime())) return null;
+  const m = dueDate.getMonth() + 1;
+  const d = dueDate.getDate();
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const diffTime = dueDate.getTime() - today.getTime();
+  const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24));
+  const dateStr = `${m}月${d}日`;
+
+  if (diffDays < 0) return { display: `${dateStr} · 已过期`, className: "text-danger" };
+  if (diffDays === 0) return { display: `${dateStr} · 今天到期`, className: "text-primary" };
+  if (diffDays <= 3) return { display: `${dateStr} · ${diffDays}天后`, className: "text-primary" };
+  return { display: `${dateStr} · ${diffDays}天后`, className: "text-text0" };
+}
+
 function normalizeTopicName(name: string): string {
   return name.trim().toLocaleLowerCase();
 }
@@ -264,6 +294,8 @@ export function RecordDetail({
   onUpdate,
   onConvertToTask,
   onUpdateTaskStatus,
+  onUpdateDueAt,
+  onUpdateRepeatRule,
   onDelete,
   growthPreviewEnabled,
 }: RecordDetailProps) {
@@ -276,6 +308,8 @@ export function RecordDetail({
   const [saveError, setSaveError] = useState<string | null>(null);
   const [converting, setConverting] = useState(false);
   const [updatingStatus, setUpdatingStatus] = useState(false);
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [showRepeatPicker, setShowRepeatPicker] = useState(false);
   const [aiAnalyzing, setAiAnalyzing] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
   const [latestAiResult, setLatestAiResult] = useState<LearningAnalysisResult | null>(null);
@@ -671,6 +705,8 @@ export function RecordDetail({
     pendingContentSaveRef.current = null;
     pendingTitleSaveRef.current = null;
     setEditingTitle(false);
+    setShowDatePicker(false);
+    setShowRepeatPicker(false);
     if (record) {
       editSessionRef.current = writeQueueRef.current.beginSession();
       draftRecordIdRef.current = record.id;
@@ -884,6 +920,22 @@ export function RecordDetail({
       }
     },
     [record, updatingStatus, onUpdateTaskStatus],
+  );
+
+  const handleUpdateDueAt = useCallback(
+    async (dueAt: string | null) => {
+      if (!record?.task) return;
+      await onUpdateDueAt(record.id, record.task.id, dueAt);
+    },
+    [record, onUpdateDueAt],
+  );
+
+  const handleUpdateRepeatRule = useCallback(
+    async (repeatRule: string | null) => {
+      if (!record?.task) return;
+      await onUpdateRepeatRule(record.task.id, repeatRule);
+    },
+    [record, onUpdateRepeatRule],
   );
 
   const handleTriggerAi = useCallback(async () => {
@@ -1274,7 +1326,8 @@ export function RecordDetail({
         )}
       </div>
 
-      {/* Tags strip — always visible in both edit and view modes */}
+      {/* Tags strip — hidden for task-type records while editing (matches the floating bar, which has no tag strip) */}
+      {!(record.type === "task" && editingContent) && (
       <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-border px-5 py-2">
         <span className="mr-1 text-[10px] font-medium uppercase tracking-[0.2em] text-text0">标签</span>
         {record.tags && record.tags.length > 0
@@ -1383,28 +1436,296 @@ export function RecordDetail({
           )}
         </div>
       </div>
+      )}
 
       {/* Body + TOC rail */}
       <div className="flex min-h-0 flex-1">
         {editingContent ? (
-          /* ── Edit view: WYSIWYG (BlockNote) rich-text editor ── */
-          <MarkdownEditor
-            key={record.id}
-            markdown={contentDraft}
-            onChange={setContentDraft}
-            onSave={(latestMarkdown) => saveContent(latestMarkdown)}
-            onCancel={finishEditContent}
-            onFlushReady={(flush) => {
-              flushRichEditorRef.current = flush;
-              richEditorRecordIdRef.current = flush ? record.id : null;
-            }}
-            onContainerReady={(element) => {
-              markdownContainerRef.current = element;
-            }}
-            onAddImagePaths={registerImagePaths}
-            onAddImageFile={registerImageBlob}
-            className="document-editor min-w-0 flex-1"
-          />
+          <div className="flex min-w-0 flex-1 flex-col">
+            {record.type === "task" && record.task && (
+              <div className="mx-5 mt-4 shrink-0 space-y-4 rounded-xl border border-border bg-surface/60 p-4 backdrop-blur">
+                {/* 任务状态 */}
+                <section>
+                  <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.2em] text-text0">
+                    任务状态
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {TASK_STATUS_OPTIONS.map((opt) => {
+                      const isActive = record.task!.task_status === opt.value;
+                      return (
+                        <button
+                          key={opt.value}
+                          type="button"
+                          onClick={() => void handleUpdateStatus(opt.value)}
+                          disabled={updatingStatus || isActive}
+                          className={`
+                            inline-flex items-center gap-1.5 rounded-full px-3 py-1.5
+                            text-xs font-medium transition-all duration-150
+                            ${
+                              isActive
+                                ? opt.activeClasses
+                                : "bg-white/5 text-text-muted hover:bg-white/10 hover:text-text"
+                            }
+                            disabled:cursor-not-allowed disabled:opacity-60
+                          `}
+                        >
+                          <span
+                            className={`inline-block h-1.5 w-1.5 rounded-full ${isActive ? opt.dot : `${opt.dot} opacity-40`}`}
+                          />
+                          {opt.label}
+                          {updatingStatus && isActive && (
+                            <span className="inline-block h-2.5 w-2.5 animate-spin rounded-full border border-current border-t-transparent" />
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </section>
+
+                {/* 截止日期 */}
+                <section>
+                  <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.2em] text-text0">
+                    截止日期
+                  </p>
+                  <div>
+                    <button
+                      type="button"
+                      onClick={() => setShowDatePicker((v) => !v)}
+                      className="flex w-full items-center gap-2 rounded-lg border border-border
+                        bg-surface/80 px-3 py-2 text-sm transition
+                        hover:border-white/20"
+                    >
+                      <svg
+                        className="h-4 w-4 shrink-0 text-text0"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                        strokeWidth={1.5}
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25
+                            2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021
+                            18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5"
+                        />
+                      </svg>
+
+                      {(() => {
+                        const dueInfo = getDueDisplay(record.task!.due_at);
+                        return dueInfo ? (
+                          <span className={dueInfo.className}>{dueInfo.display}</span>
+                        ) : (
+                          <span className="italic text-text0">未设置</span>
+                        );
+                      })()}
+
+                      <div className="flex-1" />
+
+                      <svg
+                        className={`h-3.5 w-3.5 text-text0 transition-transform duration-200 ${
+                          showDatePicker ? "rotate-180" : ""
+                        }`}
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                        strokeWidth={2}
+                      >
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+                      </svg>
+                    </button>
+
+                    {showDatePicker && (
+                      <div className="mt-2">
+                        <DatePicker
+                          value={record.task!.due_at ? (() => {
+                            const d = new Date(record.task!.due_at);
+                            return isNaN(d.getTime()) ? null : d;
+                          })() : null}
+                          onChange={(date) => {
+                            const y = date.getFullYear();
+                            const m = String(date.getMonth() + 1).padStart(2, "0");
+                            const day = String(date.getDate()).padStart(2, "0");
+                            const dateStr = `${y}-${m}-${day}`;
+                            void handleUpdateDueAt(dateStr);
+                            setShowDatePicker(false);
+                          }}
+                          onClear={() => {
+                            void handleUpdateDueAt(null);
+                            setShowDatePicker(false);
+                          }}
+                        />
+                      </div>
+                    )}
+                  </div>
+                </section>
+
+                {/* 重复 */}
+                <section>
+                  <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.2em] text-text0">
+                    重复
+                  </p>
+                  <div>
+                    <button
+                      type="button"
+                      onClick={() => setShowRepeatPicker((v) => !v)}
+                      className="flex w-full items-center gap-2 rounded-lg border border-border
+                        bg-surface/80 px-3 py-2 text-sm transition
+                        hover:border-white/20"
+                    >
+                      <svg
+                        className="h-4 w-4 shrink-0 text-text0"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                        strokeWidth={1.5}
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182"
+                        />
+                      </svg>
+
+                      {(() => {
+                        const rule = parseRepeatRule(record.task!.repeat_rule);
+                        return rule ? (
+                          <span className="text-secondary">{formatRepeatRule(rule)}</span>
+                        ) : (
+                          <span className="italic text-text0">不重复</span>
+                        );
+                      })()}
+
+                      <div className="flex-1" />
+
+                      <svg
+                        className={`h-3.5 w-3.5 text-text0 transition-transform duration-200 ${
+                          showRepeatPicker ? "rotate-180" : ""
+                        }`}
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                        strokeWidth={2}
+                      >
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+                      </svg>
+                    </button>
+
+                    {showRepeatPicker && (
+                      <div className="mt-2 space-y-1 rounded-lg border border-border bg-surface/80 p-2">
+                        <RepeatOption
+                          label="不重复"
+                          active={!record.task!.repeat_rule}
+                          onClick={async () => {
+                            await handleUpdateRepeatRule(null);
+                            setShowRepeatPicker(false);
+                          }}
+                        />
+                        <RepeatOption
+                          label="每天"
+                          active={record.task!.repeat_rule?.startsWith('{"type":"daily"}') ?? false}
+                          onClick={async () => {
+                            await handleUpdateRepeatRule('{"type":"daily"}');
+                            setShowRepeatPicker(false);
+                          }}
+                        />
+                        <RepeatOption
+                          label="工作日"
+                          active={record.task!.repeat_rule?.startsWith('{"type":"weekdays"}') ?? false}
+                          onClick={async () => {
+                            await handleUpdateRepeatRule('{"type":"weekdays"}');
+                            setShowRepeatPicker(false);
+                          }}
+                        />
+                        <WeeklyRepeatOption
+                          currentRule={parseRepeatRule(record.task!.repeat_rule)}
+                          onSelect={async (days: number[]) => {
+                            const rule: RepeatRule = { type: "weekly", days };
+                            await handleUpdateRepeatRule(JSON.stringify(rule));
+                          }}
+                          onClose={() => setShowRepeatPicker(false)}
+                        />
+                      </div>
+                    )}
+                  </div>
+                </section>
+              </div>
+            )}
+            {record.type === "task" ? (
+              <>
+                {/* 内容 (plain text) */}
+                <section className="mx-5 mt-4 flex min-h-0 flex-1 flex-col">
+                  <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.2em] text-text0">
+                    内容
+                  </p>
+                  <textarea
+                    value={contentDraft}
+                    onChange={(e) => setContentDraft(e.target.value)}
+                    placeholder="添加内容…"
+                    className="w-full min-h-0 flex-1 resize-none rounded-xl border border-border
+                      bg-surface/80 px-3 py-2 text-sm leading-6 text-text
+                      outline-none transition focus:border-secondary/40
+                      focus:ring-2 focus:ring-secondary/20"
+                  />
+                </section>
+
+                {/* 附件 */}
+                <section className="mx-5 mt-4 shrink-0">
+                  <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.2em] text-text0">
+                    附件
+                  </p>
+                  {record.attachments.length === 0 ? (
+                    <p className="text-xs italic text-text0">暂无附件</p>
+                  ) : (
+                    <div className="flex flex-wrap gap-2">
+                      {record.attachments
+                        .filter((a) => a.file_type === "image" || a.file_type === "screenshot")
+                        .map((att) => (
+                          <img
+                            key={att.id}
+                            src={convertFileSrc(att.local_path)}
+                            alt=""
+                            className="h-16 w-16 rounded-lg border border-border object-cover"
+                          />
+                        ))}
+                      {record.attachments
+                        .filter((a) => a.file_type !== "image" && a.file_type !== "screenshot")
+                        .map((att) => (
+                          <span
+                            key={att.id}
+                            className="inline-flex items-center gap-1.5 rounded-full border border-white/8 bg-surface/50 px-2.5 py-1 text-[11px] text-text-muted"
+                          >
+                            <svg className="h-3 w-3 text-text0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                            </svg>
+                            {att.local_path.split(/[\\/]/).pop()}
+                          </span>
+                        ))}
+                    </div>
+                  )}
+                </section>
+              </>
+            ) : (
+              /* ── Edit view: WYSIWYG (BlockNote) rich-text editor ── */
+              <MarkdownEditor
+                key={record.id}
+                markdown={contentDraft}
+                onChange={setContentDraft}
+                onSave={(latestMarkdown) => saveContent(latestMarkdown)}
+                onCancel={finishEditContent}
+                onFlushReady={(flush) => {
+                  flushRichEditorRef.current = flush;
+                  richEditorRecordIdRef.current = flush ? record.id : null;
+                }}
+                onContainerReady={(element) => {
+                  markdownContainerRef.current = element;
+                }}
+                onAddImagePaths={registerImagePaths}
+                onAddImageFile={registerImageBlob}
+                className="document-editor min-w-0 flex-1"
+              />
+            )}
+          </div>
         ) : (
           /* ── View mode: scrollable body ── */
           <div className="flex-1 overflow-y-auto overscroll-contain">

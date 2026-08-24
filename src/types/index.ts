@@ -291,6 +291,19 @@ export interface SettingsEntry {
   value: string;
 }
 
+export interface AiProfile {
+  id: string;
+  name: string;
+  provider: string;
+  baseUrl: string | null;
+  defaultModel: string;
+  models: string[];
+  enabled: boolean;
+  apiKeyConfigured: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface RecordWithRelations extends RecordItem {
   task?: TaskItem | null;
   attachments: AttachmentItem[];

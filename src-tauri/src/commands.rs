@@ -6,17 +6,19 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
 
+use crate::ai;
 use crate::credentials;
 use crate::db::{self, Database};
 use crate::errors::{AppError, AppResult};
 use crate::models::{
-    AiResult, AiTaskRun, AttachmentRole, AttachmentType, ClipboardImageRequest,
+    AiProfile, AiResult, AiTaskRun, AttachmentRole, AttachmentType, ClipboardImageRequest,
     CreateAiResultRequest, CreateAttachmentRequest, CreateRecordRequest, CreateTaskRequest, Folder,
     ImportFilesRequest, KnowledgeMemoryDetail, KnowledgeMemoryItem, Record, RecordFilter,
     PetChatMessage, PetChatSession, RecordSource, RecordType, RecordWithRelations,
     RunAiTaskRequest, SettingsEntry, Tag, Task, TaskFilter, TaskStatus, UnfinishedTaskItem,
     UpdateRecordRequest,
 };
+use crate::models::{CreateAiProfileRequest, UpdateAiProfileRequest};
 use crate::screenshot;
 use crate::windows;
 
@@ -565,7 +567,51 @@ pub fn list_pet_chat_sessions(
     limit: Option<i64>,
 ) -> AppResult<Vec<PetChatSession>> {
     let conn = database.conn.lock()?;
-    db::list_pet_chat_sessions(&conn, limit.unwrap_or(20).clamp(1, 100))
+    db::list_pet_chat_sessions(&conn, limit.map(|value| value.clamp(1, 1000)).unwrap_or(-1))
+}
+
+#[tauri::command]
+pub fn count_pet_chat_sessions(database: State<'_, Database>) -> AppResult<i64> {
+    let conn = database.conn.lock()?;
+    db::count_pet_chat_sessions(&conn)
+}
+
+#[tauri::command]
+pub fn update_pet_chat_session_title(
+    database: State<'_, Database>,
+    session_id: String,
+    title: String,
+) -> AppResult<PetChatSession> {
+    let conn = database.conn.lock()?;
+    db::update_pet_chat_session_title(&conn, &session_id, &title)
+}
+
+#[tauri::command]
+pub async fn generate_pet_chat_title(
+    database: State<'_, Database>,
+    session_id: String,
+    user_message: String,
+    assistant_reply: String,
+    profile_id: Option<String>,
+    model: Option<String>,
+) -> AppResult<String> {
+    ai::generate_pet_chat_title(
+        &database,
+        &session_id,
+        &user_message,
+        &assistant_reply,
+        profile_id.as_deref(),
+        model.as_deref(),
+    ).await
+}
+
+#[tauri::command]
+pub fn delete_pet_chat_session(
+    database: State<'_, Database>,
+    session_id: String,
+) -> AppResult<()> {
+    let conn = database.conn.lock()?;
+    db::delete_pet_chat_session(&conn, &session_id)
 }
 
 #[tauri::command]
@@ -879,6 +925,120 @@ pub fn toggle_pet_window(app: AppHandle) -> AppResult<()> {
 pub fn get_all_settings(database: State<'_, Database>) -> AppResult<Vec<SettingsEntry>> {
     let conn = database.conn.lock()?;
     db::get_all_settings_with_defaults(&conn)
+}
+
+fn ensure_legacy_ai_profile(database: &Database) -> AppResult<()> {
+    let conn = database.conn.lock()?;
+    if !db::list_ai_profiles(&conn)?.is_empty() {
+        return Ok(());
+    }
+    let provider = db::get_setting_or(&conn, "ai_provider", "claude")?;
+    let model = db::get_setting_or(&conn, "ai_model", "claude-sonnet-4-20250514")?;
+    let base_url = db::get_setting_or(&conn, "ai_base_url", "")?;
+    let profile = db::create_ai_profile(
+        &conn,
+        &CreateAiProfileRequest {
+            name: "迁移的当前配置".into(),
+            provider,
+            base_url: (!base_url.trim().is_empty()).then_some(base_url),
+            default_model: model.clone(),
+            models: vec![model],
+            enabled: true,
+        },
+    )?;
+
+    if let Some(key) = credentials::get_ai_api_key()? {
+        credentials::set_ai_profile_api_key(&profile.id, &key)?;
+        credentials::clear_ai_api_key()?;
+    }
+    db::set_setting(&conn, "ai_default_profile_id", &profile.id)?;
+    db::delete_setting(&conn, "ai_api_key")?;
+    db::delete_setting(&conn, "claude_api_key")?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn list_ai_profiles(database: State<'_, Database>) -> AppResult<Vec<AiProfile>> {
+    ensure_legacy_ai_profile(&database)?;
+    let conn = database.conn.lock()?;
+    let mut profiles = db::list_ai_profiles(&conn)?;
+    for profile in &mut profiles {
+        profile.api_key_configured = credentials::get_ai_profile_api_key(&profile.id)?.is_some()
+            || profile.base_url.is_some();
+    }
+    Ok(profiles)
+}
+
+#[tauri::command]
+pub fn create_ai_profile(
+    app: AppHandle,
+    database: State<'_, Database>,
+    request: CreateAiProfileRequest,
+    api_key: Option<String>,
+) -> AppResult<AiProfile> {
+    let conn = database.conn.lock()?;
+    let profile = db::create_ai_profile(&conn, &request)?;
+    let should_set_default = db::get_setting(&conn, "ai_default_profile_id")?
+        .map(|entry| entry.value.trim().is_empty())
+        .unwrap_or(true);
+    if should_set_default {
+        db::set_setting(&conn, "ai_default_profile_id", &profile.id)?;
+    }
+    drop(conn);
+    let has_api_key = api_key.as_ref().is_some_and(|value| !value.trim().is_empty());
+    if let Some(key) = api_key.as_deref().filter(|value| !value.trim().is_empty()) {
+        credentials::set_ai_profile_api_key(&profile.id, key)?;
+    }
+    emit_settings_changed(&app)?;
+    Ok(AiProfile {
+        api_key_configured: has_api_key || request.base_url.is_some(),
+        ..profile
+    })
+}
+
+#[tauri::command]
+pub fn update_ai_profile(
+    app: AppHandle,
+    database: State<'_, Database>,
+    profile_id: String,
+    request: UpdateAiProfileRequest,
+) -> AppResult<()> {
+    let conn = database.conn.lock()?;
+    db::update_ai_profile(&conn, &profile_id, &request)?;
+    emit_settings_changed(&app)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn delete_ai_profile(
+    app: AppHandle,
+    database: State<'_, Database>,
+    profile_id: String,
+) -> AppResult<()> {
+    let conn = database.conn.lock()?;
+    db::delete_ai_profile(&conn, &profile_id)?;
+    drop(conn);
+    credentials::clear_ai_profile_api_key(&profile_id)?;
+    emit_settings_changed(&app)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn set_ai_profile_api_key(
+    app: AppHandle,
+    profile_id: String,
+    value: String,
+) -> AppResult<()> {
+    credentials::set_ai_profile_api_key(&profile_id, &value)?;
+    emit_settings_changed(&app)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn clear_ai_profile_api_key(app: AppHandle, profile_id: String) -> AppResult<()> {
+    credentials::clear_ai_profile_api_key(&profile_id)?;
+    emit_settings_changed(&app)?;
+    Ok(())
 }
 
 /// Upsert a single setting by key/value.

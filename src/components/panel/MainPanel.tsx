@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { useColumnResize } from "../../lib/useColumnResize";
+import { updateTaskDueAt, updateTaskRepeatRule } from "../../lib/tauri";
 import { useRecordsStore } from "../../store/records";
 import { initTagsListener, useTagsStore } from "../../store/tags";
 import { useTasksStore } from "../../store/tasks";
@@ -14,6 +15,7 @@ import { Navigation } from "./Navigation";
 import { KnowledgeMemoryPanel } from "./KnowledgeMemoryPanel";
 import { PetLearningPanel } from "./PetLearningPanel";
 import { PetChatPanel } from "./PetChatPanel";
+import { PetChatHistoryPanel } from "./PetChatHistoryPanel";
 import { getRecordDetailInstanceKey, RecordDetail } from "./RecordDetail";
 import { RecordList } from "./RecordList";
 import { SettingsPanel } from "../settings/SettingsPanel";
@@ -198,6 +200,24 @@ export function MainPanel() {
     [updateStatus, selectRecord],
   );
 
+  const handleUpdateDueAt = useCallback(
+    async (recordId: string, taskId: string, dueAt: string | null) => {
+      await updateTaskDueAt(taskId, dueAt);
+      // Re-fetch detail to reflect updated due date
+      await selectRecord(recordId);
+    },
+    [selectRecord],
+  );
+
+  const handleUpdateRepeatRule = useCallback(
+    async (taskId: string, repeatRule: string | null) => {
+      await updateTaskRepeatRule(taskId, repeatRule);
+      // Re-fetch tasks to reflect the updated repeat rule
+      await fetchTasks();
+    },
+    [fetchTasks],
+  );
+
   return (
     <div className="flex h-screen overflow-hidden bg-bg text-text">
       {/* ── Left: Navigation sidebar ── */}
@@ -244,7 +264,7 @@ export function MainPanel() {
         style={{ width: widths.list }}
       >
         {contentMode === "chat" ? (
-          <div className="flex h-full items-center justify-center text-sm text-text-muted">对话正在右侧展开</div>
+          <PetChatHistoryPanel />
         ) : contentMode === "settings" ? (
           <SettingsPanel onClose={() => setContentMode("records")} />
         ) : contentMode === "memory" && growthPreviewEnabled ? (
@@ -294,6 +314,8 @@ export function MainPanel() {
             onUpdate={handleUpdate}
             onConvertToTask={handleConvertToTask}
             onUpdateTaskStatus={handleUpdateTaskStatus}
+            onUpdateDueAt={handleUpdateDueAt}
+            onUpdateRepeatRule={handleUpdateRepeatRule}
             onDelete={handleDelete}
             growthPreviewEnabled={growthPreviewEnabled}
           />
