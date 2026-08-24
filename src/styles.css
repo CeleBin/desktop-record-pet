@@ -1,5 +1,9 @@
 @import "tailwindcss";
 
+/* BlockNote shadcn classes — let Tailwind v4 scan the package so the
+   utility classes BlockNote uses are generated. */
+@source "../node_modules/@blocknote/shadcn";
+
 /* ════════════════════════════════════════════════════════════════════
    Theme tokens — 5 families × 2 modes = 10 variants
    Apply via: <html data-theme="midnight-amber" data-mode="dark">
@@ -205,58 +209,6 @@
   --font-body: "Quicksand", system-ui, sans-serif;
 }
 
-/* ── Sunset Warm (暮色暖阳): 暖色粗野 + 赤陶
-   Distinct from Midnight Amber: leans into orange/coral sunset tones
-   (Midnight Amber is gold-on-navy; Sunset Warm is orange-on-warm-brown). ── */
-:root[data-theme="sunset-warm"][data-mode="light"] {
-  --bg: #f5ede4;
-  --surface: #fcf5ee;
-  --surface-2: #ece0d0;
-  --surface-3: #e0d0bc;
-  --primary: #aa5020;
-  --primary-fg: #ffffff;
-  --secondary: #6a5a4a;
-  --accent: #d48a5a;
-  --danger: #b54a3a;
-  --text: #2a1e14;
-  --text-strong: #1a100a;
-  --text-muted: #7a6a55;
-  --text0: rgba(122, 106, 85, 0.4);
-  --border: rgba(170, 80, 32, 0.08);
-  --pet-from: rgba(170, 80, 32, 0.90);
-  --pet-to: rgba(130, 55, 20, 0.35);
-  --pet-glow: rgba(170, 80, 32, 0.50);
-  --shadow-glow: 0 8px 32px rgba(170, 80, 32, 0.12);
-  --grain-opacity: 0.07;
-  --radius-shape: 2px;
-  --font-display: "Archivo Black", system-ui, sans-serif;
-  --font-body: "Work Sans", system-ui, sans-serif;
-}
-:root[data-theme="sunset-warm"][data-mode="dark"] {
-  --bg: #180c06;
-  --surface: #261610;
-  --surface-2: #34221a;
-  --surface-3: #423020;
-  --primary: #c75d29;
-  --primary-fg: #180c06;
-  --secondary: #5a4a3a;
-  --accent: #d48a5a;
-  --danger: #c45a4a;
-  --text: #e0d0c0;
-  --text-strong: #f0e4d8;
-  --text-muted: #8a7a6a;
-  --text0: rgba(138, 122, 106, 0.4);
-  --border: rgba(199, 93, 41, 0.14);
-  --pet-from: rgba(199, 93, 41, 0.92);
-  --pet-to: rgba(130, 50, 18, 0.35);
-  --pet-glow: rgba(199, 93, 41, 0.55);
-  --shadow-glow: 0 8px 32px rgba(199, 93, 41, 0.15);
-  --grain-opacity: 0.07;
-  --radius-shape: 2px;
-  --font-display: "Archivo Black", system-ui, sans-serif;
-  --font-body: "Work Sans", system-ui, sans-serif;
-}
-
 /* ════════════════════════════════════════════════════════════════════
    Fallback (no data-* attributes yet) — mirrors midnight-amber/dark
    ════════════════════════════════════════════════════════════════════ */
@@ -317,6 +269,17 @@
   --color-text0: var(--text0);
   --color-text-muted: var(--text-muted);
   --color-border: var(--border);
+  /* BlockNote shadcn 组件依赖的补齐 token（bg-popover / text-muted-foreground 等）
+     缺失会导致下拉框/菜单/弹层背景透明、文字颜色失效 */
+  --color-foreground: var(--text);
+  --color-popover: var(--surface-2);
+  --color-popover-foreground: var(--text);
+  --color-muted: var(--surface-3);
+  --color-muted-foreground: var(--text-muted);
+  --color-accent-foreground: var(--surface);
+  --color-secondary-foreground: var(--surface);
+  --color-input: var(--border);
+  --color-ring: var(--primary);
   --font-display: var(--font-display);
   --font-body: var(--font-body);
 }
@@ -374,4 +337,360 @@ select {
 .col-resize-handle:active {
   background-color: var(--primary);
   opacity: 0.35;
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   Markdown body — Feishu-style heading auto-numbering
+   Uses CSS counters so numbers stay in sync as headings are edited,
+   mirroring how <ol> auto-renumbers ordered list items.
+   H1 → "1、"  H2 → "1.1"  H3 → "1.1.1"
+   ════════════════════════════════════════════════════════════════════ */
+.markdown-body {
+  counter-reset: md-h1 md-h2 md-h3;
+}
+
+.markdown-body h1 {
+  counter-increment: md-h1;
+  counter-reset: md-h2 md-h3;
+}
+
+.markdown-body h1::before {
+  content: counter(md-h1) "、";
+  color: var(--text-muted);
+  font-weight: 600;
+  margin-right: 0.4em;
+  font-variant-numeric: tabular-nums;
+}
+
+.markdown-body h2 {
+  counter-increment: md-h2;
+  counter-reset: md-h3;
+}
+
+.markdown-body h2::before {
+  content: counter(md-h1) "." counter(md-h2);
+  color: var(--text-muted);
+  font-weight: 600;
+  margin-right: 0.4em;
+  font-variant-numeric: tabular-nums;
+}
+
+.markdown-body h3 {
+  counter-increment: md-h3;
+}
+
+.markdown-body h3::before {
+  content: counter(md-h1) "." counter(md-h2) "." counter(md-h3);
+  color: var(--text-muted);
+  font-weight: 600;
+  margin-right: 0.4em;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   Markdown body — reference document typography (Feishu-like reader)
+   16px/1.75 body, hierarchy expressed via size + margin, all colors
+   mapped to theme tokens so dark themes keep working. The Tailwind
+   classes on react-markdown components (RecordDetail mdComponents)
+   only carry functional styles; size/spacing/color live here.
+   ════════════════════════════════════════════════════════════════════ */
+.markdown-body {
+  max-width: 760px;
+  margin: 0 auto;
+  font-size: 16px;
+  line-height: 1.75;
+  color: var(--text);
+}
+
+.markdown-body h1 {
+  font-size: 24px;
+  font-weight: 700;
+  margin: 32px 0 16px;
+}
+
+.markdown-body h2 {
+  font-size: 22px;
+  font-weight: 700;
+  margin: 36px 0 18px;
+}
+
+.markdown-body h3 {
+  font-size: 20px;
+  font-weight: 700;
+  margin: 28px 0 14px;
+}
+
+.markdown-body h4 {
+  font-size: 18px;
+  font-weight: 600;
+  margin: 24px 0 12px;
+}
+
+.markdown-body p {
+  margin: 0 0 12px;
+}
+
+.markdown-body ul,
+.markdown-body ol {
+  padding-left: 28px;
+  margin: 12px 0;
+}
+
+.markdown-body li {
+  margin: 6px 0;
+}
+
+.markdown-body blockquote {
+  margin: 20px 0;
+  padding: 12px 20px;
+  border-left: 4px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-muted);
+}
+
+.markdown-body pre {
+  margin: 20px 0;
+  padding: 16px;
+  overflow-x: auto;
+  background: var(--surface-2);
+  border-radius: 8px;
+}
+
+.markdown-body code {
+  font-family: "JetBrains Mono", Consolas, ui-monospace, monospace;
+}
+
+.markdown-body :not(pre) > code {
+  background: var(--surface-2);
+  padding: 2px 4px;
+  border-radius: 4px;
+  font-size: 0.9em;
+}
+
+.markdown-body table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 24px 0;
+}
+
+.markdown-body th,
+.markdown-body td {
+  border: 1px solid var(--border);
+  padding: 10px 12px;
+}
+
+.markdown-body th {
+  background: var(--surface-2);
+  font-weight: 600;
+}
+
+.markdown-body img {
+  max-width: 100%;
+  border-radius: 8px;
+  margin: 20px 0;
+}
+
+.markdown-body a {
+  color: var(--primary);
+  text-decoration: none;
+}
+
+.markdown-body a:hover {
+  text-decoration: underline;
+}
+
+.markdown-body hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 36px 0;
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   BlockNote theme integration
+   Maps BlockNote's --bn-* CSS vars to our theme tokens so the editor
+   tracks the active data-theme + data-mode automatically. Our tokens
+   are defined on :root[data-theme][data-mode]; BlockNote reads its vars
+   off .bn-root[data-color-scheme], so we re-alias them here.
+   ════════════════════════════════════════════════════════════════════ */
+.bn-root[data-color-scheme="light"],
+.bn-root[data-color-scheme="dark"] {
+  --bn-colors-editor-text: var(--text);
+  --bn-colors-editor-background: var(--surface);
+  --bn-colors-primary: var(--primary);
+  --bn-colors-primary-text: var(--primary-fg);
+  --bn-colors-secondary: var(--secondary);
+  --bn-colors-secondary-text: var(--surface);
+  --bn-colors-background: var(--bg);
+  --bn-colors-foreground: var(--text);
+
+  --bn-colors-menu-background: var(--surface-2);
+  --bn-colors-menu-text: var(--text);
+  --bn-colors-menu-border: var(--border);
+
+  --bn-colors-tooltip-background: var(--surface-3);
+  --bn-colors-tooltip-text: var(--text);
+
+  --bn-colors-hovered-background: var(--surface-2);
+  --bn-colors-hovered-text: var(--text);
+  --bn-colors-hovered-border: var(--border);
+
+  --bn-colors-selected-background: var(--primary);
+  --bn-colors-selected-text: var(--primary-fg);
+
+  --bn-colors-disabled-background: var(--surface);
+  --bn-colors-disabled-text: var(--text-muted);
+
+  --bn-colors-side-menu-background: var(--surface);
+  --bn-colors-side-menu-text: var(--text-muted);
+
+  --bn-colors-shadow: rgba(0, 0, 0, 0.18);
+  --bn-colors-border: var(--border);
+
+  --bn-font-family: var(--font-body);
+  --bn-border-radius: 6px;
+}
+
+/* The BlockNote wrapper in MarkdownEditor — constrain height so the
+   editor scrolls inside the panel instead of growing the page. */
+.bn-wrapper {
+  position: relative;
+}
+
+/* Focused document canvas — editing should feel materially different from
+   read mode: the app chrome recedes and the writing surface gains a calm,
+   centered page with a deliberate measure for long-form text. */
+.document-editor.bn-wrapper {
+  overflow-y: auto;
+  background: transparent;
+  padding: 20px;
+}
+
+.document-editor .bn-editor {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+/* Task-type (待办) editing: match the TodoOverlay floating-bar glass look —
+   frosted translucent surface with border and rounded corners. */
+.document-editor.todo-editor .bn-wrapper {
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 20px;
+  overflow-y: auto;
+}
+
+.document-editor .bn-editor > * + * {
+  margin-top: 0.9em;
+}
+
+.document-editor .bn-editor [data-content-type="heading"] {
+  color: var(--text-strong);
+  font-family: var(--font-display);
+  letter-spacing: -0.02em;
+}
+
+.document-editor .bn-side-menu {
+  left: -34px;
+  /* The side-menu is clipped by .bn-wrapper's horizontal overflow but its DOM
+     still overlays the table's left edge and intercepts mouse events, making
+     tables unselectable. Disable pointer events so drags reach the table
+     cells below; the menu stays invisible (clipped) and non-interactive. */
+  pointer-events: none;
+}
+
+/* BlockNote selection toolbar: make the floating controls feel like a real
+   Feishu-style surface instead of transparent text over the document. */
+.bn-shadcn .bn-toolbar {
+  overflow: visible;
+  max-width: min(94vw, 620px);
+  padding: 5px;
+  border: 1px solid var(--border);
+  border-radius: max(10px, var(--radius-shape));
+  background: var(--surface-2);
+  color: var(--text);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.24), var(--shadow-glow);
+  backdrop-filter: blur(16px);
+}
+
+.bn-shadcn .bn-toolbar button,
+.bn-shadcn .bn-toolbar [role="button"] {
+  border-radius: calc(max(10px, var(--radius-shape)) - 3px);
+  color: var(--text-muted);
+}
+
+.bn-shadcn .bn-toolbar button:hover,
+.bn-shadcn .bn-toolbar [role="button"]:hover {
+  background: var(--surface-3);
+  color: var(--text-strong);
+}
+
+.bn-shadcn .bn-toolbar button[data-active="true"],
+.bn-shadcn .bn-toolbar [role="button"][data-active="true"] {
+  background: color-mix(in srgb, var(--primary) 20%, transparent);
+  color: var(--primary);
+}
+
+/* Slash-command menu is a different BlockNote surface from the selection
+   toolbar. It needs its own opaque layer so the document never bleeds
+   through the command results. */
+.bn-suggestion-menu,
+.bn-menu-dropdown,
+.bn-color-picker-dropdown,
+.bn-drag-handle-menu {
+  z-index: 80;
+  min-width: 280px;
+  max-width: min(420px, calc(100vw - 32px));
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: max(10px, var(--radius-shape));
+  background: var(--surface-2) !important;
+  color: var(--text);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.28), var(--shadow-glow);
+  backdrop-filter: none;
+}
+
+.bn-suggestion-menu-label {
+  padding: 7px 10px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.bn-suggestion-menu-item,
+.bn-menu-item {
+  border-radius: calc(max(10px, var(--radius-shape)) - 3px);
+  color: var(--text);
+}
+
+.bn-suggestion-menu-item[aria-selected="true"],
+.bn-suggestion-menu-item:hover,
+.bn-menu-item:hover,
+.bn-menu-item[data-highlighted] {
+  background: color-mix(in srgb, var(--primary) 20%, var(--surface-3));
+}
+
+@media (max-width: 720px) {
+  .document-editor.bn-wrapper {
+    padding: 12px;
+  }
+
+  .document-editor .bn-editor {
+    min-height: calc(100vh - 190px);
+    padding: 28px 20px;
+    border-radius: 10px;
+  }
 }

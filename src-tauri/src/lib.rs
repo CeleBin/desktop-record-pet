@@ -1,4 +1,7 @@
+mod ai;
+mod audio;
 mod commands;
+mod credentials;
 mod db;
 mod errors;
 mod models;
@@ -8,6 +11,7 @@ mod windows;
 use std::sync::Mutex;
 
 use tauri::menu::{IsMenuItem, Menu, MenuItem};
+use tauri::Emitter;
 use tauri::Manager;
 use tauri::WindowEvent;
 // 引入 Image 类型
@@ -19,6 +23,7 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
 pub struct ShortcutState {
     pub quick_capture: Mutex<String>,
     pub screenshot: Mutex<String>,
+    pub recording: Mutex<String>,
 }
 
 fn register_shortcut_best_effort<F>(shortcut_name: &str, register: F) -> Result<(), String>
@@ -34,6 +39,18 @@ where
             Ok(())
         }
     }
+}
+
+fn emit_recording_error(app: &tauri::AppHandle, message: String) {
+    let _ = app.emit_to(
+        windows::PET_LABEL,
+        "recording:status",
+        audio::RecordingStatusPayload {
+            recording: false,
+            path: None,
+            error: Some(message),
+        },
+    );
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -61,15 +78,26 @@ pub fn run() {
                 db::get_setting_or(&conn, "screenshot_shortcut", "Alt+Shift+S")
                     .map_err(|e| e.to_string())?
             };
+            let recording_accel = {
+                let conn = database.conn.lock().map_err(|e| e.to_string())?;
+                db::get_setting_or(&conn, "recording_shortcut", "Alt+Shift+M")
+                    .map_err(|e| e.to_string())?
+            };
 
             app.manage(database);
+            app.manage(audio::RecordingState::default());
             app.manage(ShortcutState {
                 quick_capture: Mutex::new(quick_accel.clone()),
                 screenshot: Mutex::new(screenshot_accel.clone()),
+                recording: Mutex::new(recording_accel.clone()),
             });
             windows::ensure_window_runtime_ready().map_err(|error| error.to_string())?;
 
-            for label in [windows::MAIN_PANEL_LABEL, windows::PET_LABEL, windows::TODO_OVERLAY_LABEL] {
+            for label in [
+                windows::MAIN_PANEL_LABEL,
+                windows::PET_LABEL,
+                windows::TODO_OVERLAY_LABEL,
+            ] {
                 if windows::should_hide_instead_of_close(label) {
                     let window = app
                         .get_webview_window(label)
@@ -103,23 +131,49 @@ pub fn run() {
                 })?;
             }
 
-            // Screenshot overlay
-            {
-                let shortcut: Shortcut = screenshot_accel
-                    .parse()
-                    .map_err(|error| format!("failed to parse screenshot shortcut: {error}"))?;
+            // Screenshot overlay — DISABLED: screenshot feature temporarily turned off.
+            // Uncomment this block (and the screenshot_shortcut setting in SettingsPanel.tsx)
+            // to restore the screenshot capture shortcut.
+            // {
+            //     let shortcut: Shortcut = screenshot_accel
+            //         .parse()
+            //         .map_err(|error| format!("failed to parse screenshot shortcut: {error}"))?;
+            //
+            //     register_shortcut_best_effort("screenshot capture", || {
+            //         app.global_shortcut()
+            //             .on_shortcut(shortcut, |app, _shortcut, event| {
+            //                 if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+            //                     let _ =
+            //                         windows::show_window(app, windows::SCREENSHOT_OVERLAY_LABEL);
+            //                 }
+            //             })
+            //             .map_err(|error| format!("failed to register screenshot shortcut: {error}"))
+            //     })?;
+            // }
 
-                register_shortcut_best_effort("screenshot capture", || {
+            // Microphone recording toggle
+            {
+                let shortcut: Shortcut = recording_accel
+                    .parse()
+                    .map_err(|error| format!("failed to parse recording shortcut: {error}"))?;
+
+                register_shortcut_best_effort("recording toggle", || {
                     app.global_shortcut()
                         .on_shortcut(shortcut, |app, _shortcut, event| {
                             if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
-                                let _ =
-                                    windows::show_window(app, windows::SCREENSHOT_OVERLAY_LABEL);
+                                let data_dir = match app.path().app_local_data_dir() {
+                                    Ok(dir) => dir,
+                                    Err(error) => {
+                                        emit_recording_error(app, error.to_string());
+                                        return;
+                                    }
+                                };
+                                if let Err(error) = audio::toggle_recording(app, &data_dir) {
+                                    emit_recording_error(app, error.to_string());
+                                }
                             }
                         })
-                        .map_err(|error| {
-                            format!("failed to register screenshot shortcut: {error}")
-                        })
+                        .map_err(|error| format!("failed to register recording shortcut: {error}"))
                 })?;
             }
 
@@ -133,14 +187,9 @@ pub fn run() {
                 None::<&str>,
             )
             .map_err(|error| error.to_string())?;
-            let toggle_pet_item = MenuItem::with_id(
-                handle,
-                "toggle_pet",
-                "Show/Hide Pet",
-                true,
-                None::<&str>,
-            )
-            .map_err(|error| error.to_string())?;
+            let toggle_pet_item =
+                MenuItem::with_id(handle, "toggle_pet", "Show/Hide Pet", true, None::<&str>)
+                    .map_err(|error| error.to_string())?;
             let toggle_todo_overlay_item = MenuItem::with_id(
                 handle,
                 "toggle_todo_overlay",
@@ -205,6 +254,8 @@ pub fn run() {
             // Task 7: record & task browsing
             commands::list_records,
             commands::get_record_detail,
+            commands::list_knowledge_memory,
+            commands::get_knowledge_memory_detail,
             commands::update_record,
             commands::delete_record,
             commands::create_task,
@@ -215,7 +266,15 @@ pub fn run() {
             commands::update_task_repeat_rule,
             commands::remove_task,
             commands::list_unfinished_tasks,
+            commands::list_pet_chat_sessions,
+            commands::count_pet_chat_sessions,
+            commands::update_pet_chat_session_title,
+            commands::generate_pet_chat_title,
+            commands::delete_pet_chat_session,
+            commands::get_latest_pet_chat_session,
+            commands::list_pet_chat_messages,
             commands::reorder_tasks,
+            commands::reorder_records,
             // Folder category commands
             commands::list_folders,
             commands::create_folder,
@@ -237,8 +296,19 @@ pub fn run() {
             // Task 10: settings & AI enhancement
             commands::get_all_settings,
             commands::update_setting,
+            commands::list_ai_profiles,
+            commands::create_ai_profile,
+            commands::update_ai_profile,
+            commands::delete_ai_profile,
+            commands::set_ai_profile_api_key,
+            commands::clear_ai_profile_api_key,
             commands::reset_settings,
+            commands::get_ai_api_key_status,
+            commands::set_ai_api_key,
+            commands::clear_ai_api_key,
             commands::create_ai_result,
+            commands::run_ai_task,
+            commands::trigger_ai_analysis,
             commands::request_ai_enhancement,
             // Editable global shortcuts
             commands::set_shortcut,

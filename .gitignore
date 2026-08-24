@@ -15,6 +15,9 @@ dist-ssr
 # Project docs and config
 docs
 AGENT.md
+.superpowers/
+# Local database recovery copies can contain private note content.
+data-recovery-backup-*/
 
 # Editor directories and files
 .vscode/*
@@ -26,3 +29,5 @@ AGENT.md
 *.njsproj
 *.sln
 *.sw?
+.omo
+.codex-verify-target

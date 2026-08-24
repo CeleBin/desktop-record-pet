@@ -1,31 +1,30 @@
 import { useEffect, useRef, useState } from "react";
 
-import type { RecordStatus, RecordType, TaskStatus } from "../../types";
+import type { RecordType, Tag, TaskStatus } from "../../types";
 import { useTagsStore } from "../../store/tags";
+import { useSettingsStore } from "../../store/settings";
+import { ConfirmDialog } from "../common/ConfirmDialog";
 
-type ViewMode = "all" | "notes" | "tasks";
+type ViewMode = "notes" | "tasks";
 
 interface NavigationProps {
-  selectedTypes: Set<RecordType>;
-  onToggleTypeFilter: (type: RecordType) => void;
+  selectedType: RecordType;
+  onSelectType: (type: RecordType) => void;
   viewMode: ViewMode;
-  activeStatus: RecordStatus | null;
   taskStatusFilter: TaskStatus | null;
   searchQuery: string;
   settingsOpen: boolean;
-  onStatusChange: (status: RecordStatus | null) => void;
+  memoryOpen: boolean;
+  chatOpen: boolean;
+  growthPreviewEnabled: boolean;
   onTaskStatusFilterChange: (status: TaskStatus | null) => void;
   onSearchChange: (query: string) => void;
   onToggleSettings: () => void;
+  onToggleMemory: () => void;
+  onToggleChat: () => void;
   activeTagIds: string[];
   onToggleTagFilter: (id: string) => void;
 }
-
-const STATUS_OPTIONS: { label: string; value: RecordStatus | null }[] = [
-  { label: "所有状态", value: null },
-  { label: "活跃", value: "active" },
-  { label: "归档", value: "archived" },
-];
 
 const TASK_STATUS_OPTIONS: { label: string; value: TaskStatus | null }[] = [
   { label: "全部任务", value: null },
@@ -54,21 +53,26 @@ const TASK_STATUS_STYLES: Record<string, string> = {
 };
 
 export function Navigation({
-  selectedTypes,
-  onToggleTypeFilter,
+  selectedType,
+  onSelectType,
   viewMode,
-  activeStatus,
   taskStatusFilter,
   searchQuery,
   settingsOpen,
+  memoryOpen,
+  chatOpen,
+  growthPreviewEnabled,
   activeTagIds,
-  onStatusChange,
   onTaskStatusFilterChange,
   onSearchChange,
   onToggleSettings,
+  onToggleMemory,
+  onToggleChat,
   onToggleTagFilter,
 }: NavigationProps) {
   const [focused, setFocused] = useState(false);
+  const settings = useSettingsStore((state) => state.settings);
+  const petName = settings.pet_name?.trim() || "小宠物";
 
   // ── Tag create popover ──
   const [showTagPopover, setShowTagPopover] = useState(false);
@@ -76,8 +80,23 @@ export function Navigation({
   const [newTagColor, setNewTagColor] = useState(TAG_COLORS[0]);
   const tags = useTagsStore((s) => s.tags);
   const createTag = useTagsStore((s) => s.createTag);
+  const updateTag = useTagsStore((s) => s.updateTag);
+  const deleteTag = useTagsStore((s) => s.deleteTag);
 
   const tagPopoverRef = useRef<HTMLDivElement>(null);
+
+  // ── Tag context menu (right-click on a tag filter button) ──
+  const [tagMenu, setTagMenu] = useState<{ tagId: string; x: number; y: number } | null>(null);
+  const tagMenuRef = useRef<HTMLDivElement>(null);
+
+  // ── Tag edit popover (rename / recolor) ──
+  const [editingTag, setEditingTag] = useState<Tag | null>(null);
+  const [editTagName, setEditTagName] = useState("");
+  const [editTagColor, setEditTagColor] = useState(TAG_COLORS[0]);
+  const editPopoverRef = useRef<HTMLDivElement>(null);
+
+  // ── Tag delete confirmation dialog ──
+  const [pendingDeleteTag, setPendingDeleteTag] = useState<{ id: string; name: string } | null>(null);
 
   // Close popover on outside click
   useEffect(() => {
@@ -90,6 +109,30 @@ export function Navigation({
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
   }, [showTagPopover]);
+
+  // Close context menu on outside click
+  useEffect(() => {
+    if (!tagMenu) return;
+    const handler = (e: MouseEvent) => {
+      if (tagMenuRef.current && !tagMenuRef.current.contains(e.target as Node)) {
+        setTagMenu(null);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [tagMenu]);
+
+  // Close edit popover on outside click
+  useEffect(() => {
+    if (!editingTag) return;
+    const handler = (e: MouseEvent) => {
+      if (editPopoverRef.current && !editPopoverRef.current.contains(e.target as Node)) {
+        setEditingTag(null);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [editingTag]);
 
   const handleCreateTag = async () => {
     const trimmed = newTagName.trim();
@@ -104,17 +147,43 @@ export function Navigation({
     }
   };
 
+  const handleStartEditTag = (tag: Tag) => {
+    setEditTagName(tag.name);
+    setEditTagColor(tag.color ?? TAG_COLORS[0]);
+    setEditingTag(tag);
+    setTagMenu(null);
+  };
+
+  const handleSaveEditTag = async () => {
+    if (!editingTag) return;
+    const trimmed = editTagName.trim();
+    if (!trimmed) return;
+    try {
+      await updateTag(editingTag.id, trimmed, editTagColor);
+      setEditingTag(null);
+    } catch {
+      // error handled by store
+    }
+  };
+
+  const handleDeleteTag = (tag: Tag) => {
+    setTagMenu(null);
+    setPendingDeleteTag({ id: tag.id, name: tag.name });
+  };
+
   return (
-    <nav className="flex h-full flex-col gap-5 overflow-y-auto p-4">
-      {/* ── Type filter (multi-select: both active = all) ── */}
+    <>
+      <nav className="flex h-full flex-col gap-5 overflow-y-auto p-4">
+      <button type="button" onClick={onToggleChat} className={`rounded-xl border px-3 py-2 text-xs font-medium transition ${chatOpen ? "border-primary/40 bg-primary/10 text-primary" : "border-border text-text-muted hover:text-text"}`}>和{petName}聊聊</button>
+      {/* ── Type filter (single-select: 笔记 OR 待办) ── */}
       <div className="flex rounded-xl bg-surface/60 p-0.5 ring-1 ring-white/[5%]">
         <button
           type="button"
-          onClick={() => onToggleTypeFilter("note")}
+          onClick={() => onSelectType("note")}
           className={`
             flex-1 rounded-lg px-3 py-1.5 text-xs font-medium transition-all duration-150
             ${
-              selectedTypes.has("note")
+              selectedType === "note"
                 ? "bg-secondary/15 text-secondary shadow-sm shadow-secondary/10"
                 : "text-text-muted hover:text-text"
             }
@@ -129,11 +198,11 @@ export function Navigation({
         </button>
         <button
           type="button"
-          onClick={() => onToggleTypeFilter("task")}
+          onClick={() => onSelectType("task")}
           className={`
             flex-1 rounded-lg px-3 py-1.5 text-xs font-medium transition-all duration-150
             ${
-              selectedTypes.has("task")
+              selectedType === "task"
                 ? "bg-secondary/15 text-secondary shadow-sm shadow-secondary/10"
                 : "text-text-muted hover:text-text"
             }
@@ -175,7 +244,7 @@ export function Navigation({
             onChange={(e) => onSearchChange(e.target.value)}
             onFocus={() => setFocused(true)}
             onBlur={() => setFocused(false)}
-            placeholder={viewMode === "tasks" ? "搜索任务…" : viewMode === "notes" ? "搜索笔记…" : "搜索记录…"}
+            placeholder={viewMode === "tasks" ? "搜索任务…" : "搜索笔记…"}
             className="min-w-0 flex-1 bg-transparent text-sm text-text placeholder-text-muted outline-none"
           />
           {searchQuery.length > 0 && (
@@ -195,35 +264,6 @@ export function Navigation({
       {/* ── Record filters ── */}
       {viewMode !== "tasks" ? (
         <>
-          {/* Status filter */}
-          <section>
-            <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.2em] text-text0">
-              状态
-            </p>
-            <div className="flex flex-wrap gap-1.5">
-              {STATUS_OPTIONS.map((opt) => {
-                const isActive = activeStatus === opt.value;
-                return (
-                  <button
-                    key={opt.label}
-                    type="button"
-                    onClick={() => onStatusChange(opt.value)}
-                    className={`
-                      rounded-full px-3 py-1.5 text-xs font-medium transition-all duration-150
-                      ${
-                        isActive
-                          ? "bg-sky-400/15 text-sky-300 ring-1 ring-sky-400/30"
-                          : "bg-white/5 text-text-muted hover:bg-white/10 hover:text-text"
-                      }
-                    `}
-                  >
-                    {opt.label}
-                  </button>
-                );
-              })}
-            </div>
-          </section>
-
           {/* Tags filter */}
           <section>
             <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.2em] text-text0">
@@ -241,6 +281,10 @@ export function Navigation({
                       key={tag.id}
                       type="button"
                       onClick={() => onToggleTagFilter(tag.id)}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        setTagMenu({ tagId: tag.id, x: e.clientX, y: e.clientY });
+                      }}
                       className={`
                         rounded-full px-3 py-1.5 text-xs font-medium transition-all duration-150
                         ${!hasColor
@@ -332,6 +376,53 @@ export function Navigation({
                   </button>
                 </div>
               )}
+
+              {/* Tag edit popover (rename / recolor) */}
+              {editingTag && (
+                <div ref={editPopoverRef} className="absolute left-0 z-50 mt-1 w-56 rounded-xl border border-border bg-surface/95 p-3 shadow-2xl backdrop-blur-xl">
+                  <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.2em] text-text0">编辑标签</p>
+                  <input
+                    type="text"
+                    value={editTagName}
+                    onChange={(e) => setEditTagName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        void handleSaveEditTag();
+                      }
+                      if (e.key === "Escape") {
+                        setEditingTag(null);
+                      }
+                    }}
+                    placeholder="标签名称…"
+                    className="mb-2 w-full rounded-lg border border-border bg-white/5 px-2.5 py-1.5 text-xs text-text placeholder-text-muted outline-none transition focus:border-secondary/40 focus:ring-2 focus:ring-secondary/20"
+                    autoFocus
+                  />
+                  <div className="mb-2 flex gap-1.5">
+                    {TAG_COLORS.map((color) => (
+                      <button
+                        key={color}
+                        type="button"
+                        onClick={() => setEditTagColor(color)}
+                        className={`h-5 w-5 rounded-full transition-all duration-150 ${
+                          editTagColor === color
+                            ? "ring-2 ring-white ring-offset-1 ring-offset-surface/95"
+                            : "ring-1 ring-white/10"
+                        }`}
+                        style={{ backgroundColor: color }}
+                      />
+                    ))}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void handleSaveEditTag()}
+                    disabled={!editTagName.trim()}
+                    className="w-full rounded-lg bg-secondary/15 px-3 py-1.5 text-xs font-medium text-secondary transition hover:bg-secondary/25 disabled:opacity-40"
+                  >
+                    保存
+                  </button>
+                </div>
+              )}
             </div>
           </section>
         </>
@@ -380,8 +471,19 @@ export function Navigation({
       {/* Spacer */}
       <div className="flex-1" />
 
-      {/* Settings toggle + bottom hint */}
+      {/* Memory and settings toggles */}
       <div className="flex items-center gap-1.5">
+        {growthPreviewEnabled && <button
+          type="button"
+          onClick={onToggleMemory}
+          className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-all duration-150 ${memoryOpen ? "bg-secondary/15 text-secondary ring-1 ring-secondary/30" : "text-text0 hover:bg-white/5 hover:text-text"}`}
+          title="知识记忆"
+        >
+          <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.253v11.494m0-11.494C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v11.494C4.168 16.977 5.754 16.5 7.5 16.5s3.332.477 4.5 1.253m0-11.494C13.168 5.477 14.754 5 16.5 5s3.332.477 4.5 1.253v11.494C19.832 16.977 18.246 16.5 16.5 16.5s-3.332.477-4.5 1.253" />
+          </svg>
+          知识记忆
+        </button>}
         <button
           type="button"
           onClick={onToggleSettings}
@@ -400,13 +502,56 @@ export function Navigation({
           </svg>
           {settingsOpen ? "关闭设置" : "设置"}
         </button>
-
-        <div className="flex-1" />
-
-        <p className="text-[10px] text-text-muted">
-          Ctrl+N 新建
-        </p>
       </div>
+
+      {/* Tag context menu (right-click) */}
+      {tagMenu && (
+        <div
+          ref={tagMenuRef}
+          className="fixed z-50 w-32 rounded-xl border border-border bg-surface/95 p-1 shadow-2xl backdrop-blur-xl"
+          style={{ left: tagMenu.x, top: tagMenu.y }}
+        >
+          {(() => {
+            const tag = tags.find((t) => t.id === tagMenu.tagId);
+            if (!tag) return null;
+            return (
+              <>
+                <button
+                  type="button"
+                  onClick={() => handleStartEditTag(tag)}
+                  className="block w-full rounded-lg px-2.5 py-1.5 text-left text-xs text-text transition hover:bg-white/5"
+                >
+                  编辑…
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleDeleteTag(tag)}
+                  className="block w-full rounded-lg px-2.5 py-1.5 text-left text-xs text-danger transition hover:bg-danger/10"
+                >
+                  删除
+                </button>
+              </>
+            );
+          })()}
+        </div>
+      )}
     </nav>
+
+      {/* Tag delete confirm dialog */}
+      <ConfirmDialog
+        open={pendingDeleteTag !== null}
+        message={
+          pendingDeleteTag
+            ? `确认删除标签「${pendingDeleteTag.name}」？\n该标签将从所有相关笔记中移除。`
+            : ""
+        }
+        confirmLabel="确认删除"
+        onConfirm={() => {
+          if (pendingDeleteTag) void deleteTag(pendingDeleteTag.id);
+          setPendingDeleteTag(null);
+        }}
+        onCancel={() => setPendingDeleteTag(null)}
+      />
+    </>
   );
 }

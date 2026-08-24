@@ -12,11 +12,14 @@ use uuid::Uuid;
 
 use crate::errors::{AppError, AppResult};
 use crate::models::{
-    AiResult, AiTriggerMode, Attachment, AttachmentRole, AttachmentType, CreateAiResultRequest,
-    CreateAttachmentRequest, CreateRecordRequest, CreateTaskRequest, Folder, Record,
-    RecordAttachmentLink, RecordFilter, RecordSource, RecordStatus, RecordType,
-    RecordWithRelations, RepeatRule, SettingsEntry, Tag, Task, TaskFilter, TaskPriority,
-    TaskStatus, UnfinishedTaskItem, UpdateRecordRequest,
+    AiResult, AiTaskRun, AiTaskType, AiTriggerMode, Attachment, AttachmentRole, AttachmentType,
+    CreateAiResultRequest, CreateAttachmentRequest, CreateRecordRequest, CreateTaskRequest, Folder,
+    KnowledgeEvidence, KnowledgeMemoryDetail, KnowledgeMemoryEvidence, KnowledgeMemoryItem,
+    KnowledgeTopic, LearningDialogSession, PetChatContextCandidate, PetChatMessage, PetChatSession,
+    Record, RecordAttachmentLink, RecordFilter,
+    RecordKnowledgeTopic, RecordSource, RecordStatus, RecordType, RecordWithRelations, RepeatRule,
+    AiProfile, CreateAiProfileRequest, SettingsEntry, Tag, Task, TaskFilter, TaskPriority, TaskStatus, UnfinishedTaskItem,
+    UpdateRecordRequest,
 };
 
 pub struct Database {
@@ -113,6 +116,70 @@ pub fn run_migrations(conn: &Connection) -> AppResult<()> {
             FOREIGN KEY(record_id) REFERENCES records(id) ON DELETE CASCADE
         );
 
+        CREATE TABLE IF NOT EXISTS ai_task_runs (
+            id TEXT PRIMARY KEY,
+            task_type TEXT NOT NULL,
+            source_record_id TEXT,
+            status TEXT NOT NULL,
+            model_provider TEXT,
+            model_name TEXT,
+            model_variant TEXT,
+            input_snapshot TEXT NOT NULL,
+            result_json TEXT,
+            error_message TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(source_record_id) REFERENCES records(id) ON DELETE SET NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS knowledge_topics (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+            summary TEXT NOT NULL,
+            mastery_level TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS knowledge_evidence (
+            id TEXT PRIMARY KEY,
+            topic_id TEXT NOT NULL,
+            record_id TEXT NOT NULL,
+            evidence_type TEXT NOT NULL,
+            evidence_text TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(topic_id) REFERENCES knowledge_topics(id) ON DELETE CASCADE,
+            FOREIGN KEY(record_id) REFERENCES records(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS learning_dialog_sessions (
+            id TEXT PRIMARY KEY,
+            topic_id TEXT NOT NULL,
+            source_record_id TEXT NOT NULL,
+            status TEXT NOT NULL,
+            conversation_snapshot TEXT NOT NULL,
+            conclusion_json TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(topic_id) REFERENCES knowledge_topics(id) ON DELETE CASCADE,
+            FOREIGN KEY(source_record_id) REFERENCES records(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS pet_chat_sessions (
+            id TEXT PRIMARY KEY,
+            title TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS pet_chat_messages (
+            id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            context_snapshot TEXT NOT NULL DEFAULT '[]',
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(session_id) REFERENCES pet_chat_sessions(id) ON DELETE CASCADE
+        );
+
         CREATE TABLE IF NOT EXISTS reminders (
             id TEXT PRIMARY KEY,
             record_id TEXT NOT NULL,
@@ -127,6 +194,26 @@ pub fn run_migrations(conn: &Connection) -> AppResult<()> {
         CREATE TABLE IF NOT EXISTS settings (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS ai_profiles (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            base_url TEXT,
+            default_model TEXT NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS ai_profile_models (
+            id TEXT PRIMARY KEY,
+            profile_id TEXT NOT NULL,
+            model TEXT NOT NULL,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            UNIQUE(profile_id, model),
+            FOREIGN KEY(profile_id) REFERENCES ai_profiles(id) ON DELETE CASCADE
         );
 
         CREATE TABLE IF NOT EXISTS folders (
@@ -150,6 +237,14 @@ pub fn run_migrations(conn: &Connection) -> AppResult<()> {
             PRIMARY KEY (record_id, tag_id),
             FOREIGN KEY (record_id) REFERENCES records(id) ON DELETE CASCADE,
             FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS record_sort_orders (
+            view_key TEXT NOT NULL,
+            record_id TEXT NOT NULL,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (view_key, record_id),
+            FOREIGN KEY (record_id) REFERENCES records(id) ON DELETE CASCADE
         );
         "#,
     )?;
@@ -175,7 +270,9 @@ pub fn run_migrations(conn: &Connection) -> AppResult<()> {
 
     // ── Migration: add folder_id column to tasks if missing ──
     if !tasks_columns.iter().any(|c| c == "folder_id") {
-        conn.execute_batch("ALTER TABLE tasks ADD COLUMN folder_id TEXT REFERENCES folders(id) ON DELETE CASCADE")?;
+        conn.execute_batch(
+            "ALTER TABLE tasks ADD COLUMN folder_id TEXT REFERENCES folders(id) ON DELETE CASCADE",
+        )?;
     }
 
     Ok(())
@@ -208,6 +305,19 @@ pub fn insert_record(conn: &Connection, request: CreateRecordRequest) -> AppResu
         ],
     )?;
 
+    // Place new record at top of its type-view's sort order.
+    // view_key uses plural form: note -> "notes", task -> "tasks".
+    if let Some(view_key) = match record.record_type {
+        RecordType::Note => Some("notes"),
+        RecordType::Task => Some("tasks"),
+    } {
+        conn.execute(
+            "INSERT INTO record_sort_orders (view_key, record_id, sort_order)
+             VALUES (?1, ?2, (SELECT COALESCE(MIN(sort_order), 1) - 1 FROM record_sort_orders WHERE view_key = ?1))",
+            params![view_key, record.id],
+        )?;
+    }
+
     Ok(record)
 }
 
@@ -230,7 +340,11 @@ pub fn list_records(conn: &Connection) -> AppResult<Vec<Record>> {
     Ok(records)
 }
 
-pub fn update_record(conn: &Connection, id: &str, update: UpdateRecordRequest) -> AppResult<Record> {
+pub fn update_record(
+    conn: &Connection,
+    id: &str,
+    update: UpdateRecordRequest,
+) -> AppResult<Record> {
     let current = get_record(conn, id)?;
     let updated = Record {
         title: update.title.or(current.title),
@@ -254,21 +368,12 @@ pub fn update_record(conn: &Connection, id: &str, update: UpdateRecordRequest) -
     Ok(updated)
 }
 
-/// Remove a task by deleting the task row and reverting the linked record
-/// type to `note`. The linked record itself is preserved.
+/// Remove a task by physically deleting the linked record. The record
+/// cascade removes the task row, attachments, and other linked rows, so
+/// the removed todo never resurfaces in another category.
 pub fn remove_task(conn: &Connection, task_id: &str) -> AppResult<Task> {
     let task = get_task(conn, task_id)?;
-    let record_id = task.record_id.clone();
-
-    conn.execute("DELETE FROM tasks WHERE id = ?1", params![task_id])?;
-
-    // Revert the linked record type back to note
-    let now = Utc::now();
-    conn.execute(
-        "UPDATE records SET type = 'note', updated_at = ?2 WHERE id = ?1",
-        params![record_id, now.to_rfc3339()],
-    )?;
-
+    delete_record_physical(conn, &task.record_id)?;
     Ok(task)
 }
 
@@ -361,7 +466,11 @@ pub fn delete_record_physical(conn: &Connection, record_id: &str) -> AppResult<(
 pub fn insert_task(conn: &Connection, request: CreateTaskRequest) -> AppResult<Task> {
     // Assign sort_order: use max existing + 1, or 0 if table empty
     let max_sort: i64 = conn
-        .query_row("SELECT COALESCE(MAX(sort_order), -1) FROM tasks", [], |row| row.get(0))
+        .query_row(
+            "SELECT COALESCE(MAX(sort_order), -1) FROM tasks",
+            [],
+            |row| row.get(0),
+        )
         .unwrap_or(-1);
     let sort_order = max_sort + 1;
 
@@ -499,22 +608,26 @@ pub fn update_task_repeat_rule(
 ///
 /// `due_at` 为 `None` 时清除截止日期（不设期限）。
 /// 返回更新后的 Task 结构体，供前端乐观更新使用。
-pub fn update_task_due_at(conn: &Connection, id: &str, due_at: Option<DateTime<Utc>>) -> AppResult<Task> {
+pub fn update_task_due_at(
+    conn: &Connection,
+    id: &str,
+    due_at: Option<DateTime<Utc>>,
+) -> AppResult<Task> {
     let mut task = get_task(conn, id)?;
     task.due_at = due_at;
 
     conn.execute(
         "UPDATE tasks SET due_at = ?2 WHERE id = ?1",
-        params![
-            task.id,
-            task.due_at.map(|value| value.to_rfc3339()),
-        ],
+        params![task.id, task.due_at.map(|value| value.to_rfc3339()),],
     )?;
 
     Ok(task)
 }
 
-pub fn insert_attachment(conn: &Connection, request: CreateAttachmentRequest) -> AppResult<Attachment> {
+pub fn insert_attachment(
+    conn: &Connection,
+    request: CreateAttachmentRequest,
+) -> AppResult<Attachment> {
     let attachment = Attachment {
         id: Uuid::new_v4().to_string(),
         file_type: request.file_type,
@@ -581,7 +694,10 @@ pub fn link_attachment(
     Ok(link)
 }
 
-pub fn get_record_attachments(conn: &Connection, record_id: &str) -> AppResult<Vec<RecordAttachmentLink>> {
+pub fn get_record_attachments(
+    conn: &Connection,
+    record_id: &str,
+) -> AppResult<Vec<RecordAttachmentLink>> {
     let mut stmt = conn.prepare(
         "SELECT id, record_id, attachment_id, role, sort_order FROM record_attachments WHERE record_id = ?1 ORDER BY sort_order ASC, rowid ASC",
     )?;
@@ -642,6 +758,320 @@ pub fn get_ai_results_for_record(conn: &Connection, record_id: &str) -> AppResul
     Ok(items)
 }
 
+pub fn upsert_knowledge_topic(
+    conn: &Connection,
+    name: &str,
+    summary: &str,
+    mastery_level: &str,
+) -> AppResult<KnowledgeTopic> {
+    let existing = conn
+        .query_row(
+            "SELECT id FROM knowledge_topics WHERE name = ?1 COLLATE NOCASE",
+            params![name],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+
+    let now = Utc::now();
+    let had_existing = existing.is_some();
+    let id = existing.unwrap_or_else(|| Uuid::new_v4().to_string());
+    let created_at = if had_existing {
+        conn.query_row(
+            "SELECT created_at FROM knowledge_topics WHERE id = ?1",
+            params![&id],
+            |row| row.get::<_, String>(0),
+        )?
+    } else {
+        now.to_rfc3339()
+    };
+
+    conn.execute(
+        "INSERT INTO knowledge_topics (id, name, summary, mastery_level, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+         ON CONFLICT(id) DO UPDATE SET
+           name = excluded.name,
+           summary = excluded.summary,
+           mastery_level = excluded.mastery_level,
+           updated_at = excluded.updated_at",
+        params![
+            &id,
+            name,
+            summary,
+            mastery_level,
+            created_at,
+            now.to_rfc3339(),
+        ],
+    )?;
+
+    get_knowledge_topic(conn, &id)
+}
+
+pub fn append_knowledge_evidence(
+    conn: &Connection,
+    topic_id: &str,
+    record_id: &str,
+    evidence_type: &str,
+    evidence_text: &str,
+) -> AppResult<KnowledgeEvidence> {
+    let evidence = KnowledgeEvidence {
+        id: Uuid::new_v4().to_string(),
+        topic_id: topic_id.to_string(),
+        record_id: record_id.to_string(),
+        evidence_type: evidence_type.to_string(),
+        evidence_text: evidence_text.to_string(),
+        created_at: Utc::now(),
+    };
+
+    conn.execute(
+        "INSERT INTO knowledge_evidence (id, topic_id, record_id, evidence_type, evidence_text, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![
+            evidence.id,
+            evidence.topic_id,
+            evidence.record_id,
+            evidence.evidence_type,
+            evidence.evidence_text,
+            evidence.created_at.to_rfc3339(),
+        ],
+    )?;
+
+    Ok(evidence)
+}
+
+pub fn update_knowledge_topic_status(
+    conn: &Connection,
+    topic_id: &str,
+    summary: &str,
+    mastery_level: &str,
+) -> AppResult<KnowledgeTopic> {
+    let now = Utc::now().to_rfc3339();
+    conn.execute(
+        "UPDATE knowledge_topics
+         SET summary = ?2, mastery_level = ?3, updated_at = ?4
+         WHERE id = ?1",
+        params![topic_id, summary, mastery_level, now],
+    )?;
+    get_knowledge_topic(conn, topic_id)
+}
+
+pub fn insert_learning_dialog_session(
+    conn: &Connection,
+    session: LearningDialogSession,
+) -> AppResult<LearningDialogSession> {
+    conn.execute(
+        "INSERT INTO learning_dialog_sessions (
+            id, topic_id, source_record_id, status, conversation_snapshot, conclusion_json, created_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            session.id,
+            session.topic_id,
+            session.source_record_id,
+            session.status,
+            session.conversation_snapshot,
+            session.conclusion_json,
+            session.created_at.to_rfc3339(),
+        ],
+    )?;
+    Ok(session)
+}
+
+pub fn get_learning_dialog_session(
+    conn: &Connection,
+    id: &str,
+) -> AppResult<LearningDialogSession> {
+    conn.query_row(
+        "SELECT id, topic_id, source_record_id, status, conversation_snapshot, conclusion_json, created_at
+         FROM learning_dialog_sessions
+         WHERE id = ?1",
+        params![id],
+        map_learning_dialog_session,
+    )
+    .optional()?
+    .ok_or_else(|| AppError::NotFound(format!("learning_dialog_session {id}")))
+}
+
+pub fn get_knowledge_topic(conn: &Connection, id: &str) -> AppResult<KnowledgeTopic> {
+    conn.query_row(
+        "SELECT id, name, summary, mastery_level, created_at, updated_at FROM knowledge_topics WHERE id = ?1",
+        params![id],
+        map_knowledge_topic,
+    )
+    .optional()?
+    .ok_or_else(|| AppError::NotFound(format!("knowledge_topic {id}")))
+}
+
+pub fn find_knowledge_topic_by_name(
+    conn: &Connection,
+    name: &str,
+) -> AppResult<Option<KnowledgeTopic>> {
+    Ok(conn
+        .query_row(
+            "SELECT id, name, summary, mastery_level, created_at, updated_at
+             FROM knowledge_topics
+             WHERE name = ?1 COLLATE NOCASE",
+            params![name],
+            map_knowledge_topic,
+        )
+        .optional()?)
+}
+
+pub fn get_knowledge_topics_for_record(
+    conn: &Connection,
+    record_id: &str,
+) -> AppResult<Vec<RecordKnowledgeTopic>> {
+    let mut stmt = conn.prepare(
+        r#"
+        SELECT
+          kt.id,
+          kt.name,
+          kt.summary,
+          kt.mastery_level,
+          ke.evidence_text,
+          kt.updated_at
+        FROM knowledge_topics kt
+        JOIN knowledge_evidence ke
+          ON ke.topic_id = kt.id
+        WHERE ke.record_id = ?1
+          AND ke.created_at = (
+            SELECT MAX(ke2.created_at)
+            FROM knowledge_evidence ke2
+            WHERE ke2.topic_id = kt.id
+              AND ke2.record_id = ?1
+          )
+        ORDER BY datetime(kt.updated_at) DESC, kt.rowid DESC
+        "#,
+    )?;
+    let rows = stmt.query_map(params![record_id], map_record_knowledge_topic)?;
+    let items = rows.collect::<Result<Vec<_>, _>>()?;
+    Ok(items)
+}
+
+pub fn list_knowledge_memory(conn: &Connection) -> AppResult<Vec<KnowledgeMemoryItem>> {
+    let mut stmt = conn.prepare(
+        r#"
+        SELECT
+          kt.id,
+          kt.name,
+          kt.summary,
+          kt.mastery_level,
+          COUNT(ke.id) AS evidence_count,
+          COALESCE((
+            SELECT latest_ke.evidence_text
+            FROM knowledge_evidence latest_ke
+            WHERE latest_ke.topic_id = kt.id
+            ORDER BY datetime(latest_ke.created_at) DESC, latest_ke.rowid DESC
+            LIMIT 1
+          ), '') AS latest_evidence_text,
+          kt.updated_at
+        FROM knowledge_topics kt
+        LEFT JOIN knowledge_evidence ke ON ke.topic_id = kt.id
+        GROUP BY kt.id
+        ORDER BY
+          CASE kt.mastery_level
+            WHEN 'understanding' THEN 0
+            WHEN 'candidate' THEN 1
+            WHEN 'rejected' THEN 2
+            ELSE 3
+          END,
+          datetime(kt.updated_at) DESC,
+          kt.rowid DESC
+        "#,
+    )?;
+    let rows = stmt.query_map([], map_knowledge_memory_item)?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
+pub fn get_knowledge_memory_detail(
+    conn: &Connection,
+    topic_id: &str,
+) -> AppResult<KnowledgeMemoryDetail> {
+    let topic = list_knowledge_memory(conn)?
+        .into_iter()
+        .find(|item| item.id == topic_id)
+        .ok_or_else(|| AppError::NotFound(format!("knowledge topic {topic_id}")))?;
+
+    let mut evidence_stmt = conn.prepare(
+        r#"
+        SELECT ke.id, ke.record_id, r.title, ke.evidence_type, ke.evidence_text, ke.created_at
+        FROM knowledge_evidence ke
+        JOIN records r ON r.id = ke.record_id
+        WHERE ke.topic_id = ?1
+        ORDER BY datetime(ke.created_at) DESC, ke.rowid DESC
+        "#,
+    )?;
+    let evidence = evidence_stmt
+        .query_map(params![topic_id], map_knowledge_memory_evidence)?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let latest_conclusion_json = conn
+        .query_row(
+            "SELECT conclusion_json
+             FROM learning_dialog_sessions
+             WHERE topic_id = ?1
+             ORDER BY datetime(created_at) DESC, rowid DESC
+             LIMIT 1",
+            params![topic_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+
+    Ok(KnowledgeMemoryDetail {
+        topic,
+        evidence,
+        latest_conclusion_json,
+    })
+}
+
+pub fn insert_ai_task_run(conn: &Connection, run: AiTaskRun) -> AppResult<AiTaskRun> {
+    conn.execute(
+        "INSERT INTO ai_task_runs (id, task_type, source_record_id, status, model_provider, model_name, model_variant, input_snapshot, result_json, error_message, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        params![
+            run.id,
+            run.task_type.as_str(),
+            run.source_record_id,
+            run.status,
+            run.model_provider,
+            run.model_name,
+            run.model_variant,
+            run.input_snapshot,
+            run.result_json,
+            run.error_message,
+            run.created_at.to_rfc3339(),
+        ],
+    )?;
+
+    Ok(run)
+}
+
+pub fn update_ai_task_run_result(
+    conn: &Connection,
+    id: &str,
+    status: &str,
+    result_json: Option<&str>,
+    error_message: Option<&str>,
+) -> AppResult<AiTaskRun> {
+    conn.execute(
+        "UPDATE ai_task_runs
+         SET status = ?2, result_json = ?3, error_message = ?4
+         WHERE id = ?1",
+        params![id, status, result_json, error_message],
+    )?;
+
+    get_ai_task_run(conn, id)
+}
+
+pub fn get_ai_task_run(conn: &Connection, id: &str) -> AppResult<AiTaskRun> {
+    conn.query_row(
+        "SELECT id, task_type, source_record_id, status, model_provider, model_name, model_variant, input_snapshot, result_json, error_message, created_at
+         FROM ai_task_runs WHERE id = ?1",
+        params![id],
+        map_ai_task_run,
+    )
+    .optional()?
+    .ok_or_else(|| AppError::NotFound(format!("ai_task_run {id}")))
+}
+
 pub fn get_setting(conn: &Connection, key: &str) -> AppResult<Option<SettingsEntry>> {
     conn.query_row(
         "SELECT key, value FROM settings WHERE key = ?1",
@@ -678,9 +1108,7 @@ pub fn get_setting_or(conn: &Connection, key: &str, default: &str) -> AppResult<
 }
 
 pub fn get_all_settings(conn: &Connection) -> AppResult<Vec<SettingsEntry>> {
-    let mut stmt = conn.prepare(
-        "SELECT key, value FROM settings ORDER BY key ASC",
-    )?;
+    let mut stmt = conn.prepare("SELECT key, value FROM settings ORDER BY key ASC")?;
     let rows = stmt.query_map([], |row| {
         Ok(SettingsEntry {
             key: row.get(0)?,
@@ -691,26 +1119,215 @@ pub fn get_all_settings(conn: &Connection) -> AppResult<Vec<SettingsEntry>> {
     Ok(entries)
 }
 
+pub fn create_ai_profile(
+    conn: &Connection,
+    request: &CreateAiProfileRequest,
+) -> AppResult<AiProfile> {
+    if request.name.trim().is_empty() {
+        return Err(AppError::Validation("AI profile name is required".into()));
+    }
+    if request.provider.trim().is_empty() {
+        return Err(AppError::Validation("AI profile provider is required".into()));
+    }
+    let models = normalize_ai_models(&request.models, &request.default_model)?;
+    let default_model = request.default_model.trim().to_string();
+    let now = Utc::now();
+    let id = Uuid::new_v4().to_string();
+    conn.execute(
+        "INSERT INTO ai_profiles (id, name, provider, base_url, default_model, enabled, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)",
+        params![id, request.name.trim(), request.provider.trim(), request.base_url.as_deref().map(str::trim), default_model, request.enabled, now],
+    )?;
+    for (sort_order, model) in models.iter().enumerate() {
+        conn.execute(
+            "INSERT INTO ai_profile_models (id, profile_id, model, sort_order) VALUES (?1, ?2, ?3, ?4)",
+            params![Uuid::new_v4().to_string(), id, model, sort_order as i64],
+        )?;
+    }
+    Ok(AiProfile {
+        id,
+        name: request.name.trim().into(),
+        provider: request.provider.trim().into(),
+        base_url: request.base_url.as_ref().map(|value| value.trim().to_string()).filter(|value| !value.is_empty()),
+        default_model,
+        models,
+        enabled: request.enabled,
+        api_key_configured: false,
+        created_at: now,
+        updated_at: now,
+    })
+}
+
+pub fn list_ai_profiles(conn: &Connection) -> AppResult<Vec<AiProfile>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, name, provider, base_url, default_model, enabled, created_at, updated_at FROM ai_profiles ORDER BY datetime(created_at) ASC, rowid ASC",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        let id: String = row.get(0)?;
+        let mut model_stmt = conn
+            .prepare("SELECT model FROM ai_profile_models WHERE profile_id = ?1 ORDER BY sort_order ASC, rowid ASC")
+            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+        let models = model_stmt
+            .query_map(params![id], |model_row| model_row.get(0))
+            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?
+            .collect::<Result<Vec<String>, _>>()?;
+        Ok(AiProfile {
+            id,
+            name: row.get(1)?,
+            provider: row.get(2)?,
+            base_url: row.get(3)?,
+            default_model: row.get(4)?,
+            models,
+            enabled: row.get::<_, i64>(5)? != 0,
+            api_key_configured: false,
+            created_at: row.get(6)?,
+            updated_at: row.get(7)?,
+        })
+    })?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
+pub fn update_ai_profile(
+    conn: &Connection,
+    id: &str,
+    request: &CreateAiProfileRequest,
+) -> AppResult<()> {
+    if request.name.trim().is_empty() || request.provider.trim().is_empty() {
+        return Err(AppError::Validation("AI profile name and provider are required".into()));
+    }
+    let models = normalize_ai_models(&request.models, &request.default_model)?;
+    let now = Utc::now();
+    let changed = conn.execute(
+        "UPDATE ai_profiles SET name = ?2, provider = ?3, base_url = ?4, default_model = ?5, enabled = ?6, updated_at = ?7 WHERE id = ?1",
+        params![id, request.name.trim(), request.provider.trim(), request.base_url.as_deref().map(str::trim), request.default_model.trim(), request.enabled, now],
+    )?;
+    if changed == 0 {
+        return Err(AppError::NotFound(format!("ai profile {id}")));
+    }
+    conn.execute("DELETE FROM ai_profile_models WHERE profile_id = ?1", params![id])?;
+    for (sort_order, model) in models.iter().enumerate() {
+        conn.execute(
+            "INSERT INTO ai_profile_models (id, profile_id, model, sort_order) VALUES (?1, ?2, ?3, ?4)",
+            params![Uuid::new_v4().to_string(), id, model, sort_order as i64],
+        )?;
+    }
+    Ok(())
+}
+
+pub fn delete_ai_profile(conn: &Connection, id: &str) -> AppResult<()> {
+    let changed = conn.execute("DELETE FROM ai_profiles WHERE id = ?1", params![id])?;
+    if changed == 0 {
+        return Err(AppError::NotFound(format!("ai profile {id}")));
+    }
+    Ok(())
+}
+
+fn normalize_ai_models(models: &[String], default_model: &str) -> AppResult<Vec<String>> {
+    let mut normalized = models
+        .iter()
+        .map(|model| model.trim().to_string())
+        .filter(|model| !model.is_empty())
+        .collect::<Vec<_>>();
+    let default_model = default_model.trim();
+    if default_model.is_empty() {
+        return Err(AppError::Validation("AI profile default model is required".into()));
+    }
+    if !normalized.iter().any(|model| model == default_model) {
+        normalized.insert(0, default_model.to_string());
+    }
+    normalized.dedup();
+    Ok(normalized)
+}
+
 pub fn default_settings() -> Vec<SettingsEntry> {
     vec![
-        SettingsEntry { key: "language".into(), value: "zh-CN".into() },
-        SettingsEntry { key: "auto_ocr".into(), value: "false".into() },
-        SettingsEntry { key: "screenshot_quality".into(), value: "2".into() },
-        SettingsEntry { key: "quick_capture_shortcut".into(), value: "Alt+Shift+R".into() },
-        SettingsEntry { key: "screenshot_shortcut".into(), value: "Alt+Shift+S".into() },
-        SettingsEntry { key: "ai_provider".into(), value: "claude".into() },
-        SettingsEntry { key: "ai_model".into(), value: "claude-sonnet-4-20250514".into() },
-        SettingsEntry { key: "ai_auto_analyze".into(), value: "false".into() },
-        SettingsEntry { key: "ai_api_key".into(), value: "".into() },
-        SettingsEntry { key: "reminder_channel".into(), value: "pet-bubble".into() },
-        SettingsEntry { key: "pet_always_on_top".into(), value: "true".into() },
-        SettingsEntry { key: "pet_visible".into(), value: "true".into() },
+        SettingsEntry {
+            key: "language".into(),
+            value: "zh-CN".into(),
+        },
+        SettingsEntry {
+            key: "auto_ocr".into(),
+            value: "false".into(),
+        },
+        SettingsEntry {
+            key: "screenshot_quality".into(),
+            value: "2".into(),
+        },
+        SettingsEntry {
+            key: "quick_capture_shortcut".into(),
+            value: "Alt+Shift+R".into(),
+        },
+        SettingsEntry {
+            key: "screenshot_shortcut".into(),
+            value: "Alt+Shift+S".into(),
+        },
+        SettingsEntry {
+            key: "ai_provider".into(),
+            value: "claude".into(),
+        },
+        SettingsEntry {
+            key: "ai_default_profile_id".into(),
+            value: "".into(),
+        },
+        SettingsEntry {
+            key: "ai_model".into(),
+            value: "claude-sonnet-4-20250514".into(),
+        },
+        SettingsEntry {
+            key: "ai_model_variant".into(),
+            value: "default".into(),
+        },
+        SettingsEntry {
+            key: "ai_auto_analyze".into(),
+            value: "false".into(),
+        },
+        SettingsEntry {
+            key: "product_mode".into(),
+            value: "free".into(),
+        },
+        SettingsEntry {
+            key: "ai_base_url".into(),
+            value: "".into(),
+        },
+        SettingsEntry {
+            key: "reminder_channel".into(),
+            value: "pet-bubble".into(),
+        },
+        SettingsEntry {
+            key: "pet_always_on_top".into(),
+            value: "true".into(),
+        },
+        SettingsEntry {
+            key: "pet_visible".into(),
+            value: "true".into(),
+        },
+        SettingsEntry { key: "pet_name".into(), value: "小宠物".into() },
+        SettingsEntry { key: "pet_persona".into(), value: "gentle-companion".into() },
+        SettingsEntry { key: "pet_custom_prompt".into(), value: "".into() },
+        SettingsEntry { key: "pet_proactive_ai_enabled".into(), value: "false".into() },
+        SettingsEntry { key: "pet_meal_companion_enabled".into(), value: "true".into() },
+        SettingsEntry { key: "pet_quiet_hours".into(), value: "22:00-08:00".into() },
+        SettingsEntry { key: "pet_proactive_min_interval_minutes".into(), value: "120".into() },
         // ── Todo-overlay settings ──
-        SettingsEntry { key: "todo_overlay_visibility_mode".into(), value: "unfinished-only".into() },
-        SettingsEntry { key: "todo_overlay_always_on_top".into(), value: "true".into() },
-        SettingsEntry { key: "todo_overlay_opacity".into(), value: "0.8".into() },
-        SettingsEntry { key: "todo_overlay_auto_collapse".into(), value: "false".into() },
-        SettingsEntry { key: "todo_overlay_open_behavior".into(), value: "drawer".into() },
+        SettingsEntry {
+            key: "todo_overlay_visibility_mode".into(),
+            value: "unfinished-only".into(),
+        },
+        SettingsEntry {
+            key: "todo_overlay_always_on_top".into(),
+            value: "true".into(),
+        },
+        SettingsEntry {
+            key: "todo_overlay_opacity".into(),
+            value: "0.8".into(),
+        },
+        SettingsEntry {
+            key: "todo_overlay_auto_collapse".into(),
+            value: "false".into(),
+        },
+        SettingsEntry {
+            key: "todo_overlay_open_behavior".into(),
+            value: "drawer".into(),
+        },
     ]
 }
 
@@ -722,7 +1339,9 @@ pub fn get_all_settings_with_defaults(conn: &Connection) -> AppResult<Vec<Settin
         .collect();
 
     for entry in persisted {
-        merged.insert(entry.key, entry.value);
+        if !is_sensitive_setting_key(&entry.key) {
+            merged.insert(entry.key, entry.value);
+        }
     }
 
     Ok(merged
@@ -731,9 +1350,169 @@ pub fn get_all_settings_with_defaults(conn: &Connection) -> AppResult<Vec<Settin
         .collect())
 }
 
+pub fn delete_setting(conn: &Connection, key: &str) -> AppResult<()> {
+    conn.execute("DELETE FROM settings WHERE key = ?1", params![key])?;
+    Ok(())
+}
+
+fn is_sensitive_setting_key(key: &str) -> bool {
+    matches!(key, "ai_api_key" | "claude_api_key")
+}
+
 pub fn delete_all_settings(conn: &Connection) -> AppResult<()> {
     conn.execute("DELETE FROM settings", [])?;
     Ok(())
+}
+
+pub fn create_pet_chat_session(
+    conn: &Connection,
+    title: Option<String>,
+) -> AppResult<PetChatSession> {
+    let now = Utc::now();
+    let session = PetChatSession {
+        id: Uuid::new_v4().to_string(),
+        title,
+        created_at: now,
+        updated_at: now,
+    };
+    conn.execute(
+        "INSERT INTO pet_chat_sessions (id, title, created_at, updated_at) VALUES (?1, ?2, ?3, ?4)",
+        params![session.id, session.title, session.created_at, session.updated_at],
+    )?;
+    Ok(session)
+}
+
+pub fn update_pet_chat_session_title(
+    conn: &Connection,
+    session_id: &str,
+    title: &str,
+) -> AppResult<PetChatSession> {
+    let title = title.trim();
+    if title.is_empty() {
+        return Err(AppError::Validation("conversation title cannot be empty".into()));
+    }
+    let changed = conn.execute(
+        "UPDATE pet_chat_sessions SET title = ?2 WHERE id = ?1",
+        params![session_id, title],
+    )?;
+    if changed == 0 {
+        return Err(AppError::NotFound(format!("pet_chat_session {session_id}")));
+    }
+    conn.query_row(
+        "SELECT id, title, created_at, updated_at FROM pet_chat_sessions WHERE id = ?1",
+        params![session_id],
+        map_pet_chat_session,
+    ).map_err(AppError::from)
+}
+
+pub fn delete_pet_chat_session(conn: &Connection, session_id: &str) -> AppResult<()> {
+    let changed = conn.execute("DELETE FROM pet_chat_sessions WHERE id = ?1", params![session_id])?;
+    if changed == 0 {
+        return Err(AppError::NotFound(format!("pet_chat_session {session_id}")));
+    }
+    Ok(())
+}
+
+pub fn append_pet_chat_message(
+    conn: &Connection,
+    session_id: &str,
+    role: &str,
+    content: &str,
+    context_snapshot: &str,
+) -> AppResult<PetChatMessage> {
+    let message = PetChatMessage {
+        id: Uuid::new_v4().to_string(),
+        session_id: session_id.to_string(),
+        role: role.to_string(),
+        content: content.to_string(),
+        context_snapshot: context_snapshot.to_string(),
+        created_at: Utc::now(),
+    };
+    conn.execute(
+        "INSERT INTO pet_chat_messages (id, session_id, role, content, context_snapshot, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![message.id, message.session_id, message.role, message.content, message.context_snapshot, message.created_at],
+    )?;
+    conn.execute(
+        "UPDATE pet_chat_sessions SET updated_at = ?2 WHERE id = ?1",
+        params![session_id, message.created_at],
+    )?;
+    Ok(message)
+}
+
+pub fn list_pet_chat_sessions(
+    conn: &Connection,
+    limit: i64,
+) -> AppResult<Vec<PetChatSession>> {
+    if limit == 0 {
+        return Ok(vec![]);
+    }
+    if limit < 0 {
+        let mut stmt = conn.prepare(
+            "SELECT id, title, created_at, updated_at FROM pet_chat_sessions ORDER BY datetime(updated_at) DESC, rowid DESC",
+        )?;
+        let rows = stmt.query_map([], map_pet_chat_session)?;
+        return Ok(rows.collect::<Result<Vec<_>, _>>()?);
+    }
+    let mut stmt = conn.prepare(
+        "SELECT id, title, created_at, updated_at FROM pet_chat_sessions ORDER BY datetime(updated_at) DESC, rowid DESC LIMIT ?1",
+    )?;
+    let rows = stmt.query_map(params![limit], map_pet_chat_session)?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
+pub fn count_pet_chat_sessions(conn: &Connection) -> AppResult<i64> {
+    Ok(conn.query_row("SELECT COUNT(*) FROM pet_chat_sessions", [], |row| row.get(0))?)
+}
+
+pub fn get_latest_pet_chat_session(conn: &Connection) -> AppResult<Option<PetChatSession>> {
+    Ok(list_pet_chat_sessions(conn, 1)?.into_iter().next())
+}
+
+pub fn list_pet_chat_messages(
+    conn: &Connection,
+    session_id: &str,
+) -> AppResult<Vec<PetChatMessage>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, session_id, role, content, context_snapshot, created_at FROM pet_chat_messages WHERE session_id = ?1 ORDER BY datetime(created_at) ASC, rowid ASC",
+    )?;
+    let rows = stmt.query_map(params![session_id], map_pet_chat_message)?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
+pub fn list_pet_chat_context_candidates(
+    conn: &Connection,
+    query: &str,
+    limit: i64,
+) -> AppResult<Vec<PetChatContextCandidate>> {
+    let trimmed = query.trim();
+    if trimmed.is_empty() || limit <= 0 {
+        return Ok(vec![]);
+    }
+    let pattern = format!("%{}%", trimmed.to_lowercase());
+    let mut stmt = conn.prepare(
+        "SELECT r.id,
+                CASE WHEN t.id IS NULL THEN 'note' ELSE 'task' END,
+                COALESCE(NULLIF(r.title, ''), '未命名记录'),
+                substr(COALESCE(r.content, ''), 1, 240)
+         FROM records r
+         LEFT JOIN tasks t ON t.record_id = r.id
+         WHERE r.status = 'active'
+           AND (t.id IS NULL OR t.task_status IN ('todo', 'doing'))
+           AND lower(COALESCE(r.title, '') || ' ' || COALESCE(r.content, '')) LIKE ?1
+         ORDER BY CASE WHEN lower(COALESCE(r.title, '')) LIKE ?1 THEN 0 ELSE 1 END,
+                  datetime(r.updated_at) DESC,
+                  r.rowid DESC
+         LIMIT ?2",
+    )?;
+    let rows = stmt.query_map(params![pattern, limit.min(3)], |row| {
+        Ok(PetChatContextCandidate {
+            record_id: row.get(0)?,
+            item_type: row.get(1)?,
+            title: row.get(2)?,
+            excerpt: row.get(3)?,
+        })
+    })?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
 }
 
 // ── Task 7: filtered listing helpers ──────────────────────────────────
@@ -748,10 +1527,30 @@ pub fn list_records_filtered(
         None => return list_records(conn),
     };
 
-    let mut sql = String::from(
-        "SELECT r.id, r.type, r.title, r.content, r.source, r.status, r.created_at, r.updated_at FROM records r WHERE 1=1",
-    );
     let mut param_values: Vec<String> = Vec::new();
+
+    // If a view_key is provided (notes/tasks single-type view), LEFT JOIN the
+    // per-view sort order table so results can be ordered by user-defined
+    // drag position. When view_key is None ("all" view), skip the join and
+    // fall back to created_at ordering.
+    let has_view_key = filter
+        .view_key
+        .as_ref()
+        .map(|vk| !vk.is_empty())
+        .unwrap_or(false);
+
+    // Build SQL in correct clause order: SELECT ... FROM ... [LEFT JOIN ...] WHERE 1=1 [AND ...]
+    let mut sql = String::from(
+        "SELECT r.id, r.type, r.title, r.content, r.source, r.status, r.created_at, r.updated_at FROM records r",
+    );
+    if has_view_key {
+        param_values.push(filter.view_key.as_ref().unwrap().clone());
+        sql.push_str(&format!(
+            " LEFT JOIN record_sort_orders rso ON rso.record_id = r.id AND rso.view_key = ?{}",
+            param_values.len()
+        ));
+    }
+    sql.push_str(" WHERE 1=1");
 
     if let Some(t) = &filter.type_filter {
         param_values.push(t.as_str().to_string());
@@ -766,7 +1565,10 @@ pub fn list_records_filtered(
         sql.push_str(&format!(
             " AND (r.title LIKE ?{idx} OR r.content LIKE ?{idx})"
         ));
-        let escaped = q.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+        let escaped = q
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_");
         param_values.push(format!("%{escaped}%"));
     }
 
@@ -778,7 +1580,13 @@ pub fn list_records_filtered(
         param_values.push(tag_id.clone());
     }
 
-    sql.push_str(" ORDER BY datetime(r.created_at) DESC, r.rowid DESC");
+    if has_view_key {
+        sql.push_str(
+            " ORDER BY COALESCE(rso.sort_order, 0), datetime(r.created_at) DESC, r.rowid DESC",
+        );
+    } else {
+        sql.push_str(" ORDER BY datetime(r.created_at) DESC, r.rowid DESC");
+    }
 
     if let Some(limit) = filter.limit {
         sql.push_str(&format!(" LIMIT {limit}"));
@@ -788,8 +1596,10 @@ pub fn list_records_filtered(
     }
 
     let mut stmt = conn.prepare(&sql)?;
-    let param_refs: Vec<&dyn rusqlite::types::ToSql> =
-        param_values.iter().map(|s| s as &dyn rusqlite::types::ToSql).collect();
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> = param_values
+        .iter()
+        .map(|s| s as &dyn rusqlite::types::ToSql)
+        .collect();
     let rows = stmt.query_map(rusqlite::params_from_iter(param_refs), map_record)?;
     let records = rows.collect::<Result<Vec<_>, _>>()?;
     Ok(records)
@@ -802,7 +1612,7 @@ pub fn list_tasks_filtered(conn: &Connection, filter: Option<&TaskFilter>) -> Ap
     };
 
     let mut sql = String::from(
-        "SELECT id, record_id, task_status, priority, due_at, remind_at, repeat_rule, completed_at FROM tasks WHERE 1=1",
+        "SELECT id, record_id, task_status, priority, due_at, remind_at, repeat_rule, completed_at, sort_order FROM tasks WHERE 1=1",
     );
     let mut param_values: Vec<String> = Vec::new();
 
@@ -818,8 +1628,10 @@ pub fn list_tasks_filtered(conn: &Connection, filter: Option<&TaskFilter>) -> Ap
     sql.push_str(" ORDER BY COALESCE(due_at, ''), rowid DESC");
 
     let mut stmt = conn.prepare(&sql)?;
-    let param_refs: Vec<&dyn rusqlite::types::ToSql> =
-        param_values.iter().map(|s| s as &dyn rusqlite::types::ToSql).collect();
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> = param_values
+        .iter()
+        .map(|s| s as &dyn rusqlite::types::ToSql)
+        .collect();
     let rows = stmt.query_map(rusqlite::params_from_iter(param_refs), map_task)?;
     let tasks = rows.collect::<Result<Vec<_>, _>>()?;
     Ok(tasks)
@@ -835,7 +1647,10 @@ pub fn get_task_for_record(conn: &Connection, record_id: &str) -> AppResult<Opti
     .map_err(Into::into)
 }
 
-pub fn get_attachments_for_record(conn: &Connection, record_id: &str) -> AppResult<Vec<Attachment>> {
+pub fn get_attachments_for_record(
+    conn: &Connection,
+    record_id: &str,
+) -> AppResult<Vec<Attachment>> {
     let mut stmt = conn.prepare(
         "SELECT a.id, a.file_type, a.mime_type, a.local_path, a.thumbnail_path, a.ocr_text, a.hash, a.created_at
          FROM attachments a
@@ -854,8 +1669,17 @@ pub fn get_record_with_relations(conn: &Connection, id: &str) -> AppResult<Recor
     let attachment_links = get_record_attachments(conn, id)?;
     let attachments = get_attachments_for_record(conn, id)?;
     let ai_results = get_ai_results_for_record(conn, id)?;
+    let knowledge_topics = get_knowledge_topics_for_record(conn, id)?;
     let tags = list_record_tags(conn, id)?;
-    Ok(RecordWithRelations::from_record(record, task, attachments, attachment_links, ai_results, tags))
+    Ok(RecordWithRelations::from_record(
+        record,
+        task,
+        attachments,
+        attachment_links,
+        ai_results,
+        knowledge_topics,
+        tags,
+    ))
 }
 
 /// Create a task for a record with full parameter control.
@@ -991,6 +1815,28 @@ pub fn reorder_tasks(conn: &Connection, order: &[(String, i64)]) -> AppResult<()
     Ok(())
 }
 
+/// Batch-update the sort order of records within a single view (notes/tasks).
+///
+/// `view_key` is "notes" or "tasks". `order` is a list of
+/// `(record_id, new_sort_order)` pairs. Uses INSERT OR REPLACE so records
+/// that don't yet have a sort_order row for this view are inserted rather
+/// than silently dropped. Atomic via a single transaction.
+pub fn reorder_records(
+    conn: &Connection,
+    view_key: &str,
+    order: &[(String, i64)],
+) -> AppResult<()> {
+    conn.execute_batch("BEGIN")?;
+    for (record_id, sort_order) in order {
+        conn.execute(
+            "INSERT OR REPLACE INTO record_sort_orders (view_key, record_id, sort_order) VALUES (?1, ?2, ?3)",
+            params![view_key, record_id, sort_order],
+        )?;
+    }
+    conn.execute_batch("COMMIT")?;
+    Ok(())
+}
+
 // ── Folder CRUD ─────────────────────────────────────────────────
 
 pub fn list_folders(conn: &Connection) -> AppResult<Vec<Folder>> {
@@ -1013,7 +1859,11 @@ pub fn list_folders(conn: &Connection) -> AppResult<Vec<Folder>> {
 pub fn create_folder(conn: &Connection, name: &str) -> AppResult<Folder> {
     let now = Utc::now();
     let max_sort: i64 = conn
-        .query_row("SELECT COALESCE(MAX(sort_order), -1) FROM folders", [], |row| row.get(0))
+        .query_row(
+            "SELECT COALESCE(MAX(sort_order), -1) FROM folders",
+            [],
+            |row| row.get(0),
+        )
         .unwrap_or(-1);
 
     let folder = Folder {
@@ -1057,15 +1907,21 @@ pub fn rename_folder(conn: &Connection, id: &str, name: &str) -> AppResult<Folde
 }
 
 pub fn delete_folder(conn: &Connection, id: &str) -> AppResult<()> {
-    conn.query_row("SELECT id FROM folders WHERE id = ?1", params![id], |_| Ok(()))
-        .optional()?
-        .ok_or_else(|| AppError::NotFound(format!("folder {id}")))?;
+    conn.query_row("SELECT id FROM folders WHERE id = ?1", params![id], |_| {
+        Ok(())
+    })
+    .optional()?
+    .ok_or_else(|| AppError::NotFound(format!("folder {id}")))?;
 
     conn.execute("DELETE FROM folders WHERE id = ?1", params![id])?;
     Ok(())
 }
 
-pub fn move_task_to_folder(conn: &Connection, task_id: &str, folder_id: Option<&str>) -> AppResult<()> {
+pub fn move_task_to_folder(
+    conn: &Connection,
+    task_id: &str,
+    folder_id: Option<&str>,
+) -> AppResult<()> {
     let updated = conn.execute(
         "UPDATE tasks SET folder_id = ?2 WHERE id = ?1",
         params![task_id, folder_id],
@@ -1107,9 +1963,8 @@ pub fn create_tag(conn: &Connection, name: &str, color: Option<&str>) -> AppResu
 }
 
 pub fn list_tags(conn: &Connection) -> AppResult<Vec<Tag>> {
-    let mut stmt = conn.prepare(
-        "SELECT id, name, color, created_at FROM tags ORDER BY name COLLATE NOCASE ASC",
-    )?;
+    let mut stmt = conn
+        .prepare("SELECT id, name, color, created_at FROM tags ORDER BY name COLLATE NOCASE ASC")?;
     let rows = stmt.query_map([], map_tag)?;
     let tags = rows.collect::<Result<Vec<_>, _>>()?;
     Ok(tags)
@@ -1152,7 +2007,10 @@ pub fn delete_tag(conn: &Connection, id: &str) -> AppResult<()> {
 }
 
 pub fn set_record_tags(conn: &Connection, record_id: &str, tag_ids: &[String]) -> AppResult<()> {
-    conn.execute("DELETE FROM record_tags WHERE record_id = ?1", params![record_id])?;
+    conn.execute(
+        "DELETE FROM record_tags WHERE record_id = ?1",
+        params![record_id],
+    )?;
     for tag_id in tag_ids {
         conn.execute(
             "INSERT OR IGNORE INTO record_tags (record_id, tag_id) VALUES (?1, ?2)",
@@ -1185,7 +2043,11 @@ pub fn find_or_create_tag_by_name(conn: &Connection, name: &str) -> AppResult<Ta
     .map_or_else(|| create_tag(conn, name, None), Ok)
 }
 
-pub fn link_tags_to_record(conn: &Connection, record_id: &str, tag_ids: &[String]) -> AppResult<()> {
+pub fn link_tags_to_record(
+    conn: &Connection,
+    record_id: &str,
+    tag_ids: &[String],
+) -> AppResult<()> {
     for tag_id in tag_ids {
         conn.execute(
             "INSERT OR IGNORE INTO record_tags (record_id, tag_id) VALUES (?1, ?2)",
@@ -1260,6 +2122,99 @@ fn map_ai_result(row: &Row<'_>) -> rusqlite::Result<AiResult> {
     })
 }
 
+fn map_ai_task_run(row: &Row<'_>) -> rusqlite::Result<AiTaskRun> {
+    Ok(AiTaskRun {
+        id: row.get(0)?,
+        task_type: AiTaskType::parse(&row.get::<_, String>(1)?),
+        source_record_id: row.get(2)?,
+        status: row.get(3)?,
+        model_provider: row.get(4)?,
+        model_name: row.get(5)?,
+        model_variant: row.get(6)?,
+        input_snapshot: row.get(7)?,
+        result_json: row.get(8)?,
+        error_message: row.get(9)?,
+        created_at: parse_datetime(&row.get::<_, String>(10)?)?,
+    })
+}
+
+fn map_knowledge_topic(row: &Row<'_>) -> rusqlite::Result<KnowledgeTopic> {
+    Ok(KnowledgeTopic {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        summary: row.get(2)?,
+        mastery_level: row.get(3)?,
+        created_at: parse_datetime(&row.get::<_, String>(4)?)?,
+        updated_at: parse_datetime(&row.get::<_, String>(5)?)?,
+    })
+}
+
+fn map_record_knowledge_topic(row: &Row<'_>) -> rusqlite::Result<RecordKnowledgeTopic> {
+    Ok(RecordKnowledgeTopic {
+        topic_id: row.get(0)?,
+        name: row.get(1)?,
+        summary: row.get(2)?,
+        mastery_level: row.get(3)?,
+        evidence_text: row.get(4)?,
+        updated_at: parse_datetime(&row.get::<_, String>(5)?)?,
+    })
+}
+
+fn map_knowledge_memory_item(row: &Row<'_>) -> rusqlite::Result<KnowledgeMemoryItem> {
+    Ok(KnowledgeMemoryItem {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        summary: row.get(2)?,
+        mastery_level: row.get(3)?,
+        evidence_count: row.get(4)?,
+        latest_evidence_text: row.get(5)?,
+        updated_at: parse_datetime(&row.get::<_, String>(6)?)?,
+    })
+}
+
+fn map_knowledge_memory_evidence(row: &Row<'_>) -> rusqlite::Result<KnowledgeMemoryEvidence> {
+    Ok(KnowledgeMemoryEvidence {
+        id: row.get(0)?,
+        record_id: row.get(1)?,
+        record_title: row.get(2)?,
+        evidence_type: row.get(3)?,
+        evidence_text: row.get(4)?,
+        created_at: parse_datetime(&row.get::<_, String>(5)?)?,
+    })
+}
+
+fn map_learning_dialog_session(row: &Row<'_>) -> rusqlite::Result<LearningDialogSession> {
+    Ok(LearningDialogSession {
+        id: row.get(0)?,
+        topic_id: row.get(1)?,
+        source_record_id: row.get(2)?,
+        status: row.get(3)?,
+        conversation_snapshot: row.get(4)?,
+        conclusion_json: row.get(5)?,
+        created_at: parse_datetime(&row.get::<_, String>(6)?)?,
+    })
+}
+
+fn map_pet_chat_message(row: &Row<'_>) -> rusqlite::Result<PetChatMessage> {
+    Ok(PetChatMessage {
+        id: row.get(0)?,
+        session_id: row.get(1)?,
+        role: row.get(2)?,
+        content: row.get(3)?,
+        context_snapshot: row.get(4)?,
+        created_at: row.get(5)?,
+    })
+}
+
+fn map_pet_chat_session(row: &Row<'_>) -> rusqlite::Result<PetChatSession> {
+    Ok(PetChatSession {
+        id: row.get(0)?,
+        title: row.get(1)?,
+        created_at: row.get(2)?,
+        updated_at: row.get(3)?,
+    })
+}
+
 fn parse_datetime(value: &str) -> rusqlite::Result<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(value)
         .map(|value| value.with_timezone(&Utc))
@@ -1280,9 +2235,10 @@ fn parse_optional_datetime(value: Option<String>) -> rusqlite::Result<Option<Dat
 mod tests {
     use super::*;
     use crate::models::{
-    AttachmentRole, CreateAttachmentRequest, CreateRecordRequest, CreateTaskRequest, RecordSource,
-    RecordType, TaskPriority, TaskStatus,
-};
+        AttachmentRole, CreateAiProfileRequest, CreateAttachmentRequest, CreateRecordRequest, CreateTaskRequest,
+        UpdateAiProfileRequest,
+        RecordSource, RecordType, TaskPriority, TaskStatus,
+    };
 
     fn in_memory() -> Connection {
         let conn = Connection::open_in_memory().expect("in-memory db");
@@ -1295,12 +2251,12 @@ mod tests {
         let conn = in_memory();
         let count: i64 = conn
             .query_row(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('records','tasks','attachments','record_attachments','ai_results','reminders','settings','tags','record_tags')",
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('records','tasks','attachments','record_attachments','ai_results','ai_task_runs','knowledge_topics','knowledge_evidence','reminders','settings','tags','record_tags')",
                 [],
                 |row| row.get(0),
             )
             .expect("table count");
-        assert_eq!(count, 9);
+        assert_eq!(count, 12);
     }
 
     #[test]
@@ -1483,7 +2439,9 @@ mod tests {
 
         assert!(get_record(&conn, &record.id).is_err());
         assert!(get_task(&conn, &task.id).is_err());
-        assert!(get_record_attachments(&conn, &record.id).expect("links").is_empty());
+        assert!(get_record_attachments(&conn, &record.id)
+            .expect("links")
+            .is_empty());
         // Attachment DB row is cleaned up (sole-owner)
         assert!(get_attachment(&conn, &attachment.id).is_err());
     }
@@ -1561,7 +2519,7 @@ mod tests {
             CreateTaskRequest {
                 record_id: record.id.clone(),
                 task_status: Some(TaskStatus::Done), // should be ignored
-                priority: Some(TaskPriority::High),   // should be ignored
+                priority: Some(TaskPriority::High),  // should be ignored
                 due_at: None,
                 remind_at: None,
                 repeat_rule: None,
@@ -1702,8 +2660,8 @@ mod tests {
     #[test]
     fn get_setting_or_returns_default_when_missing() {
         let conn = in_memory();
-        let value = get_setting_or(&conn, "quick_capture_shortcut", "Alt+Shift+R")
-            .expect("get_setting_or");
+        let value =
+            get_setting_or(&conn, "quick_capture_shortcut", "Alt+Shift+R").expect("get_setting_or");
         assert_eq!(value, "Alt+Shift+R");
     }
 
@@ -1711,15 +2669,15 @@ mod tests {
     fn get_setting_or_returns_stored_value_when_set() {
         let conn = in_memory();
         set_setting(&conn, "quick_capture_shortcut", "Alt+Shift+T").expect("set");
-        let value = get_setting_or(&conn, "quick_capture_shortcut", "Alt+Shift+R")
-            .expect("get_setting_or");
+        let value =
+            get_setting_or(&conn, "quick_capture_shortcut", "Alt+Shift+R").expect("get_setting_or");
         assert_eq!(value, "Alt+Shift+T");
     }
 
     // ── Task 1: remove-task semantics ─────────────────────────────
 
     #[test]
-    fn remove_task_deletes_task_only_and_reverts_record_type() {
+    fn remove_task_deletes_task_and_linked_record() {
         let conn = in_memory();
         let record = insert_record(
             &conn,
@@ -1756,14 +2714,12 @@ mod tests {
         let removed = remove_task(&conn, &task.id).expect("remove_task");
         assert_eq!(removed.id, task.id);
 
-        // Assert: task row is gone
+        // Assert: task row is gone (cascade from record deletion)
         assert!(get_task(&conn, &task.id).is_err());
 
-        // Assert: record still exists
-        let rec = get_record(&conn, &record.id).expect("record still exists");
-
-        // Assert: record type reverted to note
-        assert_eq!(rec.record_type, RecordType::Note);
+        // Assert: linked record is physically deleted too — it must never
+        // resurface in another category
+        assert!(get_record(&conn, &record.id).is_err());
     }
 
     // ── Task 1: physical delete semantics ─────────────────────────
@@ -1832,7 +2788,8 @@ mod tests {
         .expect("attachment b");
 
         link_attachment(&conn, &record.id, &att_a.id, AttachmentRole::Main, 0).expect("link a");
-        link_attachment(&conn, &record.id, &att_b.id, AttachmentRole::Reference, 1).expect("link b");
+        link_attachment(&conn, &record.id, &att_b.id, AttachmentRole::Reference, 1)
+            .expect("link b");
 
         // Verify files exist before deletion
         assert!(file_a.exists());
@@ -1949,7 +2906,8 @@ mod tests {
         .expect("attachment");
 
         link_attachment(&conn, &record_a.id, &att.id, AttachmentRole::Main, 0).expect("link A");
-        link_attachment(&conn, &record_b.id, &att.id, AttachmentRole::Reference, 0).expect("link B");
+        link_attachment(&conn, &record_b.id, &att.id, AttachmentRole::Reference, 0)
+            .expect("link B");
 
         assert!(shared_file.exists());
 
@@ -1986,13 +2944,254 @@ mod tests {
         set_setting(&conn, "screenshot_shortcut", "Ctrl+Shift+2").expect("set ss");
 
         // Read back
-        let qc = get_setting_or(&conn, "quick_capture_shortcut", "Alt+Shift+R")
-            .expect("qc");
-        let ss = get_setting_or(&conn, "screenshot_shortcut", "Alt+Shift+S")
-            .expect("ss");
+        let qc = get_setting_or(&conn, "quick_capture_shortcut", "Alt+Shift+R").expect("qc");
+        let ss = get_setting_or(&conn, "screenshot_shortcut", "Alt+Shift+S").expect("ss");
 
         assert_eq!(qc, "Ctrl+Shift+1");
         assert_eq!(ss, "Ctrl+Shift+2");
+    }
+
+    #[test]
+    fn run_migrations_creates_ai_task_runs_table() {
+        let conn = in_memory();
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='ai_task_runs'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query table count");
+
+        assert_eq!(count, 1, "ai_task_runs table should exist after migrations");
+    }
+
+    #[test]
+    fn run_migrations_creates_knowledge_memory_tables() {
+        let conn = in_memory();
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('knowledge_topics', 'knowledge_evidence')",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query table count");
+
+        assert_eq!(
+            count, 2,
+            "knowledge memory tables should exist after migrations"
+        );
+    }
+
+    #[test]
+    fn run_migrations_creates_learning_dialog_sessions_table() {
+        let conn = in_memory();
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='learning_dialog_sessions'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query table count");
+
+        assert_eq!(
+            count, 1,
+            "learning dialog session table should exist after migrations"
+        );
+    }
+
+    #[test]
+    fn upsert_knowledge_topic_and_fetch_for_record_roundtrips() {
+        let conn = in_memory();
+        let record = insert_record(
+            &conn,
+            CreateRecordRequest {
+                record_type: Some(RecordType::Note),
+                title: Some("memory source".into()),
+                content: Some("span decorator note".into()),
+                source: RecordSource::QuickText,
+                create_as_task: false,
+                attachment_ids: vec![],
+            },
+        )
+        .expect("record");
+
+        let topic = upsert_knowledge_topic(
+            &conn,
+            "Python 装饰器",
+            "已能结合 span 装饰器理解监控场景中的用法",
+            "understanding",
+        )
+        .expect("topic");
+        append_knowledge_evidence(
+            &conn,
+            &topic.id,
+            &record.id,
+            "ai-suggestion",
+            "在应用监控系统笔记中分析过 span 装饰器",
+        )
+        .expect("evidence");
+
+        let topics = get_knowledge_topics_for_record(&conn, &record.id).expect("topics");
+        assert_eq!(topics.len(), 1);
+        assert_eq!(topics[0].name, "Python 装饰器");
+        assert_eq!(topics[0].mastery_level, "understanding");
+        assert_eq!(
+            topics[0].evidence_text,
+            "在应用监控系统笔记中分析过 span 装饰器"
+        );
+    }
+
+    #[test]
+    fn knowledge_memory_list_and_detail_include_evidence_and_latest_conclusion() {
+        let conn = in_memory();
+        let first_record = insert_record(
+            &conn,
+            CreateRecordRequest {
+                record_type: Some(RecordType::Note),
+                title: Some("监控系统笔记".into()),
+                content: Some("span decorator".into()),
+                source: RecordSource::QuickText,
+                create_as_task: false,
+                attachment_ids: vec![],
+            },
+        )
+        .expect("first record");
+        let second_record = insert_record(
+            &conn,
+            CreateRecordRequest {
+                record_type: Some(RecordType::Note),
+                title: Some("补充笔记".into()),
+                content: Some("span usage".into()),
+                source: RecordSource::QuickText,
+                create_as_task: false,
+                attachment_ids: vec![],
+            },
+        )
+        .expect("second record");
+
+        let understanding = upsert_knowledge_topic(
+            &conn,
+            "Python 装饰器",
+            "用户已能解释 span 装饰器的用途",
+            "understanding",
+        )
+        .expect("understanding topic");
+        append_knowledge_evidence(
+            &conn,
+            &understanding.id,
+            &first_record.id,
+            "dialog_answer",
+            "用户能用自己的话说明 span 装饰器的作用。",
+        )
+        .expect("first evidence");
+        append_knowledge_evidence(
+            &conn,
+            &understanding.id,
+            &second_record.id,
+            "task_practice",
+            "用户在新的监控代码中复用了该模式。",
+        )
+        .expect("second evidence");
+        insert_learning_dialog_session(
+            &conn,
+            crate::models::LearningDialogSession {
+                id: "session-1".into(),
+                topic_id: understanding.id.clone(),
+                source_record_id: second_record.id.clone(),
+                status: "promote_to_understanding".into(),
+                conversation_snapshot: "[]".into(),
+                conclusion_json: Some("{\"reason\":\"用户已能应用\"}".into()),
+                created_at: chrono::Utc::now(),
+            },
+        )
+        .expect("session");
+
+        let candidate =
+            upsert_knowledge_topic(&conn, "OKR 执行", "待确认的目标管理知识", "candidate")
+                .expect("candidate topic");
+        append_knowledge_evidence(
+            &conn,
+            &candidate.id,
+            &first_record.id,
+            "analysis_suggestion",
+            "笔记中出现 KR 交付讨论。",
+        )
+        .expect("candidate evidence");
+
+        let items = list_knowledge_memory(&conn).expect("memory list");
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].name, "Python 装饰器");
+        assert_eq!(items[0].mastery_level, "understanding");
+        assert_eq!(items[0].evidence_count, 2);
+        assert_eq!(
+            items[0].latest_evidence_text,
+            "用户在新的监控代码中复用了该模式。"
+        );
+
+        let detail = get_knowledge_memory_detail(&conn, &understanding.id).expect("memory detail");
+        assert_eq!(detail.evidence.len(), 2);
+        assert_eq!(detail.evidence[0].record_title.as_deref(), Some("补充笔记"));
+        assert_eq!(
+            detail.latest_conclusion_json.as_deref(),
+            Some("{\"reason\":\"用户已能应用\"}")
+        );
+    }
+
+    #[test]
+    fn get_record_with_relations_includes_knowledge_topics() {
+        let conn = in_memory();
+        let record = insert_record(
+            &conn,
+            CreateRecordRequest {
+                record_type: Some(RecordType::Note),
+                title: Some("okr note".into()),
+                content: Some("KR 定义".into()),
+                source: RecordSource::QuickText,
+                create_as_task: false,
+                attachment_ids: vec![],
+            },
+        )
+        .expect("record");
+
+        let topic = upsert_knowledge_topic(
+            &conn,
+            "OKR 执行理解",
+            "开始形成对 KR 交付形式的判断",
+            "awareness",
+        )
+        .expect("topic");
+        append_knowledge_evidence(
+            &conn,
+            &topic.id,
+            &record.id,
+            "ai-suggestion",
+            "KR 是交付的内容？",
+        )
+        .expect("evidence");
+
+        let detailed = get_record_with_relations(&conn, &record.id).expect("detail");
+        assert_eq!(detailed.knowledge_topics.len(), 1);
+        assert_eq!(detailed.knowledge_topics[0].name, "OKR 执行理解");
+    }
+
+    #[test]
+    fn get_all_settings_with_defaults_includes_ai_model_variant_and_ai_base_url() {
+        let conn = in_memory();
+
+        let settings = get_all_settings_with_defaults(&conn).expect("settings");
+
+        assert!(settings
+            .iter()
+            .any(|entry| entry.key == "ai_model_variant" && entry.value == "default"));
+        assert!(settings
+            .iter()
+            .any(|entry| entry.key == "ai_base_url" && entry.value.is_empty()));
+        assert!(settings
+            .iter()
+            .any(|entry| entry.key == "product_mode" && entry.value == "free"));
     }
 
     #[test]
@@ -2001,8 +3200,12 @@ mod tests {
 
         let settings = get_all_settings_with_defaults(&conn).expect("settings");
 
-        assert!(settings.iter().any(|entry| entry.key == "quick_capture_shortcut" && entry.value == "Alt+Shift+R"));
-        assert!(settings.iter().any(|entry| entry.key == "screenshot_shortcut" && entry.value == "Alt+Shift+S"));
+        assert!(settings
+            .iter()
+            .any(|entry| entry.key == "quick_capture_shortcut" && entry.value == "Alt+Shift+R"));
+        assert!(settings
+            .iter()
+            .any(|entry| entry.key == "screenshot_shortcut" && entry.value == "Alt+Shift+S"));
         assert!(settings.iter().any(|entry| entry.key == "pet_visible"));
     }
 
@@ -2015,9 +3218,83 @@ mod tests {
 
         let settings = get_all_settings_with_defaults(&conn).expect("settings");
 
-        assert!(settings.iter().any(|entry| entry.key == "quick_capture_shortcut" && entry.value == "Ctrl+Shift+9"));
-        assert!(settings.iter().any(|entry| entry.key == "ai_provider" && entry.value == "openai"));
-        assert!(settings.iter().any(|entry| entry.key == "screenshot_shortcut" && entry.value == "Alt+Shift+S"));
+        assert!(settings
+            .iter()
+            .any(|entry| entry.key == "quick_capture_shortcut" && entry.value == "Ctrl+Shift+9"));
+        assert!(settings
+            .iter()
+            .any(|entry| entry.key == "ai_provider" && entry.value == "openai"));
+        assert!(settings
+            .iter()
+            .any(|entry| entry.key == "screenshot_shortcut" && entry.value == "Alt+Shift+S"));
+    }
+
+    #[test]
+    fn get_all_settings_with_defaults_never_returns_api_key_values() {
+        let conn = in_memory();
+        set_setting(&conn, "ai_api_key", "current-secret").expect("set current key");
+        set_setting(&conn, "claude_api_key", "legacy-secret").expect("set legacy key");
+
+        let settings = get_all_settings_with_defaults(&conn).expect("settings");
+
+        assert!(settings.iter().all(|entry| entry.key != "ai_api_key"));
+        assert!(settings.iter().all(|entry| entry.key != "claude_api_key"));
+        assert!(settings.iter().all(|entry| entry.value != "current-secret"));
+        assert!(settings.iter().all(|entry| entry.value != "legacy-secret"));
+    }
+
+    #[test]
+    fn pet_chat_sessions_persist_messages_and_limit_context_candidates() {
+        let conn = in_memory();
+        let session = create_pet_chat_session(&conn, Some("监控迁移".into())).expect("session");
+        append_pet_chat_message(&conn, &session.id, "user", "Signoz 迁移先做什么", "[]")
+            .expect("message");
+
+        for title in [
+            "Signoz 迁移方案",
+            "Signoz trace 验证",
+            "Signoz 仪表盘清单",
+            "无关的周末购物",
+        ] {
+            insert_record(
+                &conn,
+                CreateRecordRequest {
+                    record_type: Some(RecordType::Note),
+                    title: Some(title.into()),
+                    content: Some("迁移监控系统的工作记录".into()),
+                    source: RecordSource::QuickText,
+                    create_as_task: false,
+                    attachment_ids: vec![],
+                },
+            )
+            .expect("record");
+        }
+
+        let candidates = list_pet_chat_context_candidates(&conn, "Signoz", 3)
+            .expect("context candidates");
+        let messages = list_pet_chat_messages(&conn, &session.id).expect("messages");
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(candidates.len(), 3);
+        assert!(candidates.iter().all(|candidate| candidate.title.contains("Signoz")));
+    }
+
+    #[test]
+    fn pet_chat_sessions_are_listed_by_recent_activity_and_can_restore_latest() {
+        let conn = in_memory();
+        let older = create_pet_chat_session(&conn, Some("较早对话".into())).expect("older session");
+        let newer = create_pet_chat_session(&conn, Some("最近对话".into())).expect("newer session");
+        conn.execute(
+            "UPDATE pet_chat_sessions SET updated_at = ?2 WHERE id = ?1",
+            params![older.id, "2100-01-01T00:00:00+00:00"],
+        )
+        .expect("newer activity");
+
+        let sessions = list_pet_chat_sessions(&conn, 10).expect("sessions");
+        let latest = get_latest_pet_chat_session(&conn).expect("latest session");
+
+        assert_eq!(sessions.iter().map(|session| &session.id).collect::<Vec<_>>(), vec![&older.id, &newer.id]);
+        assert_eq!(latest.expect("a latest session").id, older.id);
     }
 
     #[test]
@@ -2058,6 +3335,70 @@ mod tests {
         assert_eq!(switched.task_status, TaskStatus::Doing);
         // completed_at should still be set from the previous update
         assert!(switched.completed_at.is_some());
+    }
+
+    #[test]
+    fn ai_profiles_schema_supports_multiple_profiles_and_models() {
+        let conn = Connection::open_in_memory().expect("connection");
+        run_migrations(&conn).expect("migrations");
+
+        let profile = create_ai_profile(
+            &conn,
+            &CreateAiProfileRequest {
+                name: "OpenAI 工作".into(),
+                provider: "openai".into(),
+                base_url: None,
+                default_model: "gpt-4.1".into(),
+                models: vec!["gpt-4.1".into(), "gpt-4o".into()],
+                enabled: true,
+            },
+        )
+        .expect("profile");
+
+        let profiles = list_ai_profiles(&conn).expect("profiles");
+        assert_eq!(profiles.len(), 1);
+        assert_eq!(profiles[0].id, profile.id);
+        assert_eq!(profiles[0].models, vec!["gpt-4.1", "gpt-4o"]);
+        assert_eq!(profiles[0].default_model, "gpt-4.1");
+    }
+
+    #[test]
+    fn ai_profile_update_and_delete_are_scoped_to_profile() {
+        let conn = Connection::open_in_memory().expect("connection");
+        run_migrations(&conn).expect("migrations");
+        let profile = create_ai_profile(
+            &conn,
+            &CreateAiProfileRequest {
+                name: "旧名称".into(),
+                provider: "openai".into(),
+                base_url: None,
+                default_model: "gpt-4o".into(),
+                models: vec!["gpt-4o".into()],
+                enabled: true,
+            },
+        )
+        .expect("profile");
+
+        update_ai_profile(
+            &conn,
+            &profile.id,
+            &UpdateAiProfileRequest {
+                name: "新名称".into(),
+                provider: "openai".into(),
+                base_url: Some("https://example.test/v1".into()),
+                default_model: "gpt-4.1".into(),
+                models: vec!["gpt-4.1".into()],
+                enabled: false,
+            },
+        )
+        .expect("update");
+        let updated = list_ai_profiles(&conn).expect("profiles");
+        assert_eq!(updated[0].name, "新名称");
+        assert!(!updated[0].enabled);
+        assert_eq!(updated[0].models, vec!["gpt-4.1"]);
+
+        delete_ai_profile(&conn, &profile.id).expect("delete");
+        assert!(list_ai_profiles(&conn).expect("profiles").is_empty());
     }
 
     // ── Task 2: unfinished-task query ──────────────────────────────
@@ -2196,14 +3537,26 @@ mod tests {
 
         // Assert: both returned task IDs match
         let returned_ids: Vec<&str> = items.iter().map(|i| i.task_id.as_str()).collect();
-        assert!(returned_ids.contains(&task_todo.id.as_str()), "should contain todo task");
-        assert!(returned_ids.contains(&task_doing.id.as_str()), "should contain doing task");
+        assert!(
+            returned_ids.contains(&task_todo.id.as_str()),
+            "should contain todo task"
+        );
+        assert!(
+            returned_ids.contains(&task_doing.id.as_str()),
+            "should contain doing task"
+        );
 
         // Assert: done/cancelled are excluded
-        assert!(!returned_ids.contains(&task_done.id.as_str()), "should NOT contain done task");
+        assert!(
+            !returned_ids.contains(&task_done.id.as_str()),
+            "should NOT contain done task"
+        );
 
         // Assert: todo item has correct record fields
-        let todo_item = items.iter().find(|i| i.task_id == task_todo.id).expect("todo item");
+        let todo_item = items
+            .iter()
+            .find(|i| i.task_id == task_todo.id)
+            .expect("todo item");
         assert_eq!(todo_item.record_id, record_todo.id);
         assert_eq!(todo_item.record_title.as_deref(), Some("todo item"));
         assert_eq!(todo_item.record_content.as_deref(), Some("need to do this"));
@@ -2212,7 +3565,10 @@ mod tests {
         assert_eq!(todo_item.attachment_count, 0);
 
         // Assert: doing item has attachment_count = 1
-        let doing_item = items.iter().find(|i| i.task_id == task_doing.id).expect("doing item");
+        let doing_item = items
+            .iter()
+            .find(|i| i.task_id == task_doing.id)
+            .expect("doing item");
         assert_eq!(doing_item.record_title.as_deref(), Some("doing item"));
         assert_eq!(doing_item.record_content.as_deref(), Some("in progress"));
         assert_eq!(doing_item.task_status, TaskStatus::Doing);

@@ -1,6 +1,8 @@
 ﻿import { invoke } from "@tauri-apps/api/core";
 
 import type {
+  AiProfile,
+  AiTaskRunItem,
   AiResultItem,
   ClipboardImageRequest,
   CreateAiResultRequest,
@@ -8,10 +10,15 @@ import type {
   CreateRecordRequest,
   FolderItem,
   ImportFilesRequest,
+  KnowledgeMemoryDetail,
+  KnowledgeMemoryItem,
   CreateTaskRequest,
+  PetChatMessage,
+  PetChatSession,
   RecordFilter,
   RecordItem,
   RecordWithRelations,
+  RunAiTaskRequest,
   SettingsEntry,
   SetShortcutResult,
   Tag,
@@ -20,6 +27,21 @@ import type {
   TaskItem,
   UpdateRecordRequest,
 } from "../types";
+
+type ApiRecordWithRelations = RecordWithRelations & {
+  attachmentLinks?: RecordWithRelations["attachment_links"];
+  aiResults?: RecordWithRelations["ai_results"];
+  knowledgeTopics?: RecordWithRelations["knowledge_topics"];
+};
+
+function normalizeRecordWithRelations(record: ApiRecordWithRelations): RecordWithRelations {
+  return {
+    ...record,
+    attachment_links: record.attachment_links ?? record.attachmentLinks ?? [],
+    ai_results: record.ai_results ?? record.aiResults ?? [],
+    knowledge_topics: record.knowledge_topics ?? record.knowledgeTopics ?? [],
+  };
+}
 
 export async function createRecord(request: CreateRecordRequest): Promise<RecordItem> {
   return invoke<RecordItem>("create_record", { request });
@@ -63,11 +85,21 @@ export async function hideWindow(label: string): Promise<void> {
 }
 
 export async function listRecords(filter?: RecordFilter): Promise<RecordWithRelations[]> {
-  return invoke<RecordWithRelations[]>("list_records", { filter });
+  const records = await invoke<ApiRecordWithRelations[]>("list_records", { filter });
+  return records.map(normalizeRecordWithRelations);
 }
 
 export async function getRecordDetail(id: string): Promise<RecordWithRelations> {
-  return invoke<RecordWithRelations>("get_record_detail", { id });
+  const record = await invoke<ApiRecordWithRelations>("get_record_detail", { id });
+  return normalizeRecordWithRelations(record);
+}
+
+export async function listKnowledgeMemory(): Promise<KnowledgeMemoryItem[]> {
+  return invoke<KnowledgeMemoryItem[]>("list_knowledge_memory");
+}
+
+export async function getKnowledgeMemoryDetail(topicId: string): Promise<KnowledgeMemoryDetail> {
+  return invoke<KnowledgeMemoryDetail>("get_knowledge_memory_detail", { topicId });
 }
 
 export async function updateRecord(
@@ -104,12 +136,62 @@ export async function listUnfinishedTasks(): Promise<UnfinishedTaskItem[]> {
   return invoke<UnfinishedTaskItem[]>("list_unfinished_tasks");
 }
 
+export async function listPetChatSessions(limit?: number): Promise<PetChatSession[]> {
+  return invoke<PetChatSession[]>("list_pet_chat_sessions", limit === undefined ? {} : { limit });
+}
+
+export async function countPetChatSessions(): Promise<number> {
+  return invoke<number>("count_pet_chat_sessions");
+}
+
+export async function updatePetChatSessionTitle(sessionId: string, title: string): Promise<PetChatSession> {
+  return invoke<PetChatSession>("update_pet_chat_session_title", { sessionId, title });
+}
+
+export async function generatePetChatTitle(
+  sessionId: string,
+  userMessage: string,
+  assistantReply: string,
+  profileId?: string | null,
+  model?: string | null,
+): Promise<string> {
+  return invoke<string>("generate_pet_chat_title", { sessionId, userMessage, assistantReply, profileId, model });
+}
+
+export async function deletePetChatSession(sessionId: string): Promise<void> {
+  return invoke<void>("delete_pet_chat_session", { sessionId });
+}
+
+export async function deletePetChatSessions(sessionIds: string[]): Promise<void> {
+  await Promise.all(sessionIds.map((sessionId) => deletePetChatSession(sessionId)));
+}
+
+export async function getLatestPetChatSession(): Promise<PetChatSession | null> {
+  return invoke<PetChatSession | null>("get_latest_pet_chat_session");
+}
+
+export async function listPetChatMessages(sessionId: string): Promise<PetChatMessage[]> {
+  return invoke<PetChatMessage[]>("list_pet_chat_messages", { sessionId });
+}
+
 /**
  * Batch-update task sort order for drag-and-drop reordering.
  * Each item in the array maps a task_id to its new sort_order value.
  */
 export async function reorderTasks(order: { task_id: string; sort_order: number }[]): Promise<void> {
   return invoke<void>("reorder_tasks", { order });
+}
+
+/**
+ * Batch-update record sort order for drag-and-drop reordering in a specific view.
+ * @param viewKey "notes" or "tasks" — which view's sort space to update
+ * @param order Array of { record_id, sort_order } pairs
+ */
+export async function reorderRecords(
+  viewKey: string,
+  order: { record_id: string; sort_order: number }[],
+): Promise<void> {
+  return invoke<void>("reorder_records", { viewKey, order });
 }
 
 /**
@@ -162,12 +244,58 @@ export async function getAllSettings(): Promise<SettingsEntry[]> {
   return invoke<SettingsEntry[]>("get_all_settings");
 }
 
+export async function listAiProfiles(): Promise<AiProfile[]> {
+  return invoke<AiProfile[]>("list_ai_profiles");
+}
+
+export async function createAiProfile(
+  request: Omit<AiProfile, "id" | "apiKeyConfigured" | "created_at" | "updated_at">,
+  apiKey?: string,
+): Promise<AiProfile> {
+  return invoke<AiProfile>("create_ai_profile", { request, apiKey: apiKey || null });
+}
+
+export async function updateAiProfile(
+  profileId: string,
+  request: Omit<AiProfile, "id" | "apiKeyConfigured" | "created_at" | "updated_at">,
+): Promise<void> {
+  return invoke<void>("update_ai_profile", { profileId, request });
+}
+
+export async function deleteAiProfile(profileId: string): Promise<void> {
+  return invoke<void>("delete_ai_profile", { profileId });
+}
+
+export async function setAiProfileApiKey(profileId: string, value: string): Promise<void> {
+  return invoke<void>("set_ai_profile_api_key", { profileId, value });
+}
+
+export async function clearAiProfileApiKey(profileId: string): Promise<void> {
+  return invoke<void>("clear_ai_profile_api_key", { profileId });
+}
+
 export async function updateSetting(key: string, value: string): Promise<void> {
   return invoke<void>("update_setting", { key, value });
 }
 
 export async function resetSettings(): Promise<void> {
   return invoke<void>("reset_settings");
+}
+
+export interface AiApiKeyStatus {
+  configured: boolean;
+}
+
+export async function getAiApiKeyStatus(): Promise<AiApiKeyStatus> {
+  return invoke<AiApiKeyStatus>("get_ai_api_key_status");
+}
+
+export async function setAiApiKey(value: string): Promise<void> {
+  return invoke<void>("set_ai_api_key", { value });
+}
+
+export async function clearAiApiKey(): Promise<void> {
+  return invoke<void>("clear_ai_api_key");
 }
 
 // ── Screenshot capture ──────────────────────────────────────────────
@@ -200,6 +328,12 @@ export async function triggerAiAnalysis(
   triggerMode: string = "manual",
 ): Promise<AiResultItem> {
   return invoke<AiResultItem>("trigger_ai_analysis", { recordId, triggerMode });
+}
+
+export async function runAiTask(
+  request: RunAiTaskRequest,
+): Promise<AiTaskRunItem> {
+  return invoke<AiTaskRunItem>("run_ai_task", { request });
 }
 
 // ── Pet position (backend in parallel) ──────────────────────────────

@@ -1,23 +1,36 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 
 import { useColumnResize } from "../../lib/useColumnResize";
+import { updateTaskDueAt, updateTaskRepeatRule } from "../../lib/tauri";
 import { useRecordsStore } from "../../store/records";
 import { initTagsListener, useTagsStore } from "../../store/tags";
 import { useTasksStore } from "../../store/tasks";
 import type {
-  RecordStatus,
   RecordType,
   TaskStatus,
   UpdateRecordRequest,
 } from "../../types";
+import { ConfirmDialog } from "../common/ConfirmDialog";
 import { Navigation } from "./Navigation";
-import { RecordDetail } from "./RecordDetail";
+import { KnowledgeMemoryPanel } from "./KnowledgeMemoryPanel";
+import { PetLearningPanel } from "./PetLearningPanel";
+import { PetChatPanel } from "./PetChatPanel";
+import { PetChatHistoryPanel } from "./PetChatHistoryPanel";
+import { getRecordDetailInstanceKey, RecordDetail } from "./RecordDetail";
 import { RecordList } from "./RecordList";
 import { SettingsPanel } from "../settings/SettingsPanel";
+import { useLearningCoachStore } from "../../store/learningCoach";
+import { useSettingsStore } from "../../store/settings";
 
-type ViewMode = "all" | "notes" | "tasks";
+type ViewMode = "notes" | "tasks";
+type ContentMode = "records" | "memory" | "settings" | "chat";
 
 export function MainPanel() {
+  const activeLearningSession = useLearningCoachStore((state) => state.activeSession);
+  const closeLearningSession = useLearningCoachStore((state) => state.closeSession);
+  const productMode = useSettingsStore((state) => state.settings.product_mode);
+  const growthPreviewEnabled = productMode === "growth-preview";
   const {
     records,
     selectedId,
@@ -26,6 +39,7 @@ export function MainPanel() {
     selectRecord,
     updateRecord,
     deleteRecord,
+    reorderRecords,
   } = useRecordsStore();
 
   const { convertRecordToTask, updateStatus, fetchTasks } = useTasksStore();
@@ -35,35 +49,16 @@ export function MainPanel() {
   // ── Resizable column widths (persisted to localStorage) ──
   const { widths, startResize, resetColumn } = useColumnResize();
 
-  // ── Type filter (multi-select: 笔记 + 待办, both selected = all) ──
-  const [selectedTypes, setSelectedTypes] = useState<Set<RecordType>>(
-    () => new Set<RecordType>(["note", "task"]),
-  );
-  const toggleTypeFilter = useCallback((type: RecordType) => {
-    setSelectedTypes((prev) => {
-      const next = new Set(prev);
-      if (next.has(type)) {
-        next.delete(type);
-      } else {
-        next.add(type);
-      }
-      return next;
-    });
-  }, []);
+  // ── Type filter (single-select: 笔记 OR 待办, never both) ──
+  const [selectedType, setSelectedType] = useState<RecordType>("note");
 
   // Derived view mode for child components (RecordList text, Navigation status section)
-  const viewMode: ViewMode =
-    selectedTypes.size === 1
-      ? selectedTypes.has("note")
-        ? "notes"
-        : "tasks"
-      : "all";
+  const viewMode: ViewMode = selectedType === "note" ? "notes" : "tasks";
 
-  // Server-side type filter: only filter when exactly one type is selected
-  const typeFilter = selectedTypes.size === 1 ? Array.from(selectedTypes)[0] : undefined;
+  // Server-side type filter: always filter to the single selected type
+  const typeFilter = selectedType;
 
   // ── Local filter state ──
-  const [activeStatus, setActiveStatus] = useState<RecordStatus | null>(null);
   const [taskStatusFilter, setTaskStatusFilter] = useState<TaskStatus | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
@@ -79,7 +74,24 @@ export function MainPanel() {
   }, []);
 
   // ── Settings panel ──
-  const [showSettings, setShowSettings] = useState(false);
+  const [contentMode, setContentMode] = useState<ContentMode>(() => {
+    const openChat = localStorage.getItem("open-pet-chat") === "true";
+    localStorage.removeItem("open-pet-chat");
+    return openChat ? "chat" : "records";
+  });
+
+  useEffect(() => {
+    const unlistenPromise = listen("open-pet-chat", () => setContentMode("chat"));
+    return () => {
+      void unlistenPromise.then((unlisten) => unlisten());
+    };
+  }, []);
+
+  useEffect(() => {
+    if (growthPreviewEnabled) return;
+    closeLearningSession();
+    setContentMode((current) => current === "memory" ? "records" : current);
+  }, [closeLearningSession, growthPreviewEnabled]);
 
   // Debounce search
   useEffect(() => {
@@ -93,11 +105,11 @@ export function MainPanel() {
   useEffect(() => {
     void fetchRecords({
       typeFilter: typeFilter,
-      statusFilter: activeStatus ?? undefined,
       searchQuery: debouncedQuery.length > 0 ? debouncedQuery : undefined,
       tagIds: activeTagIds.length > 0 ? activeTagIds : undefined,
+      viewKey: viewMode,
     });
-  }, [typeFilter, activeStatus, debouncedQuery, activeTagIds, fetchRecords]);
+  }, [typeFilter, debouncedQuery, activeTagIds, viewMode, fetchRecords]);
 
   // Fetch tasks on mount
   useEffect(() => {
@@ -110,11 +122,9 @@ export function MainPanel() {
     initTagsListener();
   }, [fetchTagsStore]);
 
-  // Clear conflicting status filters when view mode changes
+  // Clear task status filter when leaving tasks view
   useEffect(() => {
-    if (viewMode === "tasks") {
-      setActiveStatus(null);
-    } else {
+    if (viewMode !== "tasks") {
       setTaskStatusFilter(null);
     }
   }, [viewMode]);
@@ -142,11 +152,32 @@ export function MainPanel() {
     [selectRecord],
   );
 
+  // ── Delete confirmation dialog ──
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+
+  // Title preview for the delete-confirm dialog（沿用原有截断逻辑）
+  const pendingDeletePreview = useMemo(() => {
+    if (!pendingDeleteId) return "";
+    const record = records.find((r) => r.id === pendingDeleteId);
+    const title =
+      record?.title?.trim() ||
+      record?.content?.trim().split("\n")[0] ||
+      "此记录";
+    return title.length > 40 ? `${title.slice(0, 40)}…` : title;
+  }, [pendingDeleteId, records]);
+
   const handleDelete = useCallback(
     (id: string) => {
-      void deleteRecord(id);
+      setPendingDeleteId(id);
     },
-    [deleteRecord],
+    [],
+  );
+
+  const handleReorder = useCallback(
+    (activeId: string, overId: string) => {
+      reorderRecords(viewMode, activeId, overId);
+    },
+    [viewMode, reorderRecords],
   );
 
   const handleUpdate = useCallback(
@@ -177,6 +208,24 @@ export function MainPanel() {
     [updateStatus, selectRecord],
   );
 
+  const handleUpdateDueAt = useCallback(
+    async (recordId: string, taskId: string, dueAt: string | null) => {
+      await updateTaskDueAt(taskId, dueAt);
+      // Re-fetch detail to reflect updated due date
+      await selectRecord(recordId);
+    },
+    [selectRecord],
+  );
+
+  const handleUpdateRepeatRule = useCallback(
+    async (taskId: string, repeatRule: string | null) => {
+      await updateTaskRepeatRule(taskId, repeatRule);
+      // Re-fetch tasks to reflect the updated repeat rule
+      await fetchTasks();
+    },
+    [fetchTasks],
+  );
+
   return (
     <div className="flex h-screen overflow-hidden bg-bg text-text">
       {/* ── Left: Navigation sidebar ── */}
@@ -185,17 +234,23 @@ export function MainPanel() {
         style={{ width: widths.nav }}
       >
         <Navigation
-          selectedTypes={selectedTypes}
-          onToggleTypeFilter={toggleTypeFilter}
+          selectedType={selectedType}
+          onSelectType={setSelectedType}
           viewMode={viewMode}
-          activeStatus={activeStatus}
           taskStatusFilter={taskStatusFilter}
           searchQuery={searchQuery}
-          settingsOpen={showSettings}
-          onStatusChange={setActiveStatus}
+          settingsOpen={contentMode === "settings"}
+          memoryOpen={contentMode === "memory"}
+          chatOpen={contentMode === "chat"}
+          growthPreviewEnabled={growthPreviewEnabled}
           onTaskStatusFilterChange={setTaskStatusFilter}
           onSearchChange={setSearchQuery}
-          onToggleSettings={() => setShowSettings((prev) => !prev)}
+          onToggleSettings={() => setContentMode((current) => current === "settings" ? "records" : "settings")}
+          onToggleMemory={() => {
+            closeLearningSession();
+            setContentMode((current) => current === "memory" ? "records" : "memory");
+          }}
+          onToggleChat={() => setContentMode((current) => current === "chat" ? "records" : "chat")}
           activeTagIds={activeTagIds}
           onToggleTagFilter={toggleTagFilter}
         />
@@ -216,8 +271,12 @@ export function MainPanel() {
         className="flex shrink-0 flex-col border-r border-border bg-bg/30"
         style={{ width: widths.list }}
       >
-        {showSettings ? (
-          <SettingsPanel onClose={() => setShowSettings(false)} />
+        {contentMode === "chat" ? (
+          <PetChatHistoryPanel />
+        ) : contentMode === "settings" ? (
+          <SettingsPanel onClose={() => setContentMode("records")} />
+        ) : contentMode === "memory" && growthPreviewEnabled ? (
+          <KnowledgeMemoryPanel mode="list" />
         ) : (
           <RecordList
             records={displayRecords}
@@ -226,6 +285,7 @@ export function MainPanel() {
             viewMode={viewMode}
             onSelect={handleSelect}
             onDelete={handleDelete}
+            onReorder={handleReorder}
           />
         )}
       </section>
@@ -242,15 +302,45 @@ export function MainPanel() {
 
       {/* ── Right: Record detail ── */}
       <section className="flex min-w-0 flex-1 flex-col bg-bg/20">
-        <RecordDetail
-          record={selectedRecord}
-          loading={recordsLoading}
-          onUpdate={handleUpdate}
-          onConvertToTask={handleConvertToTask}
-          onUpdateTaskStatus={handleUpdateTaskStatus}
-          onDelete={handleDelete}
-        />
+        {contentMode === "chat" ? (
+          <PetChatPanel />
+        ) : contentMode === "memory" && growthPreviewEnabled ? (
+          <KnowledgeMemoryPanel mode="detail" />
+        ) : activeLearningSession && growthPreviewEnabled ? (
+          <PetLearningPanel
+            onBackToRecord={() => {
+              if (selectedRecord?.id) {
+                void selectRecord(selectedRecord.id);
+              }
+            }}
+          />
+        ) : (
+          <RecordDetail
+            key={getRecordDetailInstanceKey(selectedRecord?.id ?? null)}
+            record={selectedRecord}
+            loading={recordsLoading}
+            onUpdate={handleUpdate}
+            onConvertToTask={handleConvertToTask}
+            onUpdateTaskStatus={handleUpdateTaskStatus}
+            onUpdateDueAt={handleUpdateDueAt}
+            onUpdateRepeatRule={handleUpdateRepeatRule}
+            onDelete={handleDelete}
+            growthPreviewEnabled={growthPreviewEnabled}
+          />
+        )}
       </section>
+
+      {/* ── Delete confirm dialog ── */}
+      <ConfirmDialog
+        open={pendingDeleteId !== null}
+        message={`确定要删除「${pendingDeletePreview}」吗？\n此操作不可撤销，关联的附件、标签关联和 AI 结果都会一并删除。`}
+        confirmLabel="确认删除"
+        onConfirm={() => {
+          if (pendingDeleteId) void deleteRecord(pendingDeleteId);
+          setPendingDeleteId(null);
+        }}
+        onCancel={() => setPendingDeleteId(null)}
+      />
     </div>
   );
 }

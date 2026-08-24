@@ -3,17 +3,22 @@ use std::path::{Path, PathBuf};
 
 use image::RgbaImage;
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
 
+use crate::ai;
+use crate::credentials;
 use crate::db::{self, Database};
 use crate::errors::{AppError, AppResult};
 use crate::models::{
-    AiResult, AiTriggerMode, AttachmentRole, AttachmentType, ClipboardImageRequest,
+    AiProfile, AiResult, AiTaskRun, AttachmentRole, AttachmentType, ClipboardImageRequest,
     CreateAiResultRequest, CreateAttachmentRequest, CreateRecordRequest, CreateTaskRequest, Folder,
-    ImportFilesRequest, Record, RecordFilter, RecordSource, RecordType, RecordWithRelations,
-    SettingsEntry, Tag, Task, TaskFilter, TaskStatus, UnfinishedTaskItem, UpdateRecordRequest,
+    ImportFilesRequest, KnowledgeMemoryDetail, KnowledgeMemoryItem, Record, RecordFilter,
+    PetChatMessage, PetChatSession, RecordSource, RecordType, RecordWithRelations,
+    RunAiTaskRequest, SettingsEntry, Tag, Task, TaskFilter, TaskStatus, UnfinishedTaskItem,
+    UpdateRecordRequest,
 };
+use crate::models::{CreateAiProfileRequest, UpdateAiProfileRequest};
 use crate::screenshot;
 use crate::windows;
 
@@ -26,8 +31,21 @@ pub struct TaskSortOrder {
     pub sort_order: i64,
 }
 
+/// A single item in a batch record reorder request: maps a record ID to its
+/// new sort position within a specific view (notes/tasks).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecordSortOrder {
+    pub record_id: String,
+    pub sort_order: i64,
+}
+
 pub const DATA_CHANGED_EVENT: &str = "data-changed";
 pub const SETTINGS_CHANGED_EVENT: &str = "settings-changed";
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AiApiKeyStatus {
+    pub configured: bool,
+}
 
 fn emit_data_changed(app: &AppHandle) -> AppResult<()> {
     app.emit(DATA_CHANGED_EVENT, ())
@@ -69,7 +87,13 @@ fn import_files_impl(
     )?;
 
     for (index, attachment_id) in attachment_ids.iter().enumerate() {
-        db::link_attachment(conn, &record.id, attachment_id, AttachmentRole::Main, index as i64)?;
+        db::link_attachment(
+            conn,
+            &record.id,
+            attachment_id,
+            AttachmentRole::Main,
+            index as i64,
+        )?;
     }
 
     if request.create_as_task {
@@ -120,7 +144,9 @@ pub fn import_files(
     request: ImportFilesRequest,
 ) -> AppResult<Record> {
     if request.paths.is_empty() {
-        return Err(AppError::Validation("at least one file path is required".into()));
+        return Err(AppError::Validation(
+            "at least one file path is required".into(),
+        ));
     }
 
     let record = {
@@ -137,9 +163,10 @@ pub fn import_clipboard_image(
     database: State<'_, Database>,
     request: ClipboardImageRequest,
 ) -> AppResult<Record> {
-    let image = RgbaImage::from_raw(request.width, request.height, request.rgba).ok_or_else(|| {
-        AppError::Validation("clipboard image buffer does not match width/height".into())
-    })?;
+    let image =
+        RgbaImage::from_raw(request.width, request.height, request.rgba).ok_or_else(|| {
+            AppError::Validation("clipboard image buffer does not match width/height".into())
+        })?;
 
     let file_path = save_rgba_image(&database.attachments_dir, &image)?;
     let path_string = file_path.to_string_lossy().into_owned();
@@ -160,11 +187,7 @@ pub fn import_clipboard_image(
 }
 
 #[tauri::command]
-pub fn save_clipboard_image(
-    rgba: Vec<u8>,
-    width: u32,
-    height: u32,
-) -> AppResult<String> {
+pub fn save_clipboard_image(rgba: Vec<u8>, width: u32, height: u32) -> AppResult<String> {
     let image = RgbaImage::from_raw(width, height, rgba).ok_or_else(|| {
         AppError::Validation("clipboard image buffer does not match width/height".into())
     })?;
@@ -186,7 +209,9 @@ pub fn add_attachments_to_record(
     paths: Vec<String>,
 ) -> AppResult<Record> {
     if paths.is_empty() {
-        return Err(AppError::Validation("at least one file path is required".into()));
+        return Err(AppError::Validation(
+            "at least one file path is required".into(),
+        ));
     }
 
     let record = {
@@ -318,7 +343,8 @@ pub fn list_records(
     filter: Option<RecordFilter>,
 ) -> AppResult<Vec<RecordWithRelations>> {
     let conn = database.conn.lock()?;
-    let tag_ids = filter.as_ref()
+    let tag_ids = filter
+        .as_ref()
         .and_then(|f| f.tag_ids.clone())
         .unwrap_or_default();
     let records = db::list_records_filtered(&conn, filter.as_ref(), &tag_ids)?;
@@ -329,7 +355,8 @@ pub fn list_records(
         .into_iter()
         .map(|record| {
             let task = db::get_task_for_record(&conn, &record.id).unwrap_or(None);
-            RecordWithRelations::from_record(record, task, vec![], vec![], vec![], vec![])
+            let tags = db::list_record_tags(&conn, &record.id).unwrap_or_default();
+            RecordWithRelations::from_record(record, task, vec![], vec![], vec![], vec![], tags)
         })
         .collect();
     Ok(result)
@@ -345,6 +372,26 @@ pub fn get_record_detail(
     }
     let conn = database.conn.lock()?;
     db::get_record_with_relations(&conn, &id)
+}
+
+#[tauri::command]
+pub fn list_knowledge_memory(database: State<'_, Database>) -> AppResult<Vec<KnowledgeMemoryItem>> {
+    let conn = database.conn.lock()?;
+    db::list_knowledge_memory(&conn)
+}
+
+#[tauri::command]
+pub fn get_knowledge_memory_detail(
+    database: State<'_, Database>,
+    topic_id: String,
+) -> AppResult<KnowledgeMemoryDetail> {
+    if topic_id.trim().is_empty() {
+        return Err(AppError::Validation(
+            "knowledge topic id is required".into(),
+        ));
+    }
+    let conn = database.conn.lock()?;
+    db::get_knowledge_memory_detail(&conn, &topic_id)
 }
 
 #[tauri::command]
@@ -468,7 +515,11 @@ pub fn update_task_due_at(
 }
 
 #[tauri::command]
-pub fn remove_task(app: AppHandle, database: State<'_, Database>, task_id: String) -> AppResult<Task> {
+pub fn remove_task(
+    app: AppHandle,
+    database: State<'_, Database>,
+    task_id: String,
+) -> AppResult<Task> {
     if task_id.trim().is_empty() {
         return Err(AppError::Validation("task id is required".into()));
     }
@@ -510,6 +561,79 @@ pub fn list_unfinished_tasks(database: State<'_, Database>) -> AppResult<Vec<Unf
     db::list_unfinished_tasks(&conn)
 }
 
+#[tauri::command]
+pub fn list_pet_chat_sessions(
+    database: State<'_, Database>,
+    limit: Option<i64>,
+) -> AppResult<Vec<PetChatSession>> {
+    let conn = database.conn.lock()?;
+    db::list_pet_chat_sessions(&conn, limit.map(|value| value.clamp(1, 1000)).unwrap_or(-1))
+}
+
+#[tauri::command]
+pub fn count_pet_chat_sessions(database: State<'_, Database>) -> AppResult<i64> {
+    let conn = database.conn.lock()?;
+    db::count_pet_chat_sessions(&conn)
+}
+
+#[tauri::command]
+pub fn update_pet_chat_session_title(
+    database: State<'_, Database>,
+    session_id: String,
+    title: String,
+) -> AppResult<PetChatSession> {
+    let conn = database.conn.lock()?;
+    db::update_pet_chat_session_title(&conn, &session_id, &title)
+}
+
+#[tauri::command]
+pub async fn generate_pet_chat_title(
+    database: State<'_, Database>,
+    session_id: String,
+    user_message: String,
+    assistant_reply: String,
+    profile_id: Option<String>,
+    model: Option<String>,
+) -> AppResult<String> {
+    ai::generate_pet_chat_title(
+        &database,
+        &session_id,
+        &user_message,
+        &assistant_reply,
+        profile_id.as_deref(),
+        model.as_deref(),
+    ).await
+}
+
+#[tauri::command]
+pub fn delete_pet_chat_session(
+    database: State<'_, Database>,
+    session_id: String,
+) -> AppResult<()> {
+    let conn = database.conn.lock()?;
+    db::delete_pet_chat_session(&conn, &session_id)
+}
+
+#[tauri::command]
+pub fn get_latest_pet_chat_session(
+    database: State<'_, Database>,
+) -> AppResult<Option<PetChatSession>> {
+    let conn = database.conn.lock()?;
+    db::get_latest_pet_chat_session(&conn)
+}
+
+#[tauri::command]
+pub fn list_pet_chat_messages(
+    database: State<'_, Database>,
+    session_id: String,
+) -> AppResult<Vec<PetChatMessage>> {
+    if session_id.trim().is_empty() {
+        return Err(AppError::Validation("session id is required".into()));
+    }
+    let conn = database.conn.lock()?;
+    db::list_pet_chat_messages(&conn, &session_id)
+}
+
 /// Reorder tasks by updating their `sort_order` values.
 ///
 /// Accepts a list of `{ task_id: String, sort_order: i64 }` objects and
@@ -517,8 +641,31 @@ pub fn list_unfinished_tasks(database: State<'_, Database>) -> AppResult<Vec<Unf
 #[tauri::command]
 pub fn reorder_tasks(database: State<'_, Database>, order: Vec<TaskSortOrder>) -> AppResult<()> {
     let conn = database.conn.lock()?;
-    let order_tuples: Vec<(String, i64)> = order.iter().map(|o| (o.task_id.clone(), o.sort_order)).collect();
+    let order_tuples: Vec<(String, i64)> = order
+        .iter()
+        .map(|o| (o.task_id.clone(), o.sort_order))
+        .collect();
     db::reorder_tasks(&conn, &order_tuples)
+}
+
+/// Reorder records within a single view (notes/tasks) by updating their
+/// per-view `sort_order` values.
+///
+/// Accepts a `view_key` ("notes" or "tasks") and a list of
+/// `{ record_id, sort_order }` objects. Batch-updates each record's
+/// sort_order for that view in a single transaction.
+#[tauri::command]
+pub fn reorder_records(
+    database: State<'_, Database>,
+    view_key: String,
+    order: Vec<RecordSortOrder>,
+) -> AppResult<()> {
+    let conn = database.conn.lock()?;
+    let order_tuples: Vec<(String, i64)> = order
+        .iter()
+        .map(|o| (o.record_id.clone(), o.sort_order))
+        .collect();
+    db::reorder_records(&conn, &view_key, &order_tuples)
 }
 
 // ── Folder commands ─────────────────────────────────────────────
@@ -530,7 +677,11 @@ pub fn list_folders(database: State<'_, Database>) -> AppResult<Vec<Folder>> {
 }
 
 #[tauri::command]
-pub fn create_folder(app: AppHandle, database: State<'_, Database>, name: String) -> AppResult<Folder> {
+pub fn create_folder(
+    app: AppHandle,
+    database: State<'_, Database>,
+    name: String,
+) -> AppResult<Folder> {
     if name.trim().is_empty() {
         return Err(AppError::Validation("folder name is required".into()));
     }
@@ -543,7 +694,12 @@ pub fn create_folder(app: AppHandle, database: State<'_, Database>, name: String
 }
 
 #[tauri::command]
-pub fn rename_folder(app: AppHandle, database: State<'_, Database>, id: String, name: String) -> AppResult<Folder> {
+pub fn rename_folder(
+    app: AppHandle,
+    database: State<'_, Database>,
+    id: String,
+    name: String,
+) -> AppResult<Folder> {
     if id.trim().is_empty() {
         return Err(AppError::Validation("folder id is required".into()));
     }
@@ -596,9 +752,13 @@ pub struct FolderSortOrder {
 }
 
 #[tauri::command]
-pub fn reorder_folders(database: State<'_, Database>, order: Vec<FolderSortOrder>) -> AppResult<()> {
+pub fn reorder_folders(
+    database: State<'_, Database>,
+    order: Vec<FolderSortOrder>,
+) -> AppResult<()> {
     let conn = database.conn.lock()?;
-    let order_tuples: Vec<(String, i64)> = order.iter().map(|o| (o.id.clone(), o.sort_order)).collect();
+    let order_tuples: Vec<(String, i64)> =
+        order.iter().map(|o| (o.id.clone(), o.sort_order)).collect();
     db::reorder_folders(&conn, &order_tuples)
 }
 
@@ -618,7 +778,9 @@ pub fn create_tag(
         .conn
         .lock()
         .map_err(|e| e.to_string())
-        .and_then(|conn| db::create_tag(&conn, name.trim(), color.as_deref()).map_err(|e| e.to_string()))?;
+        .and_then(|conn| {
+            db::create_tag(&conn, name.trim(), color.as_deref()).map_err(|e| e.to_string())
+        })?;
     emit_data_changed(&app).map_err(|e| e.to_string())?;
     Ok(tag)
 }
@@ -661,11 +823,7 @@ pub fn update_tag(
 }
 
 #[tauri::command]
-pub fn delete_tag(
-    app: AppHandle,
-    database: State<'_, Database>,
-    id: String,
-) -> Result<(), String> {
+pub fn delete_tag(app: AppHandle, database: State<'_, Database>, id: String) -> Result<(), String> {
     if id.trim().is_empty() {
         return Err("tag id is required".to_string());
     }
@@ -692,7 +850,9 @@ pub fn set_record_tags(
         .conn
         .lock()
         .map_err(|e| e.to_string())
-        .and_then(|conn| db::set_record_tags(&conn, &record_id, &tag_ids).map_err(|e| e.to_string()))?;
+        .and_then(|conn| {
+            db::set_record_tags(&conn, &record_id, &tag_ids).map_err(|e| e.to_string())
+        })?;
     emit_data_changed(&app).map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -767,6 +927,120 @@ pub fn get_all_settings(database: State<'_, Database>) -> AppResult<Vec<Settings
     db::get_all_settings_with_defaults(&conn)
 }
 
+fn ensure_legacy_ai_profile(database: &Database) -> AppResult<()> {
+    let conn = database.conn.lock()?;
+    if !db::list_ai_profiles(&conn)?.is_empty() {
+        return Ok(());
+    }
+    let provider = db::get_setting_or(&conn, "ai_provider", "claude")?;
+    let model = db::get_setting_or(&conn, "ai_model", "claude-sonnet-4-20250514")?;
+    let base_url = db::get_setting_or(&conn, "ai_base_url", "")?;
+    let profile = db::create_ai_profile(
+        &conn,
+        &CreateAiProfileRequest {
+            name: "迁移的当前配置".into(),
+            provider,
+            base_url: (!base_url.trim().is_empty()).then_some(base_url),
+            default_model: model.clone(),
+            models: vec![model],
+            enabled: true,
+        },
+    )?;
+
+    if let Some(key) = credentials::get_ai_api_key()? {
+        credentials::set_ai_profile_api_key(&profile.id, &key)?;
+        credentials::clear_ai_api_key()?;
+    }
+    db::set_setting(&conn, "ai_default_profile_id", &profile.id)?;
+    db::delete_setting(&conn, "ai_api_key")?;
+    db::delete_setting(&conn, "claude_api_key")?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn list_ai_profiles(database: State<'_, Database>) -> AppResult<Vec<AiProfile>> {
+    ensure_legacy_ai_profile(&database)?;
+    let conn = database.conn.lock()?;
+    let mut profiles = db::list_ai_profiles(&conn)?;
+    for profile in &mut profiles {
+        profile.api_key_configured = credentials::get_ai_profile_api_key(&profile.id)?.is_some()
+            || profile.base_url.is_some();
+    }
+    Ok(profiles)
+}
+
+#[tauri::command]
+pub fn create_ai_profile(
+    app: AppHandle,
+    database: State<'_, Database>,
+    request: CreateAiProfileRequest,
+    api_key: Option<String>,
+) -> AppResult<AiProfile> {
+    let conn = database.conn.lock()?;
+    let profile = db::create_ai_profile(&conn, &request)?;
+    let should_set_default = db::get_setting(&conn, "ai_default_profile_id")?
+        .map(|entry| entry.value.trim().is_empty())
+        .unwrap_or(true);
+    if should_set_default {
+        db::set_setting(&conn, "ai_default_profile_id", &profile.id)?;
+    }
+    drop(conn);
+    let has_api_key = api_key.as_ref().is_some_and(|value| !value.trim().is_empty());
+    if let Some(key) = api_key.as_deref().filter(|value| !value.trim().is_empty()) {
+        credentials::set_ai_profile_api_key(&profile.id, key)?;
+    }
+    emit_settings_changed(&app)?;
+    Ok(AiProfile {
+        api_key_configured: has_api_key || request.base_url.is_some(),
+        ..profile
+    })
+}
+
+#[tauri::command]
+pub fn update_ai_profile(
+    app: AppHandle,
+    database: State<'_, Database>,
+    profile_id: String,
+    request: UpdateAiProfileRequest,
+) -> AppResult<()> {
+    let conn = database.conn.lock()?;
+    db::update_ai_profile(&conn, &profile_id, &request)?;
+    emit_settings_changed(&app)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn delete_ai_profile(
+    app: AppHandle,
+    database: State<'_, Database>,
+    profile_id: String,
+) -> AppResult<()> {
+    let conn = database.conn.lock()?;
+    db::delete_ai_profile(&conn, &profile_id)?;
+    drop(conn);
+    credentials::clear_ai_profile_api_key(&profile_id)?;
+    emit_settings_changed(&app)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn set_ai_profile_api_key(
+    app: AppHandle,
+    profile_id: String,
+    value: String,
+) -> AppResult<()> {
+    credentials::set_ai_profile_api_key(&profile_id, &value)?;
+    emit_settings_changed(&app)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn clear_ai_profile_api_key(app: AppHandle, profile_id: String) -> AppResult<()> {
+    credentials::clear_ai_profile_api_key(&profile_id)?;
+    emit_settings_changed(&app)?;
+    Ok(())
+}
+
 /// Upsert a single setting by key/value.
 #[tauri::command]
 pub fn update_setting(
@@ -778,8 +1052,47 @@ pub fn update_setting(
     if key.trim().is_empty() {
         return Err(AppError::Validation("setting key is required".into()));
     }
+    if matches!(key.as_str(), "ai_api_key" | "claude_api_key") {
+        return Err(AppError::Validation(
+            "AI API keys must be managed through secure credential storage".into(),
+        ));
+    }
     let conn = database.conn.lock()?;
     db::set_setting(&conn, &key, &value)?;
+    emit_settings_changed(&app)?;
+    Ok(())
+}
+
+/// Return only whether an AI API key is stored in the OS credential manager.
+#[tauri::command]
+pub fn get_ai_api_key_status() -> AppResult<AiApiKeyStatus> {
+    Ok(AiApiKeyStatus {
+        configured: credentials::get_ai_api_key()?.is_some(),
+    })
+}
+
+/// Store the AI API key in the OS credential manager, never in SQLite.
+#[tauri::command]
+pub fn set_ai_api_key(
+    app: AppHandle,
+    database: State<'_, Database>,
+    value: String,
+) -> AppResult<()> {
+    credentials::set_ai_api_key(&value)?;
+    let conn = database.conn.lock()?;
+    db::delete_setting(&conn, "ai_api_key")?;
+    db::delete_setting(&conn, "claude_api_key")?;
+    emit_settings_changed(&app)?;
+    Ok(())
+}
+
+/// Explicitly remove the AI API key from the OS credential manager.
+#[tauri::command]
+pub fn clear_ai_api_key(app: AppHandle, database: State<'_, Database>) -> AppResult<()> {
+    credentials::clear_ai_api_key()?;
+    let conn = database.conn.lock()?;
+    db::delete_setting(&conn, "ai_api_key")?;
+    db::delete_setting(&conn, "claude_api_key")?;
     emit_settings_changed(&app)?;
     Ok(())
 }
@@ -827,28 +1140,35 @@ pub fn set_shortcut(
 
             // Register the new shortcut first; if it conflicts the old one
             // stays registered so the user isn't left without a working shortcut.
-            match app.global_shortcut().on_shortcut(
-                new_shortcut,
-                |app, _shortcut, event| {
+            match app
+                .global_shortcut()
+                .on_shortcut(new_shortcut, |app, _shortcut, event| {
                     if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
                         let _ = windows::show_quick_input(app);
                     }
-                },
-            ) {
+                }) {
                 Ok(_) => {
                     // New shortcut registered — unregister the old one (best-effort).
                     if let Ok(old) = old_accel.parse::<Shortcut>() {
                         let _ = app.global_shortcut().unregister(old);
                     }
                     // Persist to DB and update in-memory state.
-                    persist_and_update(&database, &shortcut_state, "quick_capture_shortcut", &accelerator);
+                    persist_and_update(
+                        &database,
+                        &shortcut_state,
+                        "quick_capture_shortcut",
+                        &accelerator,
+                    );
                     let _ = emit_settings_changed(&app);
-                    SetShortcutResult { ok: true, error: None }
+                    SetShortcutResult {
+                        ok: true,
+                        error: None,
+                    }
                 }
                 Err(e) => SetShortcutResult {
                     ok: false,
                     error: Some(e.to_string()),
-                }
+                },
             }
         }
         "screenshot_shortcut" => {
@@ -858,21 +1178,73 @@ pub fn set_shortcut(
                 .map(|g| g.clone())
                 .unwrap_or_default();
 
-            match app.global_shortcut().on_shortcut(
-                new_shortcut,
-                |app, _shortcut, event| {
+            match app
+                .global_shortcut()
+                .on_shortcut(new_shortcut, |app, _shortcut, event| {
                     if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
                         let _ = windows::show_window(app, windows::SCREENSHOT_OVERLAY_LABEL);
                     }
-                },
-            ) {
+                }) {
                 Ok(_) => {
                     if let Ok(old) = old_accel.parse::<Shortcut>() {
                         let _ = app.global_shortcut().unregister(old);
                     }
-                    persist_and_update(&database, &shortcut_state, "screenshot_shortcut", &accelerator);
+                    persist_and_update(
+                        &database,
+                        &shortcut_state,
+                        "screenshot_shortcut",
+                        &accelerator,
+                    );
                     let _ = emit_settings_changed(&app);
-                    SetShortcutResult { ok: true, error: None }
+                    SetShortcutResult {
+                        ok: true,
+                        error: None,
+                    }
+                }
+                Err(e) => SetShortcutResult {
+                    ok: false,
+                    error: Some(e.to_string()),
+                },
+            }
+        }
+        "recording_shortcut" => {
+            let old_accel = shortcut_state
+                .recording
+                .lock()
+                .map(|g| g.clone())
+                .unwrap_or_default();
+
+            match app
+                .global_shortcut()
+                .on_shortcut(new_shortcut, |app, _shortcut, event| {
+                    if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                        let data_dir = match app.path().app_local_data_dir() {
+                            Ok(dir) => dir,
+                            Err(error) => {
+                                crate::emit_recording_error(app, error.to_string());
+                                return;
+                            }
+                        };
+                        if let Err(error) = crate::audio::toggle_recording(app, &data_dir) {
+                            crate::emit_recording_error(app, error.to_string());
+                        }
+                    }
+                }) {
+                Ok(_) => {
+                    if let Ok(old) = old_accel.parse::<Shortcut>() {
+                        let _ = app.global_shortcut().unregister(old);
+                    }
+                    persist_and_update(
+                        &database,
+                        &shortcut_state,
+                        "recording_shortcut",
+                        &accelerator,
+                    );
+                    let _ = emit_settings_changed(&app);
+                    SetShortcutResult {
+                        ok: true,
+                        error: None,
+                    }
                 }
                 Err(e) => SetShortcutResult {
                     ok: false,
@@ -909,6 +1281,11 @@ fn persist_and_update(
                 *g = accelerator.to_string();
             }
         }
+        "recording_shortcut" => {
+            if let Ok(mut g) = shortcut_state.recording.lock() {
+                *g = accelerator.to_string();
+            }
+        }
         _ => {}
     }
 }
@@ -933,9 +1310,18 @@ pub fn create_ai_result(
     Ok(result)
 }
 
-/// Read a record + attachments, call Claude via HTTP, store an AiResult, and return it.
-/// The Claude API key must be stored in settings under the key `claude_api_key`.
-/// If the record has image attachments, the first one is sent as optional vision input.
+#[tauri::command]
+pub async fn run_ai_task(
+    app: AppHandle,
+    database: State<'_, Database>,
+    request: RunAiTaskRequest,
+) -> AppResult<AiTaskRun> {
+    let result = crate::ai::run_task(&database, request).await?;
+    emit_data_changed(&app)?;
+    Ok(result)
+}
+
+/// Legacy compatibility path for the old single-record AI analysis command.
 #[tauri::command]
 pub async fn request_ai_enhancement(
     database: State<'_, Database>,
@@ -945,203 +1331,34 @@ pub async fn request_ai_enhancement(
         return Err(AppError::Validation("record id is required".into()));
     }
 
-    // Step 1: Fetch record + settings + attachments from DB (lock briefly)
-    let (record, attachments, api_key) = {
-        let conn = database.conn.lock()?;
-        let record = db::get_record(&conn, &record_id)?;
-        let api_key = db::get_setting(&conn, "claude_api_key")?
-            .ok_or_else(|| {
-                AppError::Validation(
-                    "Claude API key not configured. Set it in settings under 'claude_api_key'."
-                        .into(),
-                )
-            })?
-            .value;
-        let attachments = db::get_attachments_for_record(&conn, &record_id)?;
-        (record, attachments, api_key)
+    let request = RunAiTaskRequest {
+        task_type: crate::models::AiTaskType::LearningAnalysis,
+        payload: serde_json::json!({
+            "recordId": record_id,
+            "includeRelatedTasks": true,
+            "interactionMode": "prepare"
+        }),
     };
 
-    // Step 2: Build a text summary of the record
-    let mut text = String::new();
-    if let Some(ref title) = record.title {
-        text.push_str(&format!("Title: {title}\n\n"));
-    }
-    if let Some(ref content) = record.content {
-        text.push_str(&format!("Content: {content}\n\n"));
-    }
-    text.push_str(&format!("Source: {}", record.source.as_str()));
+    let task_run = crate::ai::run_task(&database, request).await?;
+    let source_record_id = task_run.source_record_id.ok_or_else(|| {
+        AppError::State("learning analysis did not return a source_record_id".into())
+    })?;
 
-    // Find the first image-type attachment
-    let image_attachment = attachments
-        .iter()
-        .find(|a| a.file_type == AttachmentType::Image || a.file_type == AttachmentType::Screenshot);
+    let conn = database.conn.lock()?;
+    db::get_ai_results_for_record(&conn, &source_record_id)?
+        .into_iter()
+        .next()
+        .ok_or_else(|| AppError::NotFound(format!("ai_result for record {}", source_record_id)))
+}
 
-    // Step 3: Build the Claude API request payload
-    let system_prompt = r#"You are an AI analysis assistant. Analyze the provided captured record and return ONLY a raw JSON object (no markdown, no code fences) with these fields:
-{
-  "summary": "concise summary of the record",
-  "tags": "comma-separated tags",
-  "suggested_tasks": "any follow-up tasks or action items",
-  "research_result": "additional insights or context",
-  "sensitivity_flag": "one of: none, low, medium, high"
-}"#;
-
-    let mut content_blocks: Vec<serde_json::Value> = Vec::new();
-    content_blocks.push(serde_json::json!({
-        "type": "text",
-        "text": format!("Please analyze this captured record:\n\n{text}")
-    }));
-
-    if let Some(att) = image_attachment {
-        let path = std::path::Path::new(&att.local_path);
-        if path.exists() {
-            match std::fs::read(path) {
-                Ok(bytes) => {
-                    use base64::Engine;
-                    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
-                    let media_type = if att.mime_type == "image/png"
-                        || att.mime_type == "image/jpeg"
-                        || att.mime_type == "image/webp"
-                    {
-                        &att.mime_type
-                    } else {
-                        "image/png"
-                    };
-                    content_blocks.push(serde_json::json!({
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": media_type,
-                            "data": b64
-                        }
-                    }));
-                }
-                Err(_) => {
-                    // skip image if read fails — still send text-only
-                }
-            }
-        }
-    }
-
-    let request_body = serde_json::json!({
-        "model": "claude-opus-4-7",
-        "max_tokens": 4096,
-        "system": system_prompt,
-        "thinking": { "type": "adaptive" },
-        "messages": [
-            {
-                "role": "user",
-                "content": content_blocks
-            }
-        ]
-    });
-
-    // Step 4: Send the HTTP request to Anthropic
-    let client = reqwest::Client::new();
-    let response = client
-        .post("https://api.anthropic.com/v1/messages")
-        .header("x-api-key", &api_key)
-        .header("anthropic-version", "2023-06-01")
-        .header("content-type", "application/json")
-        .json(&request_body)
-        .send()
-        .await
-        .map_err(|e| AppError::State(format!("Claude API request failed: {e}")))?;
-
-    let status = response.status();
-    let response_text = response
-        .text()
-        .await
-        .map_err(|e| AppError::State(format!("Failed to read Claude API response: {e}")))?;
-
-    if !status.is_success() {
-        return Err(AppError::State(format!(
-            "Claude API returned {status}: {response_text}"
-        )));
-    }
-
-    // Step 5: Parse the response — find the first text content block
-    let response_json: serde_json::Value = serde_json::from_str(&response_text)
-        .map_err(|e| AppError::State(format!("Failed to parse Claude JSON: {e}")))?;
-
-    let raw_text = response_json["content"]
-        .as_array()
-        .and_then(|blocks| {
-            blocks
-                .iter()
-                .find_map(|b| (b["type"] == "text").then(|| b["text"].as_str()))
-                .flatten()
-        })
-        .unwrap_or("");
-
-    // Claude might wrap in markdown fences — try to extract
-    let cleaned = if raw_text.starts_with("```") {
-        raw_text
-            .lines()
-            .skip(1)
-            .take_while(|line| !line.starts_with("```"))
-            .collect::<Vec<_>>()
-            .join("\n")
-    } else {
-        raw_text.to_string()
-    };
-
-    let parsed: serde_json::Value =
-        serde_json::from_str(&cleaned).unwrap_or_else(|_| serde_json::json!({ "summary": raw_text }));
-
-    let summary = parsed["summary"].as_str().map(String::from);
-    let tags = parsed["tags"].as_str().map(String::from);
-    let suggested_tasks = parsed["suggested_tasks"].as_str().map(String::from);
-    let research_result = parsed["research_result"].as_str().map(String::from);
-    let sensitivity_flag = parsed["sensitivity_flag"].as_str().map(String::from);
-
-    // Step 6: Persist as an AiResult
-    let ai_result = {
-        let conn = database.conn.lock()?;
-        let result = db::insert_ai_result(
-            &conn,
-            CreateAiResultRequest {
-                record_id: record_id.clone(),
-                trigger_mode: AiTriggerMode::Manual,
-                model_provider: Some("anthropic".into()),
-                model_name: Some("claude-opus-4-7".into()),
-                summary,
-                tags: tags.clone(),
-                suggested_tasks,
-                research_result,
-                sensitivity_flag,
-            },
-        )?;
-
-        // Auto-promote AI tags to user-managed tags
-        if let Some(ref tags_csv) = tags {
-            let tag_names: Vec<String> = tags_csv
-                .split(',')
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect();
-            if !tag_names.is_empty() {
-                let mut tag_ids: Vec<String> = Vec::new();
-                for name in &tag_names {
-                    match db::find_or_create_tag_by_name(&conn, name) {
-                        Ok(tag) => tag_ids.push(tag.id),
-                        Err(e) => {
-                            eprintln!("Failed to find/create tag '{}': {}", name, e);
-                        }
-                    }
-                }
-                if !tag_ids.is_empty() {
-                    if let Err(e) = db::link_tags_to_record(&conn, &record_id, &tag_ids) {
-                        eprintln!("Failed to link tags to record: {}", e);
-                    }
-                }
-            }
-        }
-
-        result
-    };
-
-    Ok(ai_result)
+#[tauri::command]
+pub async fn trigger_ai_analysis(
+    database: State<'_, Database>,
+    record_id: String,
+    _trigger_mode: Option<String>,
+) -> AppResult<AiResult> {
+    request_ai_enhancement(database, record_id).await
 }
 
 fn insert_default_task(conn: &rusqlite::Connection, record_id: &str) -> AppResult<()> {

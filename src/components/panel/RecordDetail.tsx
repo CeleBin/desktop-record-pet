@@ -4,23 +4,31 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type ReactNode,
 } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { listenForFileDrops } from "../../lib/dragDrop";
-import { useEditorPreviewResize } from "../../lib/useEditorPreviewResize";
 import { useTocResize } from "../../lib/useTocResize";
+import { extractMarkdownToc } from "../../lib/markdownToc";
 
-import { addAttachmentsToRecord, getRecordDetail, saveClipboardImage, setRecordTags, triggerAiAnalysis } from "../../lib/tauri";
+import { addAttachmentsToRecord, getRecordDetail, runAiTask, saveClipboardImage, setRecordTags } from "../../lib/tauri";
+import { useLearningCoachStore } from "../../store/learningCoach";
 import { useRecordsStore } from "../../store/records";
 import { useTagsStore } from "../../store/tags";
 import type {
+  AiResultItem,
+  LearningAnalysisResult,
   RecordWithRelations,
+  RepeatRule,
   TaskStatus,
   UpdateRecordRequest,
 } from "../../types";
+import { formatRepeatRule, parseRepeatRule } from "../../types";
+import { DatePicker } from "../todo/DatePicker";
+import { RepeatOption, WeeklyRepeatOption } from "../todo/RepeatRuleOptions";
+import { MarkdownEditor, isBlankMarkdown } from "./MarkdownEditor";
 
 interface RecordDetailProps {
   record: RecordWithRelations | null;
@@ -28,7 +36,10 @@ interface RecordDetailProps {
   onUpdate: (id: string, update: UpdateRecordRequest) => Promise<void>;
   onConvertToTask: (recordId: string) => Promise<void>;
   onUpdateTaskStatus: (taskId: string, status: TaskStatus, recordId: string) => Promise<void>;
+  onUpdateDueAt: (recordId: string, taskId: string, dueAt: string | null) => Promise<void>;
+  onUpdateRepeatRule: (taskId: string, repeatRule: string | null) => Promise<void>;
   onDelete: (id: string) => void;
+  growthPreviewEnabled: boolean;
 }
 
 const TYPE_LABELS: Record<string, string> = {
@@ -49,12 +60,104 @@ const SOURCE_LABELS: Record<string, string> = {
   "file-picker": "文件选择",
 };
 
+export function getDocumentSaveStatus({
+  titleDraft,
+  savedTitle,
+  contentDraft,
+  savedContent,
+}: {
+  titleDraft: string;
+  savedTitle: string;
+  contentDraft: string;
+  savedContent: string;
+}): string {
+  return titleDraft.trim() !== savedTitle.trim() || contentDraft.trim() !== savedContent.trim()
+    ? "有未保存更改"
+    : "所有更改已保存";
+}
+
+export function shouldFlushRichEditorForRecord(
+  richEditorRecordId: string | null,
+  targetRecordId: string,
+): boolean {
+  return richEditorRecordId === targetRecordId;
+}
+
+export function shouldMountRichEditorForRecord(
+  draftRecordId: string | null,
+  recordId: string,
+): boolean {
+  return draftRecordId === recordId;
+}
+
+export function getRecordDetailInstanceKey(recordId: string | null): string {
+  return recordId ?? "empty-record";
+}
+
+export function clearDocumentPendingSaves(): { content: null; title: null } {
+  return { content: null, title: null };
+}
+
+export function getTocHeadingSelector(richHeadingCount: number): string {
+  return richHeadingCount > 0 ? '[data-content-type="heading"]' : "h1, h2, h3";
+}
+
+export async function saveDocumentWithLatestMarkdown(
+  flush: (() => Promise<string>) | null,
+  persist: (markdown?: string) => Promise<void>,
+): Promise<void> {
+  await persist(await flush?.());
+}
+
+export function createDocumentWriteQueue() {
+  let generation = 0;
+  let tail: Promise<void> = Promise.resolve();
+  return {
+    beginSession: () => ++generation,
+    invalidate: () => ++generation,
+    enqueue: (session: number, write: () => Promise<void>): Promise<boolean> => {
+      const result = tail.then(async () => {
+        if (session !== generation) return false;
+        await write();
+        return true;
+      });
+      tail = result.then(() => undefined, () => undefined);
+      return result;
+    },
+    settle: () => tail,
+  };
+}
+
 const TASK_STATUS_OPTIONS: { label: string; value: TaskStatus; activeClasses: string; dot: string }[] = [
   { label: "待办", value: "todo", activeClasses: "bg-primary/20 text-primary ring-1 ring-primary/30", dot: "bg-primary" },
   { label: "进行中", value: "doing", activeClasses: "bg-sky-400/20 text-sky-300 ring-1 ring-sky-400/30", dot: "bg-sky-400" },
   { label: "已完成", value: "done", activeClasses: "bg-secondary/20 text-secondary ring-1 ring-secondary/30", dot: "bg-secondary" },
   { label: "已取消", value: "cancelled", activeClasses: "bg-text-muted/20 text-text-muted ring-1 ring-text-muted/20", dot: "bg-text-muted" },
 ];
+
+const KNOWLEDGE_STATUS_LABELS: Record<string, string> = {
+  candidate: "待确认",
+  understanding: "初步理解",
+  mastered: "已掌握",
+  awareness: "待确认",
+  rejected: "不是知识点",
+};
+
+interface EffectiveKnowledgeTopic {
+  key: string;
+  topicId: string | null;
+  name: string;
+  rawStatus: string;
+  masteryLevel: string;
+  summary: string;
+  evidenceText: string;
+  canPromote: boolean;
+}
+
+interface PersistedLearningAnalysisEntry {
+  ai: AiResultItem;
+  result: LearningAnalysisResult;
+}
 
 function formatDateTime(iso: string): string {
   try {
@@ -68,6 +171,73 @@ function formatDateTime(iso: string): string {
     });
   } catch {
     return iso;
+  }
+}
+
+/**
+ * 将 "YYYY-MM-DD" 字符串解析为中文本地化显示，附带颜色编码。
+ * - 已过期：玫瑰色（text-danger）
+ * - 今天/3天内：琥珀色（text-primary）
+ * - 未来：默认灰色（text-text0）
+ */
+function getDueDisplay(dueAt: string | null): { display: string; className: string } | null {
+  if (!dueAt) return null;
+  const dueDate = new Date(dueAt);
+  if (isNaN(dueDate.getTime())) return null;
+  const m = dueDate.getMonth() + 1;
+  const d = dueDate.getDate();
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const diffTime = dueDate.getTime() - today.getTime();
+  const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24));
+  const dateStr = `${m}月${d}日`;
+
+  if (diffDays < 0) return { display: `${dateStr} · 已过期`, className: "text-danger" };
+  if (diffDays === 0) return { display: `${dateStr} · 今天到期`, className: "text-primary" };
+  if (diffDays <= 3) return { display: `${dateStr} · ${diffDays}天后`, className: "text-primary" };
+  return { display: `${dateStr} · ${diffDays}天后`, className: "text-text0" };
+}
+
+function normalizeTopicName(name: string): string {
+  return name.trim().toLocaleLowerCase();
+}
+
+function isLearningAnalysisResult(value: unknown): value is LearningAnalysisResult {
+  if (!value || typeof value !== "object") return false;
+
+  const candidate = value as Record<string, unknown>;
+  if (typeof candidate.summary !== "string") return false;
+  if (!Array.isArray(candidate.knowledge_points)) return false;
+  if (!Array.isArray(candidate.questions_for_user)) return false;
+  if (!Array.isArray(candidate.suggested_memory_updates)) return false;
+
+  return candidate.knowledge_points.every((point) => {
+    if (!point || typeof point !== "object") return false;
+    const item = point as Record<string, unknown>;
+    return (
+      typeof item.name === "string"
+      && typeof item.confidence === "number"
+      && typeof item.example_from_note === "string"
+    );
+  }) && candidate.questions_for_user.every((question) => typeof question === "string")
+    && candidate.suggested_memory_updates.every((update) => {
+      if (!update || typeof update !== "object") return false;
+      const item = update as Record<string, unknown>;
+      return (
+        typeof item.topic === "string"
+        && typeof item.mastery_level === "string"
+        && typeof item.evidence === "string"
+      );
+    });
+}
+
+function parseLearningAnalysisResult(raw: string | null | undefined): LearningAnalysisResult | null {
+  if (!raw) return null;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return isLearningAnalysisResult(parsed) ? parsed : null;
+  } catch {
+    return null;
   }
 }
 
@@ -116,30 +286,6 @@ function blobToRgba(blob: Blob): Promise<{ rgba: Uint8Array; width: number; heig
 
 // ── Markdown helpers ────────────────────────────────────────────────
 
-interface TocEntry {
-  level: number;
-  text: string;
-  /** ordinal position among h1–h3 headings in document order */
-  index: number;
-}
-
-/** Extract h1–h3 headings from raw markdown into a TOC (index-based). */
-function extractToc(md: string): TocEntry[] {
-  const toc: TocEntry[] = [];
-  if (!md) return toc;
-  let index = 0;
-  for (const line of md.split("\n")) {
-    const m = line.match(/^(#{1,3})\s+(.+?)\s*#*\s*$/);
-    if (!m) continue;
-    const level = m[1].length;
-    const text = m[2].replace(/[*_`~]/g, "").trim();
-    if (!text) continue;
-    toc.push({ level, text, index });
-    index += 1;
-  }
-  return toc;
-}
-
 // ── Component ───────────────────────────────────────────────────────
 
 export function RecordDetail({
@@ -148,29 +294,35 @@ export function RecordDetail({
   onUpdate,
   onConvertToTask,
   onUpdateTaskStatus,
+  onUpdateDueAt,
+  onUpdateRepeatRule,
   onDelete,
+  growthPreviewEnabled,
 }: RecordDetailProps) {
   const [editingTitle, setEditingTitle] = useState(false);
   const [editingContent, setEditingContent] = useState(false);
-  const [showPreview, setShowPreview] = useState(true);
+  const [draftRecordId, setDraftRecordId] = useState<string | null>(null);
   const [titleDraft, setTitleDraft] = useState("");
   const [contentDraft, setContentDraft] = useState("");
+  const [isSavingContent, setIsSavingContent] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [converting, setConverting] = useState(false);
   const [updatingStatus, setUpdatingStatus] = useState(false);
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [showRepeatPicker, setShowRepeatPicker] = useState(false);
   const [aiAnalyzing, setAiAnalyzing] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
+  const [latestAiResult, setLatestAiResult] = useState<LearningAnalysisResult | null>(null);
   //全屏预览窗口
   const [previewSrc, setPreviewSrc] = useState<string | null>(null);
-
-  // ── Editor / preview split ratio (persisted, proportional resize) ──
-  const { ratio: editorRatio, startResize: startEditorResize, resetRatio: resetEditorRatio } =
-    useEditorPreviewResize();
+  const aiSectionRef = useRef<HTMLElement | null>(null);
 
   // ── TOC rail width (persisted, clamped px resize) ──
   const { width: tocWidth, startResize: startTocResize, resetWidth: resetTocWidth } =
     useTocResize();
 
-  const { selectRecord } = useRecordsStore();
+  const { selectRecord, hydrateRecord } = useRecordsStore();
+  const startLearningSession = useLearningCoachStore((state) => state.startSession);
   const allTags = useTagsStore((s) => s.tags);
   const createTag = useTagsStore((s) => s.createTag);
 
@@ -200,6 +352,52 @@ export function RecordDetail({
     () => new Set(record?.tags.map((t) => t.id) ?? []),
     [record?.tags],
   );
+
+  const effectiveKnowledgeTopics = useMemo<EffectiveKnowledgeTopic[]>(
+    () => (record?.knowledge_topics ?? []).map((topic) => ({
+      key: `${topic.topic_id}-${topic.updated_at}`,
+      topicId: topic.topic_id,
+      name: topic.name,
+      rawStatus: topic.mastery_level,
+      masteryLevel: KNOWLEDGE_STATUS_LABELS[topic.mastery_level] ?? topic.mastery_level,
+      summary: topic.summary,
+      evidenceText: topic.evidence_text,
+      canPromote: topic.mastery_level === "candidate",
+    })),
+    [record?.knowledge_topics],
+  );
+
+  const knowledgeTopicByName = useMemo(() => {
+    const map = new Map<string, EffectiveKnowledgeTopic>();
+    effectiveKnowledgeTopics.forEach((topic) => {
+      map.set(normalizeTopicName(topic.name), topic);
+    });
+    return map;
+  }, [effectiveKnowledgeTopics]);
+
+  const { persistedLearningAnalysisEntries, legacyAiResults } = useMemo(() => {
+    const entries: PersistedLearningAnalysisEntry[] = [];
+    const legacy: AiResultItem[] = [];
+
+    for (const ai of record?.ai_results ?? []) {
+      const parsed = parseLearningAnalysisResult(ai.research_result);
+      if (parsed) {
+        entries.push({ ai, result: parsed });
+      } else {
+        legacy.push(ai);
+      }
+    }
+
+    return {
+      persistedLearningAnalysisEntries: entries,
+      legacyAiResults: legacy,
+    };
+  }, [record?.ai_results]);
+
+  const visibleLatestAiResult = useMemo(() => {
+    if (!latestAiResult) return null;
+    return persistedLearningAnalysisEntries.length === 0 ? latestAiResult : null;
+  }, [latestAiResult, persistedLearningAnalysisEntries.length]);
 
   const availableTags = useMemo(
     () => allTags.filter((t) => !recordTagIds.has(t.id)),
@@ -249,23 +447,6 @@ export function RecordDetail({
   }, [record, newTagName, newTagColor, createTag, handleAddTag]);
 
   const titleRef = useRef<HTMLInputElement>(null);
-  const contentRef = useRef<HTMLTextAreaElement>(null);
-  // Mirrors contentDraft for use inside async callbacks (paste/drop) where
-  // the closure would otherwise capture a stale value.
-  const contentDraftRef = useRef("");
-  useEffect(() => {
-    contentDraftRef.current = contentDraft;
-  }, [contentDraft]);
-
-  // Mirrors record + editingContent for the window-level drag-drop listener.
-  const recordRef = useRef(record);
-  useEffect(() => {
-    recordRef.current = record;
-  }, [record]);
-  const editingContentRef = useRef(editingContent);
-  useEffect(() => {
-    editingContentRef.current = editingContent;
-  }, [editingContent]);
 
   // ── Auto-save infrastructure ──────────────────────────────────────
   // The auto-save system works as follows:
@@ -287,6 +468,16 @@ export function RecordDetail({
   // Last content successfully persisted (trimmed). Prevents redundant saves
   // and feedback loops.
   const lastSavedContentRef = useRef<string>("");
+  // Content as it was when the current edit session started. Used by
+  // finishEditContent ("取消") to revert any auto-saved intermediate versions
+  // back to the pre-edit content.
+  const editStartContentRef = useRef<string>("");
+  const editStartTitleRef = useRef<string>("");
+  const flushRichEditorRef = useRef<(() => Promise<string>) | null>(null);
+  const richEditorRecordIdRef = useRef<string | null>(null);
+  const contentSaveInFlightRef = useRef(false);
+  const writeQueueRef = useRef(createDocumentWriteQueue());
+  const editSessionRef = useRef(0);
 
   // Mirror titleDraft for use in async flush callbacks.
   const titleDraftRef = useRef("");
@@ -298,29 +489,39 @@ export function RecordDetail({
 
   // Flush a single pending content save. Reads from ref → safe to call from
   // any effect cleanup or callback without stale-closure issues.
-  const flushContentSave = useCallback(() => {
+  const flushContentSave = useCallback(async () => {
     const pending = pendingContentSaveRef.current;
     if (!pending) return;
     pendingContentSaveRef.current = null;
+    if (draftRecordIdRef.current !== pending.recordId) return;
     const trimmed = pending.content.trim();
     if (trimmed === lastSavedContentRef.current.trim()) return;
-    lastSavedContentRef.current = trimmed;
-    void onUpdate(pending.recordId, {
-      content: trimmed.length > 0 ? trimmed : null,
-    });
+    try {
+      const applied = await writeQueueRef.current.enqueue(editSessionRef.current, async () => {
+        await onUpdate(pending.recordId, { content: trimmed });
+      });
+      if (applied) lastSavedContentRef.current = trimmed;
+    } catch {
+      pendingContentSaveRef.current = pending;
+    }
   }, [onUpdate]);
 
   // Flush a single pending title save.
-  const flushTitleSave = useCallback(() => {
+  const flushTitleSave = useCallback(async () => {
     const pending = pendingTitleSaveRef.current;
     if (!pending) return;
     pendingTitleSaveRef.current = null;
+    if (draftRecordIdRef.current !== pending.recordId) return;
     const trimmed = pending.title.trim();
     if (trimmed === lastSavedTitleRef.current.trim()) return;
-    lastSavedTitleRef.current = trimmed;
-    void onUpdate(pending.recordId, {
-      title: trimmed.length > 0 ? trimmed : null,
-    });
+    try {
+      const applied = await writeQueueRef.current.enqueue(editSessionRef.current, async () => {
+        await onUpdate(pending.recordId, { title: trimmed });
+      });
+      if (applied) lastSavedTitleRef.current = trimmed;
+    } catch {
+      pendingTitleSaveRef.current = pending;
+    }
   }, [onUpdate]);
 
   // Points at whichever markdown container is currently rendered (view body or
@@ -330,7 +531,8 @@ export function RecordDetail({
   const scrollToHeading = useCallback((index: number) => {
     const container = markdownContainerRef.current;
     if (!container) return;
-    const headings = container.querySelectorAll("h1, h2, h3");
+    const richHeadings = container.querySelectorAll('[data-content-type="heading"]');
+    const headings = container.querySelectorAll(getTocHeadingSelector(richHeadings.length));
     const target = headings[index];
     if (target) {
       target.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -340,47 +542,37 @@ export function RecordDetail({
   const mdComponents = useMemo(
     () => ({
       h1: ({ children }: { children?: ReactNode }) => (
-        <h1 className="text-xl font-semibold mt-6 mb-3 text-text scroll-mt-4">
-          {children}
-        </h1>
+        <h1 className="scroll-mt-4">{children}</h1>
       ),
       h2: ({ children }: { children?: ReactNode }) => (
-        <h2 className="text-lg font-semibold mt-5 mb-2 text-text scroll-mt-4">
-          {children}
-        </h2>
+        <h2 className="scroll-mt-4">{children}</h2>
       ),
       h3: ({ children }: { children?: ReactNode }) => (
-        <h3 className="text-base font-semibold mt-4 mb-2 text-text scroll-mt-4">
-          {children}
-        </h3>
+        <h3 className="scroll-mt-4">{children}</h3>
       ),
-      p: ({ children }: { children?: ReactNode }) => (
-        <p className="text-sm leading-6 text-text my-2">{children}</p>
+      h4: ({ children }: { children?: ReactNode }) => (
+        <h4 className="scroll-mt-4">{children}</h4>
       ),
+      p: ({ children }: { children?: ReactNode }) => <p>{children}</p>,
       ul: ({ children }: { children?: ReactNode }) => (
-        <ul className="list-disc pl-5 space-y-1 text-sm text-text my-2">{children}</ul>
+        <ul className="list-disc">{children}</ul>
       ),
       ol: ({ children }: { children?: ReactNode }) => (
-        <ol className="list-decimal pl-5 space-y-1 text-sm text-text my-2">{children}</ol>
+        <ol className="list-decimal">{children}</ol>
       ),
-      li: ({ children }: { children?: ReactNode }) => (
-        <li className="text-sm leading-6 text-text">{children}</li>
-      ),
+      li: ({ children }: { children?: ReactNode }) => <li>{children}</li>,
       a: ({ children, href }: { children?: ReactNode; href?: string }) => (
         <a
           href={href}
           target="_blank"
           rel="noreferrer"
           onClick={(e) => e.stopPropagation()}
-          className="text-secondary hover:text-secondary underline underline-offset-2"
         >
           {children}
         </a>
       ),
       blockquote: ({ children }: { children?: ReactNode }) => (
-        <blockquote className="border-l-2 border-secondary/30 bg-white/[2%] pl-4 py-2 my-3 text-text-muted italic text-sm">
-          {children}
-        </blockquote>
+        <blockquote>{children}</blockquote>
       ),
       code: ({
         className,
@@ -393,31 +585,37 @@ export function RecordDetail({
         if (isBlock) {
           return <code className={className}>{children}</code>;
         }
-        return (
-          <code className="rounded bg-surface-2/80 px-1.5 py-0.5 text-[0.85em] text-secondary">
-            {children}
-          </code>
-        );
+        return <code>{children}</code>;
       },
-      pre: ({ children }: { children?: ReactNode }) => (
-        <pre className="rounded-xl border border-border bg-surface/80 px-4 py-3 overflow-x-auto text-[13px] my-3">
-          {children}
-        </pre>
-      ),
+      pre: ({ children }: { children?: ReactNode }) => <pre>{children}</pre>,
       table: ({ children }: { children?: ReactNode }) => (
-        <div className="overflow-x-auto my-3">
-          <table className="w-full border-collapse text-[13px]">{children}</table>
+        <div className="overflow-x-auto">
+          <table>{children}</table>
         </div>
       ),
-      th: ({ children }: { children?: ReactNode }) => (
-        <th className="border border-border px-3 py-1.5 text-left text-text bg-white/5">
+      th: ({
+        children,
+        style,
+      }: {
+        children?: ReactNode;
+        style?: CSSProperties;
+      }) => (
+        <th style={style} className="text-left">
           {children}
         </th>
       ),
-      td: ({ children }: { children?: ReactNode }) => (
-        <td className="border border-border px-3 py-1.5 text-text-muted">{children}</td>
+      td: ({
+        children,
+        style,
+      }: {
+        children?: ReactNode;
+        style?: CSSProperties;
+      }) => (
+        <td style={style} className="text-left">
+          {children}
+        </td>
       ),
-      hr: () => <hr className="border-border my-6" />,
+      hr: () => <hr />,
       img: ({ src, alt }: { src?: string; alt?: string }) => {
         if (!src) return null;
         const resolved = /^(https?:|data:|asset:|blob:)/i.test(src)
@@ -429,7 +627,7 @@ export function RecordDetail({
             src={resolved}
             alt={alt}
             onClick={() => setPreviewSrc(resolved)}
-            className="max-h-96 w-full cursor-zoom-in rounded-xl border border-border object-contain my-3"
+            className="max-h-96 cursor-zoom-in"
           />
         );
       },
@@ -439,7 +637,7 @@ export function RecordDetail({
 
   // TOC source — draft while editing, final content while viewing
   const tocSource = editingContent ? contentDraft : (record?.content ?? "");
-  const toc = useMemo(() => extractToc(tocSource), [tocSource]);
+  const toc = useMemo(() => extractMarkdownToc(tocSource), [tocSource]);
 
   // Keep lastSaved* refs in sync with the record from the server.
   useEffect(() => {
@@ -453,20 +651,36 @@ export function RecordDetail({
     // Only auto-save if the draft belongs to the currently selected record.
     if (draftRecordIdRef.current !== record.id) return;
     const draft = contentDraft;
+    // Safety net: never auto-save an empty draft over a non-empty saved
+    // document. An empty serialization usually means the editor failed to
+    // hydrate/parse the document, not that the user deleted everything.
+    // A draft holding only blank-line markers (U+200B) is equally empty.
+    if (
+      isBlankMarkdown(draft) &&
+      lastSavedContentRef.current.trim() !== ""
+    ) {
+      console.warn(
+        "[RecordDetail] Blocked empty auto-save for record",
+        record.id,
+        "(saved content is non-empty)",
+      );
+      pendingContentSaveRef.current = null;
+      return;
+    }
     if (draft.trim() === lastSavedContentRef.current.trim()) {
       pendingContentSaveRef.current = null;
       return;
     }
     pendingContentSaveRef.current = { recordId: record.id, content: draft };
     const timer = setTimeout(() => {
-      flushContentSave();
+      void flushContentSave();
     }, 1200);
     return () => clearTimeout(timer);
   }, [editingContent, contentDraft, record, flushContentSave]);
 
   // Debounced auto-save for title while editing.
   useEffect(() => {
-    if (!editingTitle || !record) return;
+    if ((!editingTitle && !editingContent) || !record) return;
     if (draftRecordIdRef.current !== record.id) return;
     const draft = titleDraft;
     if (draft.trim() === lastSavedTitleRef.current.trim()) {
@@ -475,7 +689,7 @@ export function RecordDetail({
     }
     pendingTitleSaveRef.current = { recordId: record.id, title: draft };
     const timer = setTimeout(() => {
-      flushTitleSave();
+      void flushTitleSave();
     }, 800);
     return () => clearTimeout(timer);
   }, [editingTitle, titleDraft, record, flushTitleSave]);
@@ -484,21 +698,53 @@ export function RecordDetail({
   // record before resetting editing state. Also invalidate the draft so the
   // auto-save effect doesn't fire against the new record with stale content.
   useEffect(() => {
-    flushContentSave();
-    flushTitleSave();
+    void flushContentSave();
+    void flushTitleSave();
     draftRecordIdRef.current = null;
+    setDraftRecordId(null);
     pendingContentSaveRef.current = null;
     pendingTitleSaveRef.current = null;
     setEditingTitle(false);
-    setEditingContent(false);
+    setShowDatePicker(false);
+    setShowRepeatPicker(false);
+    if (record) {
+      editSessionRef.current = writeQueueRef.current.beginSession();
+      draftRecordIdRef.current = record.id;
+      setDraftRecordId(record.id);
+      editStartContentRef.current = record.content ?? "";
+      editStartTitleRef.current = record.title ?? "";
+      setContentDraft(record.content ?? "");
+      setTitleDraft(record.title ?? "");
+      setEditingContent(true);
+    } else {
+      setDraftRecordId(null);
+      setEditingContent(false);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [record?.id]);
+  }, [record?.id, onUpdate]);
 
   // Flush pending saves on unmount (e.g. navigating to settings / closing panel)
   useEffect(() => {
     return () => {
-      flushContentSave();
-      flushTitleSave();
+      void flushRichEditorRef.current?.().then((markdown) => {
+        const recordId = draftRecordIdRef.current;
+        if (!recordId) return;
+        if (
+          isBlankMarkdown(markdown ?? "") &&
+          lastSavedContentRef.current.trim() !== ""
+        ) {
+          console.warn(
+            "[RecordDetail] Blocked empty unmount flush for record",
+            recordId,
+            "(saved content is non-empty)",
+          );
+          return;
+        }
+        pendingContentSaveRef.current = { recordId, content: markdown };
+        void flushContentSave();
+      });
+      void flushContentSave();
+      void flushTitleSave();
     };
   }, [flushContentSave, flushTitleSave]);
 
@@ -509,13 +755,6 @@ export function RecordDetail({
       titleRef.current.select();
     }
   }, [editingTitle]);
-
-  useEffect(() => {
-    if (editingContent && contentRef.current) {
-      contentRef.current.focus();
-      contentRef.current.select();
-    }
-  }, [editingContent]);
 
   const startEditTitle = useCallback(() => {
     draftRecordIdRef.current = record?.id ?? null;
@@ -528,12 +767,18 @@ export function RecordDetail({
   }, [record]);
 
   const startEditContent = useCallback(() => {
+    editSessionRef.current = writeQueueRef.current.beginSession();
     draftRecordIdRef.current = record?.id ?? null;
+    setDraftRecordId(record?.id ?? null);
+    const original = record?.content ?? "";
+    editStartContentRef.current = original;
+    editStartTitleRef.current = record?.title ?? "";
     if (!record?.content) {
       setContentDraft("");
     } else {
       setContentDraft(record.content);
     }
+    setTitleDraft(record?.title ?? "");
     setEditingContent(true);
   }, [record]);
 
@@ -544,137 +789,114 @@ export function RecordDetail({
     if (trimmed === lastSavedTitleRef.current.trim()) return;
     pendingTitleSaveRef.current = null;
     await onUpdate(record.id, {
-      title: trimmed.length > 0 ? trimmed : null,
+      title: trimmed,
     });
     lastSavedTitleRef.current = trimmed;
   }, [record, titleDraft, onUpdate]);
 
-  const saveContent = useCallback(async () => {
-    if (!record) return;
-    const trimmed = contentDraft.trim();
-    if (trimmed !== lastSavedContentRef.current.trim()) {
-      pendingContentSaveRef.current = null;
-      await onUpdate(record.id, {
-        content: trimmed.length > 0 ? trimmed : null,
-      });
-      lastSavedContentRef.current = trimmed;
+  const saveContent = useCallback(async (latestContent?: string) => {
+    if (!record || contentSaveInFlightRef.current) return;
+    contentSaveInFlightRef.current = true;
+    setIsSavingContent(true);
+    setSaveError(null);
+    const trimmed = (latestContent ?? contentDraft).trim();
+    const trimmedTitle = titleDraft.trim();
+    try {
+      if (trimmed !== lastSavedContentRef.current.trim()) {
+        pendingContentSaveRef.current = null;
+        const applied = await writeQueueRef.current.enqueue(editSessionRef.current, async () => {
+          await onUpdate(record.id, { content: trimmed });
+        });
+        if (applied) lastSavedContentRef.current = trimmed;
+      }
+      if (trimmedTitle !== lastSavedTitleRef.current.trim()) {
+        pendingTitleSaveRef.current = null;
+        const applied = await writeQueueRef.current.enqueue(editSessionRef.current, async () => {
+          await onUpdate(record.id, { title: trimmedTitle });
+        });
+        if (applied) lastSavedTitleRef.current = trimmedTitle;
+      }
+      // Rich text is the default document surface; saving must not throw the
+      // user back into a separate read-only state.
+    } catch {
+      setSaveError("保存失败，请重试。");
+    } finally {
+      contentSaveInFlightRef.current = false;
+      setIsSavingContent(false);
     }
-    setEditingContent(false);
-  }, [record, contentDraft, onUpdate]);
+  }, [record, contentDraft, titleDraft, onUpdate]);
 
-  // Exit edit mode. Any pending auto-save is flushed first so no edits are
-  // lost. With auto-save enabled this is effectively "done editing" rather
-  // than "discard".
+  const saveDocument = useCallback(async () => {
+    await saveDocumentWithLatestMarkdown(flushRichEditorRef.current, saveContent);
+  }, [saveContent]);
+
+  // Exit edit mode, discarding ALL changes made during this edit session.
+  // "取消" acts as a true cancel: any pending auto-save is dropped, and if
+  // auto-save already persisted an intermediate version that differs from the
+  // content at edit-start, we revert via onUpdate so the record returns to its
+  // pre-edit state.
   const finishEditContent = useCallback(() => {
-    flushContentSave();
-    setEditingContent(false);
-  }, [flushContentSave]);
-
-  const insertMarkdownAtCursor = useCallback((text: string) => {
-    const textarea = contentRef.current;
-    if (!textarea) return;
-    const start = textarea.selectionStart;
-    const end = textarea.selectionEnd;
-    const draft = contentDraftRef.current;
-    const prefix = draft.slice(0, start);
-    const suffix = draft.slice(end);
-    // Add newlines around the image if we're not at the start of a line.
-    const needsLeadingNewline = prefix.length > 0 && !prefix.endsWith("\n");
-    const needsTrailingNewline = suffix.length > 0 && !suffix.startsWith("\n");
-    const insertion =
-      (needsLeadingNewline ? "\n" : "") +
-      text +
-      (needsTrailingNewline ? "\n" : "");
-    const next = prefix + insertion + suffix;
-    setContentDraft(next);
-    contentDraftRef.current = next;
-    const newCursor = start + insertion.length;
-    requestAnimationFrame(() => {
-      textarea.focus();
-      textarea.selectionStart = textarea.selectionEnd = newCursor;
+    if (!record) {
+      setEditingContent(false);
+      return;
+    }
+    const original = editStartContentRef.current;
+    const originalTitle = editStartTitleRef.current;
+    // Drop any pending auto-save so it can't fire after we cancel.
+    const clearedPendingSaves = clearDocumentPendingSaves();
+    pendingContentSaveRef.current = clearedPendingSaves.content;
+    pendingTitleSaveRef.current = clearedPendingSaves.title;
+    draftRecordIdRef.current = null;
+    // Invalidate queued edit writes, then append a compensating revert after
+    // any in-flight transaction settles so cancellation always wins.
+    writeQueueRef.current.invalidate();
+    const revertSession = writeQueueRef.current.beginSession();
+    void writeQueueRef.current.enqueue(revertSession, async () => {
+      await onUpdate(record.id, { content: original, title: originalTitle });
+      lastSavedContentRef.current = original;
+      lastSavedTitleRef.current = originalTitle;
+    }).catch(() => {
+      setSaveError("取消编辑时还原失败，请重试。");
     });
-  }, []);
+    setEditingContent(false);
+  }, [record, onUpdate]);
 
-  const addImagePathsToRecord = useCallback(
-    async (paths: string[]) => {
-      if (!record) return;
-      const oldIds = new Set(record.attachments.map((a) => a.id));
+  // Register on-disk image file paths in the DB and return convertFileSrc
+  // URLs for the newly-added images. Caller (MarkdownEditor) handles
+  // insertion into the editor.
+  const registerImagePaths = useCallback(
+    async (paths: string[]): Promise<string[]> => {
+      if (!record || paths.length === 0) return [];
       await addAttachmentsToRecord(record.id, paths);
       const updated = await getRecordDetail(record.id);
+      const oldIds = new Set(record.attachments.map((a) => a.id));
       const newAttachments = updated.attachments.filter(
         (a) => !oldIds.has(a.id) && (a.file_type === "image" || a.file_type === "screenshot"),
       );
-      if (newAttachments.length > 0) {
-        // Store the convertFileSrc URL (http://asset.localhost/...) in the
-        // markdown so ReactMarkdown's default urlTransform doesn't strip it
-        // and the img renderer can display it directly.
-        const markdown = newAttachments
-          .map((a) => `![](${convertFileSrc(a.local_path)})`)
-          .join("\n\n");
-        insertMarkdownAtCursor(markdown);
-      }
       await selectRecord(record.id);
+      // Store convertFileSrc URLs (http://asset.localhost/...) in the
+      // markdown so ReactMarkdown's default urlTransform doesn't strip them
+      // and the img renderer can display them directly.
+      return newAttachments.map((a) => convertFileSrc(a.local_path));
     },
-    [record, selectRecord, insertMarkdownAtCursor],
+    [record, selectRecord],
   );
 
-  const handlePaste = useCallback(
-    async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
-      if (!record) return;
-      const items = Array.from(e.clipboardData.items);
-      const imageItem = items.find((it) => it.type.startsWith("image/"));
-      if (!imageItem) return; // let default text paste happen
-      const blob = imageItem.getAsFile();
-      if (!blob) return;
-      e.preventDefault();
-      try {
-        const { rgba, width, height } = await blobToRgba(blob);
-        const tempPath = await saveClipboardImage(
-          Array.from(rgba),
-          width,
-          height,
-        );
-        await addImagePathsToRecord([tempPath]);
-      } catch (error) {
-        console.error("Failed to paste image:", error);
-      }
+  // Save a pasted image blob (clipboard) to disk + DB and return its
+  // convertFileSrc URL. Used by MarkdownEditor for Ctrl+V image paste in
+  // both WYSIWYG (via BlockNote's uploadFile) and source mode (textarea
+  // onPaste).
+  const registerImageBlob = useCallback(
+    async (file: File): Promise<string> => {
+      if (!record) throw new Error("no active record");
+      const { rgba, width, height } = await blobToRgba(file);
+      const tempPath = await saveClipboardImage(Array.from(rgba), width, height);
+      const [url] = await registerImagePaths([tempPath]);
+      if (!url) throw new Error("image registration failed");
+      return url;
     },
-    [record, addImagePathsToRecord],
+    [record, registerImagePaths],
   );
-
-  const addImagePathsToRecordRef = useRef(addImagePathsToRecord);
-  useEffect(() => {
-    addImagePathsToRecordRef.current = addImagePathsToRecord;
-  }, [addImagePathsToRecord]);
-
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    let cancelled = false;
-    void listenForFileDrops(async ({ paths }) => {
-      if (!editingContentRef.current) return;
-      const currentRecord = recordRef.current;
-      if (!currentRecord) return;
-      const imagePaths = paths.filter((p) =>
-        /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(p),
-      );
-      if (imagePaths.length === 0) return;
-      try {
-        await addImagePathsToRecordRef.current(imagePaths);
-      } catch (error) {
-        console.error("Failed to drop images:", error);
-      }
-    }).then((fn) => {
-      if (cancelled) {
-        fn();
-      } else {
-        unlisten = fn;
-      }
-    });
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
-  }, []);
 
   const handleConvertToTask = useCallback(async () => {
     if (!record || converting) return;
@@ -700,20 +922,230 @@ export function RecordDetail({
     [record, updatingStatus, onUpdateTaskStatus],
   );
 
+  const handleUpdateDueAt = useCallback(
+    async (dueAt: string | null) => {
+      if (!record?.task) return;
+      await onUpdateDueAt(record.id, record.task.id, dueAt);
+    },
+    [record, onUpdateDueAt],
+  );
+
+  const handleUpdateRepeatRule = useCallback(
+    async (repeatRule: string | null) => {
+      if (!record?.task) return;
+      await onUpdateRepeatRule(record.task.id, repeatRule);
+    },
+    [record, onUpdateRepeatRule],
+  );
+
   const handleTriggerAi = useCallback(async () => {
     if (!record || aiAnalyzing) return;
     setAiAnalyzing(true);
     setAiError(null);
     try {
-      await triggerAiAnalysis(record.id, "manual");
-      // Re-fetch detail to get fresh ai_results
-      await selectRecord(record.id);
+      const taskRun = await runAiTask({
+        taskType: "learning_analysis",
+        payload: {
+          recordId: record.id,
+          includeRelatedTasks: true,
+          interactionMode: "prepare",
+        },
+      });
+
+      if (taskRun.result_json) {
+        const parsed = parseLearningAnalysisResult(taskRun.result_json);
+        setLatestAiResult(parsed);
+      } else {
+        setLatestAiResult(null);
+      }
+
+      // Re-fetch detail to get fresh ai_results, but hydrate directly so the
+      // current detail pane updates immediately without relying on selection churn.
+      const updated = await getRecordDetail(record.id);
+      hydrateRecord(updated);
+      requestAnimationFrame(() => {
+        aiSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
     } catch (error) {
       setAiError(error instanceof Error ? error.message : String(error));
     } finally {
       setAiAnalyzing(false);
     }
-  }, [record, aiAnalyzing, selectRecord]);
+  }, [record, aiAnalyzing, hydrateRecord]);
+
+  const handleStartLearningSession = useCallback((
+    topicId: string,
+    topicName: string,
+    summary: string,
+    evidenceText: string,
+    noteExample: string | null,
+    questions: string[],
+  ) => {
+    if (!record) return;
+    const openingQuestion = questions[0]
+      ?? `你可以先用自己的话说说，你现在怎么理解“${topicName}”？`;
+    startLearningSession({
+      id: `${record.id}:${topicId}:${Date.now()}`,
+      topicId,
+      topicName,
+      sourceRecordId: record.id,
+      sourceRecordTitle: record.title ?? null,
+      summary,
+      evidenceText,
+      noteExample,
+      suggestedQuestions: questions,
+      messages: [
+        {
+          role: "assistant",
+          content: `我想和你聊聊“${topicName}”。${openingQuestion}`,
+        },
+      ],
+      createdAt: new Date().toISOString(),
+      status: "active",
+    });
+  }, [record, startLearningSession]);
+
+  const renderLearningAnalysisCard = (
+    result: LearningAnalysisResult,
+    keyPrefix: string,
+    ai?: AiResultItem,
+  ): ReactNode => (
+    <div className="overflow-hidden rounded-xl border border-primary/18 bg-primary/[4%]">
+      <div className="px-4 py-3">
+        <div className="flex items-start gap-3">
+          <div className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-primary/10">
+            <svg className="h-3 w-3 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z" />
+            </svg>
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="mb-1 text-[11px] font-medium text-primary">
+              本次学习分析
+            </p>
+            <p className="text-xs leading-6 text-text">
+              {result.summary}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {result.knowledge_points.length > 0 && (
+        <div className="border-t border-primary/10 px-4 py-3">
+          <p className="mb-2 text-[11px] font-medium text-primary">
+            识别出的知识点
+          </p>
+          <div className="space-y-2">
+            {result.knowledge_points.map((point, index) => (
+              <div key={`${keyPrefix}-point-${point.name}-${index}`} className="rounded-lg bg-surface/40 px-3 py-2">
+                <div className="flex items-center gap-2">
+                  <p className="text-xs font-medium text-text">{point.name}</p>
+                  <span className="text-[10px] text-text-muted">
+                    置信度 {Math.round(point.confidence * 100)}%
+                  </span>
+                </div>
+                <p className="mt-1 text-[11px] leading-5 text-text-muted">
+                  {point.example_from_note}
+                </p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {result.questions_for_user.length > 0 && (
+        <div className="border-t border-primary/10 px-4 py-3">
+          <p className="mb-2 text-[11px] font-medium text-primary">
+            建议继续追问
+          </p>
+          <ul className="space-y-1">
+            {result.questions_for_user.map((question, index) => (
+              <li key={`${keyPrefix}-question-${index}`} className="flex items-start gap-2 text-xs leading-5 text-text-muted">
+                <span className="mt-[5px] inline-block h-1 w-1 shrink-0 rounded-full bg-primary/50" />
+                {question}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {result.suggested_memory_updates.length > 0 && (
+        <div className="border-t border-primary/10 px-4 py-3">
+          <p className="mb-2 text-[11px] font-medium text-primary">
+            本次识别的候选知识
+          </p>
+          <p className="mb-2 text-[11px] leading-5 text-text-muted">
+            这些内容会先作为待确认候选项，后续需要通过宠物对话再决定是否进入用户知识记忆。
+          </p>
+          <div className="space-y-2">
+            {result.suggested_memory_updates.map((update, index) => {
+              const matchedTopic = knowledgeTopicByName.get(normalizeTopicName(update.topic));
+              const candidateTopicId = matchedTopic?.canPromote ? matchedTopic.topicId : null;
+              const matchedPoint = result.knowledge_points.find((point) =>
+                normalizeTopicName(point.name) === normalizeTopicName(update.topic),
+              );
+              return (
+                <div key={`${keyPrefix}-memory-${update.topic}-${index}`} className="rounded-lg bg-surface/40 px-3 py-2">
+                  <div className="flex items-center gap-2">
+                    <p className="text-xs font-medium text-text">{update.topic}</p>
+                    <span className="text-[10px] text-text-muted">
+                      {matchedTopic?.masteryLevel ?? KNOWLEDGE_STATUS_LABELS[update.mastery_level] ?? "待确认"}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-[11px] leading-5 text-text-muted">
+                    {update.evidence}
+                  </p>
+                  {candidateTopicId && (
+                    <div className="mt-3">
+                      <p className="mb-2 text-[11px] leading-5 text-text-muted">
+                        先把这个候选知识交给宠物，聊过之后再决定是否写入知识记忆。
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => handleStartLearningSession(
+                          candidateTopicId,
+                          update.topic,
+                          result.summary,
+                          update.evidence,
+                          matchedPoint?.example_from_note ?? null,
+                          result.questions_for_user,
+                        )}
+                        className="inline-flex items-center gap-1.5 rounded-full bg-secondary/15 px-3 py-1.5 text-[11px] font-medium text-secondary transition hover:bg-secondary/25"
+                      >
+                        和宠物聊聊
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {ai && (
+        <div className="border-t border-primary/10 px-4 py-2">
+          <div className="flex items-center gap-3 text-[10px] text-text0">
+            {ai.model_name && <span>{ai.model_name}</span>}
+            <span className="text-text-muted">·</span>
+            <span>
+              {ai.trigger_mode === "auto"
+                ? "自动分析"
+                : ai.trigger_mode === "smart"
+                  ? "智能分析"
+                  : "手动分析"}
+            </span>
+            <span className="text-text-muted">·</span>
+            <span>{formatDateTime(ai.created_at)}</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+
+  useEffect(() => {
+    setLatestAiResult(null);
+    setAiError(null);
+  }, [record?.id]);
 
   // Empty state
   if (!record) {
@@ -740,11 +1172,86 @@ export function RecordDetail({
   }
 
   const hasTask = !!record.task;
+  const documentSaveStatus = getDocumentSaveStatus({
+    titleDraft,
+    savedTitle: lastSavedTitleRef.current,
+    contentDraft,
+    savedContent: lastSavedContentRef.current,
+  });
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
       {/* Header */}
-      <div className="shrink-0 border-b border-border px-5 py-3">
+      <div className={`shrink-0 border-b border-border px-5 py-3 ${
+        editingContent ? "sticky top-0 z-20 bg-bg/95 backdrop-blur" : ""
+      }`}>
+        {editingContent && shouldMountRichEditorForRecord(draftRecordId, record.id) ? (
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+            <input
+              type="text"
+              value={titleDraft}
+              onChange={(event) => setTitleDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  finishEditContent();
+                }
+                if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
+                  event.preventDefault();
+                  void saveDocument();
+                }
+              }}
+              placeholder="无标题"
+              aria-label="文档标题"
+              className="min-w-40 flex-1 bg-transparent px-1 py-1 text-base font-medium text-text outline-none placeholder:text-text-muted"
+            />
+            <span className="whitespace-nowrap text-[10px] text-text-muted">Ctrl+S 立即保存 · Esc 取消</span>
+            {saveError ? (
+              <span
+                className="ml-auto inline-flex items-center gap-1.5 rounded-full bg-danger/15 px-2.5 py-0.5 text-[11px] font-medium text-danger"
+                role="status"
+              >
+                <svg className="h-3 w-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+                </svg>
+                {saveError}
+              </span>
+            ) : isSavingContent ? (
+              <span
+                className="ml-auto inline-flex items-center gap-1.5 rounded-full bg-amber-400/15 px-2.5 py-0.5 text-[11px] font-medium text-amber-300"
+                role="status"
+                aria-live="polite"
+              >
+                <span className="inline-block h-2.5 w-2.5 animate-spin rounded-full border border-amber-300/30 border-t-amber-300" />
+                保存中…
+              </span>
+            ) : documentSaveStatus === "有未保存更改" ? (
+              <span
+                className="ml-auto inline-flex items-center gap-1.5 rounded-full bg-amber-400/15 px-2.5 py-0.5 text-[11px] font-medium text-amber-300"
+                role="status"
+                aria-live="polite"
+              >
+                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-amber-300" />
+                未保存
+              </span>
+            ) : (
+              <span
+                className="ml-auto inline-flex items-center gap-1 rounded-full bg-emerald-400/15 px-2.5 py-0.5 text-[11px] font-medium text-emerald-300"
+                role="status"
+                aria-live="polite"
+              >
+                <svg className="h-3 w-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                </svg>
+                已保存
+              </span>
+            )}
+          </div>
+        ) : editingContent ? (
+          <div className="flex flex-1 items-center justify-center text-sm text-text-muted">
+            正在载入笔记…
+          </div>
+        ) : (
         <div className="flex items-center gap-2">
           {!editingContent && (
             <button
@@ -780,7 +1287,7 @@ export function RecordDetail({
             </button>
           )}
 
-          {!editingContent && (
+          {growthPreviewEnabled && !editingContent && (
             <button
               type="button"
               onClick={() => void handleTriggerAi()}
@@ -816,65 +1323,407 @@ export function RecordDetail({
             </button>
           )}
         </div>
+        )}
       </div>
+
+      {/* Tags strip — hidden for task-type records while editing (matches the floating bar, which has no tag strip) */}
+      {!(record.type === "task" && editingContent) && (
+      <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-border px-5 py-2">
+        <span className="mr-1 text-[10px] font-medium uppercase tracking-[0.2em] text-text0">标签</span>
+        {record.tags && record.tags.length > 0
+          ? record.tags.map((tag) => {
+              const hasColor = !!tag.color;
+              return (
+                <span
+                  key={tag.id}
+                  className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] ${hasColor ? "" : "bg-white/5 text-text"}`}
+                  style={hasColor ? { backgroundColor: `${tag.color!}1a`, color: tag.color! } : undefined}
+                >
+                  {tag.name}
+                  <button
+                    type="button"
+                    onClick={() => void handleRemoveTag(tag.id)}
+                    className="ml-0.5 rounded-full p-0.5 opacity-60 transition hover:opacity-100"
+                  >
+                    <svg className="h-2.5 w-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                </span>
+              );
+            })
+          : null}
+        {/* Add tag button */}
+        <div className="relative">
+          <button
+            type="button"
+            onClick={() => setShowTagPopover((prev) => !prev)}
+            className="inline-flex items-center gap-0.5 rounded-full border border-dashed border-white/15 px-2 py-0.5 text-[11px] text-text-muted transition hover:border-white/30 hover:text-text"
+          >
+            <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+            </svg>
+            添加
+          </button>
+          {showTagPopover && (
+            <div
+              ref={tagPopoverRef}
+              className="absolute left-0 z-50 mt-1 w-56 rounded-xl border border-border bg-surface/95 p-3 shadow-2xl backdrop-blur-xl"
+            >
+              {availableTags.length > 0 && (
+                <div className="mb-2">
+                  <p className="mb-1.5 text-[10px] font-medium text-text-muted">已有标签</p>
+                  <div className="flex flex-wrap gap-1">
+                    {availableTags.map((tag) => {
+                      const hasColor = !!tag.color;
+                      return (
+                        <button
+                          key={tag.id}
+                          type="button"
+                          onClick={() => void handleAddTag(tag.id)}
+                          className={`rounded-full px-2 py-0.5 text-[10px] font-medium transition ${hasColor ? "" : "bg-white/5 text-text-muted hover:bg-white/10 hover:text-text"}`}
+                          style={hasColor ? { backgroundColor: `${tag.color!}1a`, color: tag.color! } : undefined}
+                        >
+                          {tag.name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+              <p className="mb-1.5 text-[10px] font-medium text-text-muted">新建标签</p>
+              <input
+                type="text"
+                value={newTagName}
+                onChange={(e) => setNewTagName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    void handleCreateAndAddTag();
+                  }
+                  if (e.key === "Escape") {
+                    setShowTagPopover(false);
+                  }
+                }}
+                placeholder="输入名称…"
+                className="mb-2 w-full rounded-lg border border-border bg-white/5 px-2.5 py-1.5 text-xs text-text placeholder-text-muted outline-none transition focus:border-secondary/40 focus:ring-2 focus:ring-secondary/20"
+                autoFocus
+              />
+              <div className="mb-2 flex gap-1.5">
+                {TAG_PRESET_COLORS.map((color) => (
+                  <button
+                    key={color}
+                    type="button"
+                    onClick={() => setNewTagColor(color)}
+                    className={`h-4 w-4 rounded-full transition-all duration-150 ${
+                      newTagColor === color
+                        ? "ring-2 ring-white ring-offset-1 ring-offset-surface/95"
+                        : "ring-1 ring-white/10"
+                    }`}
+                    style={{ backgroundColor: color }}
+                  />
+                ))}
+              </div>
+              <button
+                type="button"
+                onClick={() => void handleCreateAndAddTag()}
+                disabled={!newTagName.trim()}
+                className="w-full rounded-lg bg-secondary/15 px-3 py-1.5 text-xs font-medium text-secondary transition hover:bg-secondary/25 disabled:opacity-40"
+              >
+                创建并添加
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+      )}
 
       {/* Body + TOC rail */}
       <div className="flex min-h-0 flex-1">
         {editingContent ? (
-          /* ── Focus edit view: split editor + live preview ── */
-          <div className="flex min-w-0 flex-1">
-            <textarea
-              ref={contentRef}
-              value={contentDraft}
-              onChange={(e) => setContentDraft(e.target.value)}
-              onPaste={handlePaste}
-              onKeyDown={(e) => {
-                if (e.key === "Escape") {
-                  e.preventDefault();
-                  finishEditContent();
-                }
-                if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
-                  e.preventDefault();
-                  void saveContent();
-                }
-              }}
-              placeholder="使用 Markdown 编写…  自动保存已开启 · Ctrl+Enter 立即保存 · Esc 完成"
-              className={`${
-                showPreview ? "border-r border-border" : "w-full"
-              } resize-none bg-surface/60
-                px-5 py-4 text-sm leading-6 text-text outline-none
-                font-mono placeholder:text-text-muted`}
-              style={
-                showPreview
-                  ? { flex: `${editorRatio} 1 0%` }
-                  : undefined
-              }
-            />
-            {showPreview && (
+          <div className="flex min-w-0 flex-1 flex-col">
+            {record.type === "task" && record.task && (
+              <div className="mx-5 mt-4 shrink-0 space-y-4 rounded-xl border border-border bg-surface/60 p-4 backdrop-blur">
+                {/* 任务状态 */}
+                <section>
+                  <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.2em] text-text0">
+                    任务状态
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {TASK_STATUS_OPTIONS.map((opt) => {
+                      const isActive = record.task!.task_status === opt.value;
+                      return (
+                        <button
+                          key={opt.value}
+                          type="button"
+                          onClick={() => void handleUpdateStatus(opt.value)}
+                          disabled={updatingStatus || isActive}
+                          className={`
+                            inline-flex items-center gap-1.5 rounded-full px-3 py-1.5
+                            text-xs font-medium transition-all duration-150
+                            ${
+                              isActive
+                                ? opt.activeClasses
+                                : "bg-white/5 text-text-muted hover:bg-white/10 hover:text-text"
+                            }
+                            disabled:cursor-not-allowed disabled:opacity-60
+                          `}
+                        >
+                          <span
+                            className={`inline-block h-1.5 w-1.5 rounded-full ${isActive ? opt.dot : `${opt.dot} opacity-40`}`}
+                          />
+                          {opt.label}
+                          {updatingStatus && isActive && (
+                            <span className="inline-block h-2.5 w-2.5 animate-spin rounded-full border border-current border-t-transparent" />
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </section>
+
+                {/* 截止日期 */}
+                <section>
+                  <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.2em] text-text0">
+                    截止日期
+                  </p>
+                  <div>
+                    <button
+                      type="button"
+                      onClick={() => setShowDatePicker((v) => !v)}
+                      className="flex w-full items-center gap-2 rounded-lg border border-border
+                        bg-surface/80 px-3 py-2 text-sm transition
+                        hover:border-white/20"
+                    >
+                      <svg
+                        className="h-4 w-4 shrink-0 text-text0"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                        strokeWidth={1.5}
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25
+                            2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021
+                            18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5"
+                        />
+                      </svg>
+
+                      {(() => {
+                        const dueInfo = getDueDisplay(record.task!.due_at);
+                        return dueInfo ? (
+                          <span className={dueInfo.className}>{dueInfo.display}</span>
+                        ) : (
+                          <span className="italic text-text0">未设置</span>
+                        );
+                      })()}
+
+                      <div className="flex-1" />
+
+                      <svg
+                        className={`h-3.5 w-3.5 text-text0 transition-transform duration-200 ${
+                          showDatePicker ? "rotate-180" : ""
+                        }`}
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                        strokeWidth={2}
+                      >
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+                      </svg>
+                    </button>
+
+                    {showDatePicker && (
+                      <div className="mt-2">
+                        <DatePicker
+                          value={record.task!.due_at ? (() => {
+                            const d = new Date(record.task!.due_at);
+                            return isNaN(d.getTime()) ? null : d;
+                          })() : null}
+                          onChange={(date) => {
+                            const y = date.getFullYear();
+                            const m = String(date.getMonth() + 1).padStart(2, "0");
+                            const day = String(date.getDate()).padStart(2, "0");
+                            const dateStr = `${y}-${m}-${day}`;
+                            void handleUpdateDueAt(dateStr);
+                            setShowDatePicker(false);
+                          }}
+                          onClear={() => {
+                            void handleUpdateDueAt(null);
+                            setShowDatePicker(false);
+                          }}
+                        />
+                      </div>
+                    )}
+                  </div>
+                </section>
+
+                {/* 重复 */}
+                <section>
+                  <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.2em] text-text0">
+                    重复
+                  </p>
+                  <div>
+                    <button
+                      type="button"
+                      onClick={() => setShowRepeatPicker((v) => !v)}
+                      className="flex w-full items-center gap-2 rounded-lg border border-border
+                        bg-surface/80 px-3 py-2 text-sm transition
+                        hover:border-white/20"
+                    >
+                      <svg
+                        className="h-4 w-4 shrink-0 text-text0"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                        strokeWidth={1.5}
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182"
+                        />
+                      </svg>
+
+                      {(() => {
+                        const rule = parseRepeatRule(record.task!.repeat_rule);
+                        return rule ? (
+                          <span className="text-secondary">{formatRepeatRule(rule)}</span>
+                        ) : (
+                          <span className="italic text-text0">不重复</span>
+                        );
+                      })()}
+
+                      <div className="flex-1" />
+
+                      <svg
+                        className={`h-3.5 w-3.5 text-text0 transition-transform duration-200 ${
+                          showRepeatPicker ? "rotate-180" : ""
+                        }`}
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                        strokeWidth={2}
+                      >
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+                      </svg>
+                    </button>
+
+                    {showRepeatPicker && (
+                      <div className="mt-2 space-y-1 rounded-lg border border-border bg-surface/80 p-2">
+                        <RepeatOption
+                          label="不重复"
+                          active={!record.task!.repeat_rule}
+                          onClick={async () => {
+                            await handleUpdateRepeatRule(null);
+                            setShowRepeatPicker(false);
+                          }}
+                        />
+                        <RepeatOption
+                          label="每天"
+                          active={record.task!.repeat_rule?.startsWith('{"type":"daily"}') ?? false}
+                          onClick={async () => {
+                            await handleUpdateRepeatRule('{"type":"daily"}');
+                            setShowRepeatPicker(false);
+                          }}
+                        />
+                        <RepeatOption
+                          label="工作日"
+                          active={record.task!.repeat_rule?.startsWith('{"type":"weekdays"}') ?? false}
+                          onClick={async () => {
+                            await handleUpdateRepeatRule('{"type":"weekdays"}');
+                            setShowRepeatPicker(false);
+                          }}
+                        />
+                        <WeeklyRepeatOption
+                          currentRule={parseRepeatRule(record.task!.repeat_rule)}
+                          onSelect={async (days: number[]) => {
+                            const rule: RepeatRule = { type: "weekly", days };
+                            await handleUpdateRepeatRule(JSON.stringify(rule));
+                          }}
+                          onClose={() => setShowRepeatPicker(false)}
+                        />
+                      </div>
+                    )}
+                  </div>
+                </section>
+              </div>
+            )}
+            {record.type === "task" ? (
               <>
-                <div
-                  className="col-resize-handle shrink-0"
-                  onPointerDown={startEditorResize}
-                  onDoubleClick={resetEditorRatio}
-                  role="separator"
-                  aria-orientation="vertical"
-                  aria-label="调整编辑器与预览宽度"
-                />
-                <div
-                  className="overflow-y-auto overscroll-contain p-5"
-                  style={{ flex: `${1 - editorRatio} 1 0%` }}
-                >
-                  {contentDraft.trim() ? (
-                    <div className="markdown-body" ref={markdownContainerRef}>
-                      <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents} urlTransform={markdownUrlTransform}>
-                        {contentDraft}
-                      </ReactMarkdown>
-                    </div>
+                {/* 内容 (plain text) */}
+                <section className="mx-5 mt-4 flex min-h-0 flex-1 flex-col">
+                  <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.2em] text-text0">
+                    内容
+                  </p>
+                  <textarea
+                    value={contentDraft}
+                    onChange={(e) => setContentDraft(e.target.value)}
+                    placeholder="添加内容…"
+                    className="w-full min-h-0 flex-1 resize-none rounded-xl border border-border
+                      bg-surface/80 px-3 py-2 text-sm leading-6 text-text
+                      outline-none transition focus:border-secondary/40
+                      focus:ring-2 focus:ring-secondary/20"
+                  />
+                </section>
+
+                {/* 附件 */}
+                <section className="mx-5 mt-4 shrink-0">
+                  <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.2em] text-text0">
+                    附件
+                  </p>
+                  {record.attachments.length === 0 ? (
+                    <p className="text-xs italic text-text0">暂无附件</p>
                   ) : (
-                    <p className="text-sm italic text-text0">实时预览…</p>
+                    <div className="flex flex-wrap gap-2">
+                      {record.attachments
+                        .filter((a) => a.file_type === "image" || a.file_type === "screenshot")
+                        .map((att) => (
+                          <img
+                            key={att.id}
+                            src={convertFileSrc(att.local_path)}
+                            alt=""
+                            className="h-16 w-16 rounded-lg border border-border object-cover"
+                          />
+                        ))}
+                      {record.attachments
+                        .filter((a) => a.file_type !== "image" && a.file_type !== "screenshot")
+                        .map((att) => (
+                          <span
+                            key={att.id}
+                            className="inline-flex items-center gap-1.5 rounded-full border border-white/8 bg-surface/50 px-2.5 py-1 text-[11px] text-text-muted"
+                          >
+                            <svg className="h-3 w-3 text-text0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                            </svg>
+                            {att.local_path.split(/[\\/]/).pop()}
+                          </span>
+                        ))}
+                    </div>
                   )}
-                </div>
+                </section>
               </>
+            ) : (
+              /* ── Edit view: WYSIWYG (BlockNote) rich-text editor ── */
+              <MarkdownEditor
+                key={record.id}
+                markdown={contentDraft}
+                onChange={setContentDraft}
+                onSave={(latestMarkdown) => saveContent(latestMarkdown)}
+                onCancel={finishEditContent}
+                onFlushReady={(flush) => {
+                  flushRichEditorRef.current = flush;
+                  richEditorRecordIdRef.current = flush ? record.id : null;
+                }}
+                onContainerReady={(element) => {
+                  markdownContainerRef.current = element;
+                }}
+                onAddImagePaths={registerImagePaths}
+                onAddImageFile={registerImageBlob}
+                className="document-editor min-w-0 flex-1"
+              />
             )}
           </div>
         ) : (
@@ -940,146 +1789,6 @@ export function RecordDetail({
                   {SOURCE_LABELS[record.source] ?? record.source}
                 </span>
               </div>
-
-              {/* Tags */}
-              <section>
-                <p className="mb-1.5 text-[10px] font-medium uppercase tracking-[0.2em] text-text0">
-                  标签
-                </p>
-                <div className="flex flex-wrap items-center gap-1.5">
-                  {record.tags && record.tags.length > 0
-                    ? record.tags.map((tag) => {
-                        const hasColor = !!tag.color;
-                        return (
-                          <span
-                            key={tag.id}
-                            className={`
-                              inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px]
-                              ${hasColor ? "" : "bg-white/5 text-text"}
-                            `}
-                          style={
-                            hasColor
-                              ? {
-                                  backgroundColor: `${tag.color!}1a`,
-                                  color: tag.color!,
-                                }
-                              : undefined
-                          }
-                        >
-                          {tag.name}
-                          <button
-                            type="button"
-                            onClick={() => void handleRemoveTag(tag.id)}
-                            className="ml-0.5 rounded-full p-0.5 opacity-60 transition hover:opacity-100"
-                          >
-                            <svg className="h-2.5 w-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                            </svg>
-                          </button>
-                        </span>
-                      );
-                        })
-                      : null}
-                  {/* Add tag button */}
-                  <div className="relative">
-                    <button
-                      type="button"
-                      onClick={() => setShowTagPopover((prev) => !prev)}
-                      className="inline-flex items-center gap-0.5 rounded-full border border-dashed border-white/15 px-2 py-0.5 text-[11px] text-text-muted transition hover:border-white/30 hover:text-text"
-                    >
-                      <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
-                      </svg>
-                      添加
-                    </button>
-
-                    {showTagPopover && (
-                      <div
-                        ref={tagPopoverRef}
-                        className="absolute left-0 z-50 mt-1 w-56 rounded-xl border border-border bg-surface/95 p-3 shadow-2xl backdrop-blur-xl"
-                      >
-                        {availableTags.length > 0 && (
-                          <div className="mb-2">
-                            <p className="mb-1.5 text-[10px] font-medium text-text-muted">
-                              已有标签
-                            </p>
-                            <div className="flex flex-wrap gap-1">
-                              {availableTags.map((tag) => {
-                                const hasColor = !!tag.color;
-                                return (
-                                  <button
-                                    key={tag.id}
-                                    type="button"
-                                    onClick={() => void handleAddTag(tag.id)}
-                                    className={`
-                                      rounded-full px-2 py-0.5 text-[10px] font-medium transition
-                                      ${hasColor ? "" : "bg-white/5 text-text-muted hover:bg-white/10 hover:text-text"}
-                                    `}
-                                  style={
-                                        hasColor
-                                          ? {
-                                              backgroundColor: `${tag.color!}1a`,
-                                              color: tag.color!,
-                                            }
-                                          : undefined
-                                      }
-                                    >
-                                      {tag.name}
-                                    </button>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        )}
-
-                        <p className="mb-1.5 text-[10px] font-medium text-text-muted">
-                          新建标签
-                        </p>
-                        <input
-                          type="text"
-                          value={newTagName}
-                          onChange={(e) => setNewTagName(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") {
-                              e.preventDefault();
-                              void handleCreateAndAddTag();
-                            }
-                            if (e.key === "Escape") {
-                              setShowTagPopover(false);
-                            }
-                          }}
-                          placeholder="输入名称…"
-                          className="mb-2 w-full rounded-lg border border-border bg-white/5 px-2.5 py-1.5 text-xs text-text placeholder-text-muted outline-none transition focus:border-secondary/40 focus:ring-2 focus:ring-secondary/20"
-                          autoFocus
-                        />
-                        <div className="mb-2 flex gap-1.5">
-                          {TAG_PRESET_COLORS.map((color) => (
-                            <button
-                              key={color}
-                              type="button"
-                              onClick={() => setNewTagColor(color)}
-                              className={`h-4 w-4 rounded-full transition-all duration-150 ${
-                                newTagColor === color
-                                  ? "ring-2 ring-white ring-offset-1 ring-offset-surface/95"
-                                  : "ring-1 ring-white/10"
-                              }`}
-                              style={{ backgroundColor: color }}
-                            />
-                          ))}
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => void handleCreateAndAddTag()}
-                          disabled={!newTagName.trim()}
-                          className="w-full rounded-lg bg-secondary/15 px-3 py-1.5 text-xs font-medium text-secondary transition hover:bg-secondary/25 disabled:opacity-40"
-                        >
-                          创建并添加
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </section>
 
               {/* Content */}
               <section>
@@ -1205,13 +1914,23 @@ export function RecordDetail({
               )}
 
               {/* AI Results */}
-              {record.ai_results && record.ai_results.length > 0 && (
-                <section>
+              {growthPreviewEnabled && (visibleLatestAiResult || persistedLearningAnalysisEntries.length > 0 || legacyAiResults.length > 0) && (
+                <section ref={aiSectionRef}>
                   <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.2em] text-text0">
                     AI 分析
                   </p>
                   <div className="space-y-3">
-                    {record.ai_results.map((ai) => (
+                    {visibleLatestAiResult && (
+                      <>{renderLearningAnalysisCard(visibleLatestAiResult, "latest")}</>
+                    )}
+
+                    {persistedLearningAnalysisEntries.map(({ ai, result }) => (
+                      <div key={ai.id}>
+                        {renderLearningAnalysisCard(result, ai.id, ai)}
+                      </div>
+                    ))}
+
+                    {legacyAiResults.map((ai) => (
                       <div
                         key={ai.id}
                         className="overflow-hidden rounded-xl border border-violet-400/12 bg-violet-400/[3%]"
@@ -1319,8 +2038,53 @@ export function RecordDetail({
                   </div>
                 </section>
               )}
+
+              {growthPreviewEnabled && effectiveKnowledgeTopics.length > 0 && (
+                <section>
+                  <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.2em] text-text0">
+                    待确认知识状态
+                  </p>
+                  <p className="mb-3 text-[11px] leading-5 text-text-muted">
+                    这里展示的是从当前记录中沉淀出的候选知识或阶段性状态，不等同于已经确认的用户知识记忆。
+                  </p>
+                  <div className="space-y-3">
+                    {effectiveKnowledgeTopics.map((topic) => (
+                      <div
+                        key={topic.key}
+                        className="overflow-hidden rounded-xl border border-secondary/15 bg-secondary/[4%]"
+                      >
+                        <div className="px-4 py-3">
+                          <div className="flex items-start gap-3">
+                            <div className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-secondary/12">
+                              <svg className="h-3 w-3 text-secondary" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6l4 2m4-2a8 8 0 11-16 0 8 8 0 0116 0z" />
+                              </svg>
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-2">
+                                <p className="text-xs font-medium text-secondary">
+                                  {topic.name}
+                                </p>
+                                <span className="text-[10px] text-text-muted">
+                                  {topic.masteryLevel}
+                                </span>
+                              </div>
+                              <p className="mt-1 text-xs leading-6 text-text">
+                                {topic.summary}
+                              </p>
+                              <p className="mt-2 text-[11px] leading-5 text-text-muted">
+                                证据：{topic.evidenceText}
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              )}
               {/* AI Error */}
-              {aiError && (
+              {growthPreviewEnabled && aiError && (
                 <section>
                   <div className="flex items-start gap-2.5 rounded-xl border border-danger/15 bg-danger/5 px-4 py-3">
                     <svg className="mt-0.5 h-4 w-4 shrink-0 text-danger" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -1379,54 +2143,6 @@ export function RecordDetail({
           </aside>
         )}
       </div>
-
-      {/* Action bar */}
-      {editingContent && (
-        <div className="shrink-0 border-t border-border px-5 py-3">
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => void saveContent()}
-              className="inline-flex items-center gap-1.5 rounded-full bg-secondary/15 px-4 py-1.5
-                text-xs font-medium text-secondary transition hover:bg-secondary/25"
-            >
-              <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-              </svg>
-              保存
-            </button>
-            <button
-              type="button"
-              onClick={finishEditContent}
-              className="inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5
-                text-xs font-medium text-text-muted transition hover:bg-white/5 hover:text-text"
-            >
-              完成
-            </button>
-            <button
-              type="button"
-              onClick={() => setShowPreview((prev) => !prev)}
-              title={showPreview ? "关闭预览" : "开启预览"}
-              className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5
-                text-xs font-medium transition ${
-                  showPreview
-                    ? "bg-secondary/10 text-secondary hover:bg-secondary/20"
-                    : "text-text-muted hover:bg-white/5 hover:text-text"
-                }`}
-            >
-              <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" />
-                <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-              </svg>
-              {showPreview ? "预览中" : "预览"}
-            </button>
-            <div className="flex-1" />
-            <span className="text-[10px] text-text-muted">
-              自动保存已开启 · Ctrl+Enter 立即保存 · Esc 完成
-            </span>
-          </div>
-        </div>
-      )}
 
       {/* 全屏图片预览 */}
       {previewSrc && (
