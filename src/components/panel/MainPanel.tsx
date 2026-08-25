@@ -17,6 +17,7 @@ import { KnowledgeMemoryPanel } from "./KnowledgeMemoryPanel";
 import { PetLearningPanel } from "./PetLearningPanel";
 import { PetChatPanel } from "./PetChatPanel";
 import { PetChatHistoryPanel } from "./PetChatHistoryPanel";
+import { KnowledgeGraphPanel } from "./KnowledgeGraphPanel";
 import { getRecordDetailInstanceKey, RecordDetail } from "./RecordDetail";
 import { RecordList } from "./RecordList";
 import { SettingsPanel } from "../settings/SettingsPanel";
@@ -24,7 +25,7 @@ import { useLearningCoachStore } from "../../store/learningCoach";
 import { useSettingsStore } from "../../store/settings";
 
 type ViewMode = "notes" | "tasks";
-type ContentMode = "records" | "memory" | "settings" | "chat";
+type ContentMode = "records" | "memory" | "settings" | "chat" | "graph";
 
 export function MainPanel() {
   const activeLearningSession = useLearningCoachStore((state) => state.activeSession);
@@ -79,6 +80,7 @@ export function MainPanel() {
     localStorage.removeItem("open-pet-chat");
     return openChat ? "chat" : "records";
   });
+  const [graphReturnNodeId, setGraphReturnNodeId] = useState<string | null>(null);
 
   useEffect(() => {
     const unlistenPromise = listen("open-pet-chat", () => setContentMode("chat"));
@@ -147,6 +149,7 @@ export function MainPanel() {
 
   const handleSelect = useCallback(
     (id: string) => {
+      setGraphReturnNodeId(null);
       void selectRecord(id);
     },
     [selectRecord],
@@ -241,6 +244,7 @@ export function MainPanel() {
           searchQuery={searchQuery}
           settingsOpen={contentMode === "settings"}
           memoryOpen={contentMode === "memory"}
+          graphOpen={contentMode === "graph"}
           chatOpen={contentMode === "chat"}
           growthPreviewEnabled={growthPreviewEnabled}
           onTaskStatusFilterChange={setTaskStatusFilter}
@@ -250,6 +254,7 @@ export function MainPanel() {
             closeLearningSession();
             setContentMode((current) => current === "memory" ? "records" : "memory");
           }}
+          onToggleGraph={() => setContentMode((current) => current === "graph" ? "records" : "graph")}
           onToggleChat={() => setContentMode((current) => current === "chat" ? "records" : "chat")}
           activeTagIds={activeTagIds}
           onToggleTagFilter={toggleTagFilter}
@@ -268,7 +273,7 @@ export function MainPanel() {
 
       {/* ── Middle: Record list or Settings ── */}
       <section
-        className="flex shrink-0 flex-col border-r border-border bg-bg/30"
+        className={`${contentMode === "graph" ? "hidden" : "flex"} shrink-0 flex-col border-r border-border bg-bg/30`}
         style={{ width: widths.list }}
       >
         {contentMode === "chat" ? (
@@ -292,7 +297,7 @@ export function MainPanel() {
 
       {/* ── Resize handle: list ↔ detail ── */}
       <div
-        className="col-resize-handle shrink-0"
+        className={`${contentMode === "graph" ? "hidden" : "col-resize-handle"} shrink-0`}
         onPointerDown={startResize("list")}
         onDoubleClick={() => resetColumn("list")}
         role="separator"
@@ -304,6 +309,8 @@ export function MainPanel() {
       <section className="flex min-w-0 flex-1 flex-col bg-bg/20">
         {contentMode === "chat" ? (
           <PetChatPanel />
+        ) : contentMode === "graph" ? (
+          <KnowledgeGraphPanel initialNodeId={graphReturnNodeId} onOpenRecord={(recordId, nodeId) => { setGraphReturnNodeId(nodeId); setContentMode("records"); void selectRecord(recordId); }} />
         ) : contentMode === "memory" && growthPreviewEnabled ? (
           <KnowledgeMemoryPanel mode="detail" />
         ) : activeLearningSession && growthPreviewEnabled ? (
@@ -325,6 +332,8 @@ export function MainPanel() {
             onUpdateDueAt={handleUpdateDueAt}
             onUpdateRepeatRule={handleUpdateRepeatRule}
             onDelete={handleDelete}
+            onBackToGraph={() => setContentMode("graph")}
+            graphReturnLabel={graphReturnNodeId ? "返回知识图谱" : "查看知识图谱"}
             growthPreviewEnabled={growthPreviewEnabled}
           />
         )}

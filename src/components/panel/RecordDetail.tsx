@@ -39,6 +39,8 @@ interface RecordDetailProps {
   onUpdateDueAt: (recordId: string, taskId: string, dueAt: string | null) => Promise<void>;
   onUpdateRepeatRule: (taskId: string, repeatRule: string | null) => Promise<void>;
   onDelete: (id: string) => void;
+  onBackToGraph?: () => void;
+  graphReturnLabel?: string;
   growthPreviewEnabled: boolean;
 }
 
@@ -297,6 +299,8 @@ export function RecordDetail({
   onUpdateDueAt,
   onUpdateRepeatRule,
   onDelete,
+  onBackToGraph,
+  graphReturnLabel = "查看知识图谱",
   growthPreviewEnabled,
 }: RecordDetailProps) {
   const [editingTitle, setEditingTitle] = useState(false);
@@ -1181,6 +1185,18 @@ export function RecordDetail({
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
+      {onBackToGraph && (
+        <div className="flex shrink-0 items-center justify-between gap-3 border-b border-primary/15 bg-primary/[5%] px-5 py-2">
+          <span className="truncate text-[11px] text-text-muted">知识图谱 / {record.title || "当前记录"}</span>
+          <button
+            type="button"
+            onClick={onBackToGraph}
+            className="shrink-0 rounded-full bg-primary/15 px-3 py-1 text-[11px] font-medium text-primary transition hover:bg-primary/25"
+          >
+            ← {graphReturnLabel}
+          </button>
+        </div>
+      )}
       {/* Header */}
       <div className={`shrink-0 border-b border-border px-5 py-3 ${
         editingContent ? "sticky top-0 z-20 bg-bg/95 backdrop-blur" : ""

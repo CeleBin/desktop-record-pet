@@ -207,6 +207,57 @@ export interface KnowledgeMemoryDetail {
   latest_conclusion_json: string | null;
 }
 
+export type KnowledgeGraphNodeStatus = "unseen" | "recorded" | "learning" | "mastered" | "review";
+
+export interface KnowledgeGraphNode {
+  id: string;
+  label: string;
+  description: string;
+  parentId: string | null;
+  status: KnowledgeGraphNodeStatus;
+  x: number;
+  y: number;
+  color: string;
+  officialUrl: string | null;
+  userCreated: boolean;
+  linkedRecordIds: string[];
+}
+
+export interface KnowledgeGraphEdge {
+  id: string;
+  source: string;
+  target: string;
+  type: "broader" | "related" | "prerequisite" | "applies-to";
+}
+
+export type KnowledgeGraphSuggestionType = "link-record" | "create-node" | "update-status";
+export type KnowledgeGraphSuggestionState = "pending" | "ignored";
+
+export interface KnowledgeGraphSuggestion {
+  id: string;
+  type: KnowledgeGraphSuggestionType;
+  state: KnowledgeGraphSuggestionState;
+  recordId: string;
+  recordTitle: string | null;
+  sourceNodeId: string | null;
+  suggestedLabel: string;
+  suggestedDescription: string;
+  suggestedStatus: KnowledgeGraphNodeStatus | null;
+  reason: string;
+  confidence: number;
+  createdAt: string;
+}
+
+export interface KnowledgeGraphData {
+  format: "desktop-record-pet-knowledge-graph";
+  version: 1;
+  schemeId: string;
+  schemeName: string;
+  nodes: KnowledgeGraphNode[];
+  edges: KnowledgeGraphEdge[];
+  suggestions?: KnowledgeGraphSuggestion[];
+}
+
 export interface LearningAnalysisResult {
   knowledge_points: LearningKnowledgePoint[];
   questions_for_user: string[];

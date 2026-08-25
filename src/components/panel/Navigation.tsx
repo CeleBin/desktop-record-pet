@@ -15,12 +15,14 @@ interface NavigationProps {
   searchQuery: string;
   settingsOpen: boolean;
   memoryOpen: boolean;
+  graphOpen: boolean;
   chatOpen: boolean;
   growthPreviewEnabled: boolean;
   onTaskStatusFilterChange: (status: TaskStatus | null) => void;
   onSearchChange: (query: string) => void;
   onToggleSettings: () => void;
   onToggleMemory: () => void;
+  onToggleGraph: () => void;
   onToggleChat: () => void;
   activeTagIds: string[];
   onToggleTagFilter: (id: string) => void;
@@ -60,6 +62,7 @@ export function Navigation({
   searchQuery,
   settingsOpen,
   memoryOpen,
+  graphOpen,
   chatOpen,
   growthPreviewEnabled,
   activeTagIds,
@@ -67,6 +70,7 @@ export function Navigation({
   onSearchChange,
   onToggleSettings,
   onToggleMemory,
+  onToggleGraph,
   onToggleChat,
   onToggleTagFilter,
 }: NavigationProps) {
@@ -175,6 +179,7 @@ export function Navigation({
     <>
       <nav className="flex h-full flex-col gap-5 overflow-y-auto p-4">
       <button type="button" onClick={onToggleChat} className={`rounded-xl border px-3 py-2 text-xs font-medium transition ${chatOpen ? "border-primary/40 bg-primary/10 text-primary" : "border-border text-text-muted hover:text-text"}`}>和{petName}聊聊</button>
+      <button type="button" onClick={onToggleGraph} className={`rounded-xl border px-3 py-2 text-xs font-medium transition ${graphOpen ? "border-primary/40 bg-primary/10 text-primary" : "border-border text-text-muted hover:text-text"}`}>知识图谱</button>
       {/* ── Type filter (single-select: 笔记 OR 待办) ── */}
       <div className="flex rounded-xl bg-surface/60 p-0.5 ring-1 ring-white/[5%]">
         <button
