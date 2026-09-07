@@ -39,14 +39,13 @@ function formatDate(iso: string): string {
   }
 }
 
-function contentPreview(record: RecordWithRelations): string {
+export function contentPreview(record: RecordWithRelations): string {
   if (record.title) return record.title;
   if (record.content) {
     const trimmed = record.content.replace(/\s+/g, " ").trim();
     return trimmed.length > 80 ? `${trimmed.slice(0, 80)}…` : trimmed;
   }
-  const count = record.attachments?.length ?? 0;
-  return count > 0 ? `${count} 个附件` : "无标题";
+  return "无标题";
 }
 
 interface RecordItemContentProps {
@@ -57,7 +56,6 @@ interface RecordItemContentProps {
 export function RecordItemContent({ record, onDelete }: RecordItemContentProps) {
   const meta = TYPE_LABELS[record.type] ?? TYPE_LABELS.note;
   const hasTask = !!record.task;
-  const attachmentCount = record.attachments?.length ?? 0;
   const ts = record.task?.task_status;
 
   return (
@@ -97,12 +95,6 @@ export function RecordItemContent({ record, onDelete }: RecordItemContentProps) 
                 />
                 {TASK_STATUS_BADGE[ts].label}
               </span>
-            </>
-          )}
-          {attachmentCount > 0 && (
-            <>
-              <span className="text-text-muted">·</span>
-              <span>{attachmentCount} 个附件</span>
             </>
           )}
           {record.tags && record.tags.length > 0 && (
