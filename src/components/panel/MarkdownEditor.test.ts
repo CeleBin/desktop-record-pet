@@ -4,16 +4,20 @@ import {
   BLANK_LINE_MARKER,
   encodeEmptyParagraphBlocks,
   isBlankMarkdown,
-  isDocumentCancelKey,
+  getDocumentKeyboardAction,
   saveLatestDocument,
   shouldApplySerializedRevision,
   shouldSerializeDocumentChange,
 } from "./MarkdownEditor";
 
 describe("rich document keyboard controls", () => {
-  it("reserves Escape for cancelling the document workspace", () => {
-    expect(isDocumentCancelKey("Escape")).toBe(true);
-    expect(isDocumentCancelKey("Enter")).toBe(false);
+  it("does not assign Escape an editor-level action", () => {
+    expect(getDocumentKeyboardAction("Escape", false)).toBeNull();
+  });
+
+  it("assigns Ctrl/Cmd+S to saving the document", () => {
+    expect(getDocumentKeyboardAction("s", true)).toBe("save");
+    expect(getDocumentKeyboardAction("s", false)).toBeNull();
   });
 
   it("flushes markdown before passing it to the save callback", async () => {

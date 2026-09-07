@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  clearDocumentPendingSaves,
   createDocumentWriteQueue,
   getDocumentSaveStatus,
   getTocHeadingSelector,
@@ -18,10 +17,6 @@ describe("document workspace save status", () => {
       contentDraft: "Saved body",
       savedContent: "Saved body",
     })).toBe("有未保存更改");
-  });
-
-  it("clears both pending save channels when a document edit is cancelled", () => {
-    expect(clearDocumentPendingSaves()).toEqual({ content: null, title: null });
   });
 
   it("prefers rich heading blocks for WYSIWYG TOC navigation", () => {

@@ -23,8 +23,6 @@ interface MarkdownEditorProps {
   onChange: (md: string) => void;
   /** Ctrl+S handler, supplied with the latest serialized markdown. */
   onSave?: (markdown: string) => void | Promise<void>;
-  /** Escape handler for cancelling the document workspace. */
-  onCancel?: () => void;
   /** Exposes the rich-editor scroll container for parent TOC navigation. */
   onContainerReady?: (element: HTMLDivElement | null) => void;
   /** Exposes a flush that resolves to the latest BlockNote markdown. */
@@ -43,8 +41,11 @@ interface MarkdownEditorProps {
   className?: string;
 }
 
-export function isDocumentCancelKey(key: string): boolean {
-  return key === "Escape";
+export function getDocumentKeyboardAction(
+  key: string,
+  ctrlOrMetaKey: boolean,
+): "save" | null {
+  return ctrlOrMetaKey && key.toLowerCase() === "s" ? "save" : null;
 }
 
 export async function saveLatestDocument(
@@ -164,7 +165,6 @@ export function MarkdownEditor({
   markdown,
   onChange,
   onSave,
-  onCancel,
   onContainerReady,
   onFlushReady,
   onAddImagePaths,
@@ -180,8 +180,6 @@ export function MarkdownEditor({
   useEffect(() => { onChangeRef.current = onChange; }, [onChange]);
   const onSaveRef = useRef(onSave);
   useEffect(() => { onSaveRef.current = onSave; }, [onSave]);
-  const onCancelRef = useRef(onCancel);
-  useEffect(() => { onCancelRef.current = onCancel; }, [onCancel]);
   const onAddImagePathsRef = useRef(onAddImagePaths);
   useEffect(() => { onAddImagePathsRef.current = onAddImagePaths; }, [onAddImagePaths]);
   const onAddImageFileRef = useRef(onAddImageFile);
@@ -398,15 +396,8 @@ export function MarkdownEditor({
       className={className}
       style={wrapperStyle}
       onKeyDownCapture={(e) => {
-        // Capture ensures BlockNote cannot consume the document-level actions.
-        if (isDocumentCancelKey(e.key) && onCancelRef.current) {
-          e.preventDefault();
-          e.stopPropagation();
-          onCancelRef.current();
-          return;
-        }
-        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s" && onSaveRef.current) {
-          // preventDefault stops the browser's native "Save Page" dialog.
+        // Capture ensures BlockNote cannot consume the document-level save action.
+        if (getDocumentKeyboardAction(e.key, e.ctrlKey || e.metaKey) === "save" && onSaveRef.current) {
           e.preventDefault();
           e.stopPropagation();
           void saveLatestDocument(

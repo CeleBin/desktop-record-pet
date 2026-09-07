@@ -96,10 +96,6 @@ export function getRecordDetailInstanceKey(recordId: string | null): string {
   return recordId ?? "empty-record";
 }
 
-export function clearDocumentPendingSaves(): { content: null; title: null } {
-  return { content: null, title: null };
-}
-
 export function getTocHeadingSelector(richHeadingCount: number): string {
   return richHeadingCount > 0 ? '[data-content-type="heading"]' : "h1, h2, h3";
 }
@@ -472,11 +468,6 @@ export function RecordDetail({
   // Last content successfully persisted (trimmed). Prevents redundant saves
   // and feedback loops.
   const lastSavedContentRef = useRef<string>("");
-  // Content as it was when the current edit session started. Used by
-  // finishEditContent ("取消") to revert any auto-saved intermediate versions
-  // back to the pre-edit content.
-  const editStartContentRef = useRef<string>("");
-  const editStartTitleRef = useRef<string>("");
   const flushRichEditorRef = useRef<(() => Promise<string>) | null>(null);
   const richEditorRecordIdRef = useRef<string | null>(null);
   const contentSaveInFlightRef = useRef(false);
@@ -715,8 +706,6 @@ export function RecordDetail({
       editSessionRef.current = writeQueueRef.current.beginSession();
       draftRecordIdRef.current = record.id;
       setDraftRecordId(record.id);
-      editStartContentRef.current = record.content ?? "";
-      editStartTitleRef.current = record.title ?? "";
       setContentDraft(record.content ?? "");
       setTitleDraft(record.title ?? "");
       setEditingContent(true);
@@ -774,9 +763,6 @@ export function RecordDetail({
     editSessionRef.current = writeQueueRef.current.beginSession();
     draftRecordIdRef.current = record?.id ?? null;
     setDraftRecordId(record?.id ?? null);
-    const original = record?.content ?? "";
-    editStartContentRef.current = original;
-    editStartTitleRef.current = record?.title ?? "";
     if (!record?.content) {
       setContentDraft("");
     } else {
@@ -833,37 +819,6 @@ export function RecordDetail({
   const saveDocument = useCallback(async () => {
     await saveDocumentWithLatestMarkdown(flushRichEditorRef.current, saveContent);
   }, [saveContent]);
-
-  // Exit edit mode, discarding ALL changes made during this edit session.
-  // "取消" acts as a true cancel: any pending auto-save is dropped, and if
-  // auto-save already persisted an intermediate version that differs from the
-  // content at edit-start, we revert via onUpdate so the record returns to its
-  // pre-edit state.
-  const finishEditContent = useCallback(() => {
-    if (!record) {
-      setEditingContent(false);
-      return;
-    }
-    const original = editStartContentRef.current;
-    const originalTitle = editStartTitleRef.current;
-    // Drop any pending auto-save so it can't fire after we cancel.
-    const clearedPendingSaves = clearDocumentPendingSaves();
-    pendingContentSaveRef.current = clearedPendingSaves.content;
-    pendingTitleSaveRef.current = clearedPendingSaves.title;
-    draftRecordIdRef.current = null;
-    // Invalidate queued edit writes, then append a compensating revert after
-    // any in-flight transaction settles so cancellation always wins.
-    writeQueueRef.current.invalidate();
-    const revertSession = writeQueueRef.current.beginSession();
-    void writeQueueRef.current.enqueue(revertSession, async () => {
-      await onUpdate(record.id, { content: original, title: originalTitle });
-      lastSavedContentRef.current = original;
-      lastSavedTitleRef.current = originalTitle;
-    }).catch(() => {
-      setSaveError("取消编辑时还原失败，请重试。");
-    });
-    setEditingContent(false);
-  }, [record, onUpdate]);
 
   // Register on-disk image file paths in the DB and return convertFileSrc
   // URLs for the newly-added images. Caller (MarkdownEditor) handles
@@ -1208,10 +1163,6 @@ export function RecordDetail({
               value={titleDraft}
               onChange={(event) => setTitleDraft(event.target.value)}
               onKeyDown={(event) => {
-                if (event.key === "Escape") {
-                  event.preventDefault();
-                  finishEditContent();
-                }
                 if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
                   event.preventDefault();
                   void saveDocument();
@@ -1221,7 +1172,7 @@ export function RecordDetail({
               aria-label="文档标题"
               className="min-w-40 flex-1 bg-transparent px-1 py-1 text-base font-medium text-text outline-none placeholder:text-text-muted"
             />
-            <span className="whitespace-nowrap text-[10px] text-text-muted">Ctrl+S 立即保存 · Esc 取消</span>
+            <span className="whitespace-nowrap text-[10px] text-text-muted">Ctrl+S 立即保存</span>
             {saveError ? (
               <span
                 className="ml-auto inline-flex items-center gap-1.5 rounded-full bg-danger/15 px-2.5 py-0.5 text-[11px] font-medium text-danger"
@@ -1728,7 +1679,6 @@ export function RecordDetail({
                 markdown={contentDraft}
                 onChange={setContentDraft}
                 onSave={(latestMarkdown) => saveContent(latestMarkdown)}
-                onCancel={finishEditContent}
                 onFlushReady={(flush) => {
                   flushRichEditorRef.current = flush;
                   richEditorRecordIdRef.current = flush ? record.id : null;
