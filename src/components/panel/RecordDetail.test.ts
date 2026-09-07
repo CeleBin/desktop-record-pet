@@ -7,9 +7,21 @@ import {
   shouldFlushRichEditorForRecord,
   shouldMountRichEditorForRecord,
   getRecordDetailInstanceKey,
+  clampPreviewZoom,
+  updatePreviewOffset,
 } from "./RecordDetail";
 
 describe("document workspace save status", () => {
+  it("keeps image preview zoom within its supported range", () => {
+    expect(clampPreviewZoom(0.1)).toBe(0.5);
+    expect(clampPreviewZoom(1.5)).toBe(1.5);
+    expect(clampPreviewZoom(4)).toBe(3);
+  });
+
+  it("updates image preview offset from a drag delta", () => {
+    expect(updatePreviewOffset({ x: 10, y: -5 }, { x: 25, y: 12 })).toEqual({ x: 35, y: 7 });
+  });
+
   it("shows unsaved changes whenever either editable document field differs from its persisted value", () => {
     expect(getDocumentSaveStatus({
       titleDraft: "Revised title",

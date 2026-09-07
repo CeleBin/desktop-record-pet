@@ -5,12 +5,22 @@ import {
   encodeEmptyParagraphBlocks,
   isBlankMarkdown,
   getDocumentKeyboardAction,
+  getRichEditorImagePreviewSource,
   saveLatestDocument,
   shouldApplySerializedRevision,
   shouldSerializeDocumentChange,
 } from "./MarkdownEditor";
 
 describe("rich document keyboard controls", () => {
+  it("extracts the source from a clicked BlockNote image", () => {
+    expect(getRichEditorImagePreviewSource({
+      tagName: "IMG",
+      classList: { contains: (name) => name === "bn-visual-media" },
+      currentSrc: "asset://image.png",
+      src: "asset://image.png",
+    })).toBe("asset://image.png");
+  });
+
   it("does not assign Escape an editor-level action", () => {
     expect(getDocumentKeyboardAction("Escape", false)).toBeNull();
   });

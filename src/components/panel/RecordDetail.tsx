@@ -62,6 +62,26 @@ const SOURCE_LABELS: Record<string, string> = {
   "file-picker": "文件选择",
 };
 
+const MIN_PREVIEW_ZOOM = 0.5;
+const MAX_PREVIEW_ZOOM = 3;
+const PREVIEW_ZOOM_STEP = 0.25;
+
+interface PreviewOffset {
+  x: number;
+  y: number;
+}
+
+export function clampPreviewZoom(zoom: number): number {
+  return Math.min(MAX_PREVIEW_ZOOM, Math.max(MIN_PREVIEW_ZOOM, zoom));
+}
+
+export function updatePreviewOffset(
+  offset: PreviewOffset,
+  delta: PreviewOffset,
+): PreviewOffset {
+  return { x: offset.x + delta.x, y: offset.y + delta.y };
+}
+
 export function getDocumentSaveStatus({
   titleDraft,
   savedTitle,
@@ -315,6 +335,20 @@ export function RecordDetail({
   const [latestAiResult, setLatestAiResult] = useState<LearningAnalysisResult | null>(null);
   //全屏预览窗口
   const [previewSrc, setPreviewSrc] = useState<string | null>(null);
+  const [previewZoom, setPreviewZoom] = useState(1);
+  const [previewOffset, setPreviewOffset] = useState<PreviewOffset>({ x: 0, y: 0 });
+  const [isPreviewDragging, setIsPreviewDragging] = useState(false);
+  const previewDragRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startY: number;
+    startOffset: PreviewOffset;
+  } | null>(null);
+  const openPreview = useCallback((src: string) => {
+    setPreviewSrc(src);
+    setPreviewZoom(1);
+    setPreviewOffset({ x: 0, y: 0 });
+  }, []);
   const aiSectionRef = useRef<HTMLElement | null>(null);
 
   // ── TOC rail width (persisted, clamped px resize) ──
@@ -621,13 +655,13 @@ export function RecordDetail({
           <img
             src={resolved}
             alt={alt}
-            onClick={() => setPreviewSrc(resolved)}
+            onClick={() => openPreview(resolved)}
             className="max-h-96 cursor-zoom-in"
           />
         );
       },
     }),
-    [setPreviewSrc],
+    [openPreview],
   );
 
   // TOC source — draft while editing, final content while viewing
@@ -1679,6 +1713,7 @@ export function RecordDetail({
                 markdown={contentDraft}
                 onChange={setContentDraft}
                 onSave={(latestMarkdown) => saveContent(latestMarkdown)}
+                onImagePreview={openPreview}
                 onFlushReady={(flush) => {
                   flushRichEditorRef.current = flush;
                   richEditorRecordIdRef.current = flush ? record.id : null;
@@ -2115,10 +2150,52 @@ export function RecordDetail({
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm"
           onClick={() => setPreviewSrc(null)}
+          onWheel={(event) => {
+            event.preventDefault();
+            setPreviewZoom((zoom) => clampPreviewZoom(zoom + (event.deltaY < 0 ? PREVIEW_ZOOM_STEP : -PREVIEW_ZOOM_STEP)));
+          }}
         >
+          <div className="absolute left-4 top-4 z-10 flex items-center gap-1 rounded-full bg-white/10 p-1 text-white">
+            <button
+              type="button"
+              aria-label="缩小图片"
+              className="rounded-full px-3 py-1 text-lg leading-none transition hover:bg-white/20 disabled:opacity-40"
+              onClick={(event) => {
+                event.stopPropagation();
+                setPreviewZoom((zoom) => clampPreviewZoom(zoom - PREVIEW_ZOOM_STEP));
+              }}
+              disabled={previewZoom <= MIN_PREVIEW_ZOOM}
+            >
+              −
+            </button>
+            <button
+              type="button"
+              aria-label="重置图片大小"
+              className="min-w-14 rounded-full px-2 py-1 text-xs transition hover:bg-white/20"
+              onClick={(event) => {
+                event.stopPropagation();
+                setPreviewZoom(1);
+                setPreviewOffset({ x: 0, y: 0 });
+              }}
+            >
+              {Math.round(previewZoom * 100)}%
+            </button>
+            <button
+              type="button"
+              aria-label="放大图片"
+              className="rounded-full px-3 py-1 text-lg leading-none transition hover:bg-white/20 disabled:opacity-40"
+              onClick={(event) => {
+                event.stopPropagation();
+                setPreviewZoom((zoom) => clampPreviewZoom(zoom + PREVIEW_ZOOM_STEP));
+              }}
+              disabled={previewZoom >= MAX_PREVIEW_ZOOM}
+            >
+              +
+            </button>
+          </div>
           <button
             type="button"
-            className="absolute right-4 top-4 rounded-full bg-white/10 p-2 text-white transition hover:bg-white/20"
+            className="absolute right-4 top-4 z-10 rounded-full bg-white/10 p-2 text-white transition hover:bg-white/20"
             onClick={() => setPreviewSrc(null)}
           >
             <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -2128,7 +2205,40 @@ export function RecordDetail({
           <img
             src={previewSrc}
             alt="preview"
-            className="max-h-[90vh] max-w-[90vw] rounded-xl object-contain"
+            onClick={(event) => event.stopPropagation()}
+            onPointerDown={(event) => {
+              event.stopPropagation();
+              event.preventDefault();
+              event.currentTarget.setPointerCapture(event.pointerId);
+              setIsPreviewDragging(true);
+              previewDragRef.current = {
+                pointerId: event.pointerId,
+                startX: event.clientX,
+                startY: event.clientY,
+                startOffset: previewOffset,
+              };
+            }}
+            onPointerMove={(event) => {
+              const drag = previewDragRef.current;
+              if (!drag || drag.pointerId !== event.pointerId) return;
+              setPreviewOffset(updatePreviewOffset(drag.startOffset, {
+                x: event.clientX - drag.startX,
+                y: event.clientY - drag.startY,
+              }));
+            }}
+            onPointerUp={(event) => {
+              if (previewDragRef.current?.pointerId === event.pointerId) {
+                previewDragRef.current = null;
+                setIsPreviewDragging(false);
+                event.currentTarget.releasePointerCapture(event.pointerId);
+              }
+            }}
+            onPointerCancel={() => {
+              previewDragRef.current = null;
+              setIsPreviewDragging(false);
+            }}
+            style={{ transform: `translate(${previewOffset.x}px, ${previewOffset.y}px) scale(${previewZoom})` }}
+            className={`max-h-[90vh] max-w-[90vw] rounded-xl object-contain ${isPreviewDragging ? "" : "transition-transform duration-150"} ${previewZoom > 1 ? "cursor-grab active:cursor-grabbing" : "cursor-default"}`}
           />
         </div>
       )}

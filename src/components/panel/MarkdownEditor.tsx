@@ -38,6 +38,8 @@ interface MarkdownEditorProps {
    * BlockNote's `uploadFile` hook.
    */
   onAddImageFile?: (file: File) => Promise<string>;
+  /** Opens a rich-editor image in the parent's full-screen preview. */
+  onImagePreview?: (src: string) => void;
   className?: string;
 }
 
@@ -46,6 +48,22 @@ export function getDocumentKeyboardAction(
   ctrlOrMetaKey: boolean,
 ): "save" | null {
   return ctrlOrMetaKey && key.toLowerCase() === "s" ? "save" : null;
+}
+
+interface RichEditorImageTarget {
+  tagName?: string;
+  classList?: { contains: (name: string) => boolean };
+  currentSrc?: string;
+  src?: string;
+}
+
+export function getRichEditorImagePreviewSource(
+  target: RichEditorImageTarget | null,
+): string | null {
+  if (target?.tagName !== "IMG" || !target.classList?.contains("bn-visual-media")) {
+    return null;
+  }
+  return target.currentSrc || target.src || null;
 }
 
 export async function saveLatestDocument(
@@ -169,6 +187,7 @@ export function MarkdownEditor({
   onFlushReady,
   onAddImagePaths,
   onAddImageFile,
+  onImagePreview,
   className,
 }: MarkdownEditorProps) {
   const [colorScheme, setColorScheme] = useState<"light" | "dark">(detectColorScheme);
@@ -184,6 +203,8 @@ export function MarkdownEditor({
   useEffect(() => { onAddImagePathsRef.current = onAddImagePaths; }, [onAddImagePaths]);
   const onAddImageFileRef = useRef(onAddImageFile);
   useEffect(() => { onAddImageFileRef.current = onAddImageFile; }, [onAddImageFile]);
+  const onImagePreviewRef = useRef(onImagePreview);
+  useEffect(() => { onImagePreviewRef.current = onImagePreview; }, [onImagePreview]);
 
   // Watch `data-mode` on <html> so BlockNote's color scheme tracks the
   // active theme without re-mounting the editor.
@@ -395,6 +416,12 @@ export function MarkdownEditor({
     <div
       className={className}
       style={wrapperStyle}
+      onClickCapture={(e) => {
+        const source = getRichEditorImagePreviewSource(
+          e.target as RichEditorImageTarget,
+        );
+        if (source) onImagePreviewRef.current?.(source);
+      }}
       onKeyDownCapture={(e) => {
         // Capture ensures BlockNote cannot consume the document-level save action.
         if (getDocumentKeyboardAction(e.key, e.ctrlKey || e.metaKey) === "save" && onSaveRef.current) {
