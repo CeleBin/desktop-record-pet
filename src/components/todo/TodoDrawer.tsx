@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import type { RepeatRule, TaskStatus, UnfinishedTaskItem } from "../../types";
+import type { RepeatRule, TaskPriority, UnfinishedTaskItem } from "../../types";
 import { formatRepeatRule, parseRepeatRule } from "../../types";
 import { DatePicker } from "./DatePicker";
 import { RepeatOption, WeeklyRepeatOption } from "./RepeatRuleOptions";
@@ -21,7 +21,7 @@ interface TodoDrawerProps {
   onClose: () => void;
   onUpdateTitle: (recordId: string, title: string) => Promise<void>;
   onUpdateContent: (recordId: string, content: string) => Promise<void>;
-  onUpdateTaskStatus: (taskId: string, status: TaskStatus) => Promise<void>;
+  onUpdateTaskPriority: (taskId: string, priority: TaskPriority) => Promise<void>;
   onUpdateDueAt: (recordId: string, taskId: string, dueAt: string | null) => Promise<void>;
   onUpdateRepeatRule: (taskId: string, repeatRule: string | null) => Promise<void>;
 }
@@ -31,38 +31,31 @@ interface TodoDrawerProps {
  * 每种状态包含中文标签、对应的枚举值、小圆点颜色类和激活态样式。
  * 用于底部的状态切换按钮组渲染。
  */
-const STATUS_OPTIONS: {
+const PRIORITY_OPTIONS: {
   label: string;
-  value: TaskStatus;
+  value: TaskPriority;
   dot: string;
   activeClasses: string;
 }[] = [
   {
-    label: "待办",
-    value: "todo",
+    label: "P0",
+    value: "high",
     dot: "bg-primary",
     activeClasses:
       "bg-primary/20 text-primary ring-1 ring-primary/30",
   },
   {
-    label: "进行中",
-    value: "doing",
-    dot: "bg-sky-400",
-    activeClasses: "bg-sky-400/20 text-sky-300 ring-1 ring-sky-400/30",
+    label: "P1",
+    value: "medium",
+    dot: "bg-primary",
+    activeClasses: "bg-primary/20 text-primary ring-1 ring-primary/30",
   },
   {
-    label: "已完成",
-    value: "done",
+    label: "P2",
+    value: "low",
     dot: "bg-secondary",
     activeClasses:
       "bg-secondary/20 text-secondary ring-1 ring-secondary/30",
-  },
-  {
-    label: "已取消",
-    value: "cancelled",
-    dot: "bg-text-muted",
-    activeClasses:
-      "bg-text-muted/20 text-text-muted ring-1 ring-text-muted/20",
   },
 ];
 
@@ -88,7 +81,7 @@ export function TodoDrawer({
   onClose,
   onUpdateTitle,
   onUpdateContent,
-  onUpdateTaskStatus,
+  onUpdateTaskPriority,
   onUpdateDueAt,
   onUpdateRepeatRule,
 }: TodoDrawerProps) {
@@ -212,23 +205,18 @@ export function TodoDrawer({
     await onUpdateContent(item.record_id, trimmed);
   }, [item, contentDraft, onUpdateContent]);
 
-  /**
-   * 切换任务状态。
-   * 如果与当前状态相同或已有请求进行中则直接忽略；
-   * 请求期间显示 loading 动画（小旋转圆圈），同时禁用按钮以防重复提交。
-   */
-  const handleStatusChange = useCallback(
-    async (status: TaskStatus) => {
+  const handlePriorityChange = useCallback(
+    async (priority: TaskPriority) => {
       if (!item || updatingStatus) return;
-      if (item.task_status === status) return;
+      if (item.priority === priority) return;
       setUpdatingStatus(true);
       try {
-        await onUpdateTaskStatus(item.task_id, status);
+        await onUpdateTaskPriority(item.task_id, priority);
       } finally {
         setUpdatingStatus(false);
       }
     },
-    [item, updatingStatus, onUpdateTaskStatus],
+    [item, updatingStatus, onUpdateTaskPriority],
   );
 
   // item 为空时直接返回 null，不渲染任何内容
@@ -353,19 +341,19 @@ export function TodoDrawer({
               )}
             </section>
 
-            {/* 任务状态切换 */}
+            {/* 任务重要性切换 */}
             <section>
               <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.2em] text-text0">
-                任务状态
+                任务重要性
               </p>
               <div className="flex flex-wrap gap-1.5">
-                {STATUS_OPTIONS.map((opt) => {
-                  const isActive = item.task_status === opt.value;
+                {PRIORITY_OPTIONS.map((opt) => {
+                  const isActive = item.priority === opt.value;
                   return (
                     <button
                       key={opt.value}
                       type="button"
-                      onClick={() => void handleStatusChange(opt.value)}
+                      onClick={() => void handlePriorityChange(opt.value)}
                       disabled={updatingStatus || isActive}
                       className={`
                         inline-flex items-center gap-1.5 rounded-full px-3 py-1.5

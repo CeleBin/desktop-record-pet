@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-import type { RecordType, Tag, TaskStatus } from "../../types";
+import type { RecordType, Tag, TaskPriority } from "../../types";
 import { useTagsStore } from "../../store/tags";
 import { useSettingsStore } from "../../store/settings";
 import { ConfirmDialog } from "../common/ConfirmDialog";
@@ -11,14 +11,14 @@ interface NavigationProps {
   selectedType: RecordType;
   onSelectType: (type: RecordType) => void;
   viewMode: ViewMode;
-  taskStatusFilter: TaskStatus | null;
+  taskFilter: TaskPriority | "done" | null;
   searchQuery: string;
   settingsOpen: boolean;
   memoryOpen: boolean;
   graphOpen: boolean;
   chatOpen: boolean;
   growthPreviewEnabled: boolean;
-  onTaskStatusFilterChange: (status: TaskStatus | null) => void;
+  onTaskFilterChange: (filter: TaskPriority | "done" | null) => void;
   onSearchChange: (query: string) => void;
   onToggleSettings: () => void;
   onToggleMemory: () => void;
@@ -28,12 +28,12 @@ interface NavigationProps {
   onToggleTagFilter: (id: string) => void;
 }
 
-const TASK_STATUS_OPTIONS: { label: string; value: TaskStatus | null }[] = [
+const TASK_FILTER_OPTIONS: { label: string; value: TaskPriority | "done" | null }[] = [
   { label: "全部任务", value: null },
-  { label: "待办", value: "todo" },
-  { label: "进行中", value: "doing" },
+  { label: "P0", value: "high" },
+  { label: "P1", value: "medium" },
+  { label: "P2", value: "low" },
   { label: "已完成", value: "done" },
-  { label: "已取消", value: "cancelled" },
 ];
 
 const TAG_COLORS = [
@@ -47,18 +47,18 @@ const TAG_COLORS = [
   "#2dd4bf",
 ];
 
-const TASK_STATUS_STYLES: Record<string, string> = {
-  todo: "bg-primary/20 text-primary ring-primary/30",
-  doing: "bg-sky-400/20 text-sky-300 ring-sky-400/30",
+const TASK_FILTER_STYLES: Record<string, string> = {
+  high: "bg-danger/20 text-danger ring-danger/30",
+  medium: "bg-primary/20 text-primary ring-primary/30",
+  low: "bg-secondary/20 text-secondary ring-secondary/30",
   done: "bg-secondary/20 text-secondary ring-secondary/30",
-  cancelled: "bg-text-muted/20 text-text-muted ring-text-muted/20",
 };
 
 export function Navigation({
   selectedType,
   onSelectType,
   viewMode,
-  taskStatusFilter,
+  taskFilter,
   searchQuery,
   settingsOpen,
   memoryOpen,
@@ -66,7 +66,7 @@ export function Navigation({
   chatOpen,
   growthPreviewEnabled,
   activeTagIds,
-  onTaskStatusFilterChange,
+  onTaskFilterChange,
   onSearchChange,
   onToggleSettings,
   onToggleMemory,
@@ -249,7 +249,7 @@ export function Navigation({
             onChange={(e) => onSearchChange(e.target.value)}
             onFocus={() => setFocused(true)}
             onBlur={() => setFocused(false)}
-            placeholder={viewMode === "tasks" ? "搜索任务…" : "搜索笔记…"}
+            placeholder={viewMode === "tasks" ? "搜索待办…" : "搜索笔记…"}
             className="min-w-0 flex-1 bg-transparent text-sm text-text placeholder-text-muted outline-none"
           />
           {searchQuery.length > 0 && (
@@ -436,24 +436,24 @@ export function Navigation({
           {/* ── Task status filter ── */}
           <section>
             <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.2em] text-text0">
-              任务状态
+              任务重要性
             </p>
             <div className="flex flex-wrap gap-1.5">
-              {TASK_STATUS_OPTIONS.map((opt) => {
-                const isActive = taskStatusFilter === opt.value;
+              {TASK_FILTER_OPTIONS.map((opt) => {
+                const isActive = taskFilter === opt.value;
                 return (
                   <button
                     key={opt.label}
                     type="button"
-                    onClick={() => onTaskStatusFilterChange(opt.value)}
+                    onClick={() => onTaskFilterChange(opt.value)}
                     className={`
-                      rounded-full px-3 py-1.5 text-xs font-medium transition-all duration-150
+                      rounded-full border border-border/60 px-3 py-1.5 text-xs font-medium transition-all duration-150
                       ${
                         isActive && opt.value
-                          ? `${TASK_STATUS_STYLES[opt.value]} ring-1`
+                          ? `${TASK_FILTER_STYLES[opt.value]} ring-1`
                           : isActive && !opt.value
                             ? "bg-secondary/15 text-secondary ring-1 ring-secondary/30"
-                            : "bg-white/5 text-text-muted hover:bg-white/10 hover:text-text"
+                            : "bg-white/5 text-text-muted hover:border-secondary/35 hover:bg-white/10 hover:text-text"
                       }
                     `}
                   >
@@ -464,12 +464,6 @@ export function Navigation({
             </div>
           </section>
 
-          {/* Hint about task context */}
-          <section className="rounded-2xl bg-secondary/5 border border-secondary/10 p-3">
-            <p className="text-[11px] leading-5 text-text-muted">
-              显示所有已转为待办的记录。点击记录可查看详情并更新进度。
-            </p>
-          </section>
         </>
       )}
 

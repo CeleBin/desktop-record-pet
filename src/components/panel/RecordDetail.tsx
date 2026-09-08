@@ -22,6 +22,7 @@ import type {
   LearningAnalysisResult,
   RecordWithRelations,
   RepeatRule,
+  TaskPriority,
   TaskStatus,
   UpdateRecordRequest,
 } from "../../types";
@@ -36,6 +37,7 @@ interface RecordDetailProps {
   onUpdate: (id: string, update: UpdateRecordRequest) => Promise<void>;
   onConvertToTask: (recordId: string) => Promise<void>;
   onUpdateTaskStatus: (taskId: string, status: TaskStatus, recordId: string) => Promise<void>;
+  onUpdateTaskPriority: (taskId: string, priority: TaskPriority, recordId: string) => Promise<void>;
   onUpdateDueAt: (recordId: string, taskId: string, dueAt: string | null) => Promise<void>;
   onUpdateRepeatRule: (taskId: string, repeatRule: string | null) => Promise<void>;
   onDelete: (id: string) => void;
@@ -146,11 +148,10 @@ export function createDocumentWriteQueue() {
   };
 }
 
-const TASK_STATUS_OPTIONS: { label: string; value: TaskStatus; activeClasses: string; dot: string }[] = [
-  { label: "待办", value: "todo", activeClasses: "bg-primary/20 text-primary ring-1 ring-primary/30", dot: "bg-primary" },
-  { label: "进行中", value: "doing", activeClasses: "bg-sky-400/20 text-sky-300 ring-1 ring-sky-400/30", dot: "bg-sky-400" },
-  { label: "已完成", value: "done", activeClasses: "bg-secondary/20 text-secondary ring-1 ring-secondary/30", dot: "bg-secondary" },
-  { label: "已取消", value: "cancelled", activeClasses: "bg-text-muted/20 text-text-muted ring-1 ring-text-muted/20", dot: "bg-text-muted" },
+const TASK_PRIORITY_OPTIONS: { label: string; value: TaskPriority; activeClasses: string; dot: string }[] = [
+  { label: "P0", value: "high", activeClasses: "bg-danger/20 text-danger ring-1 ring-danger/30", dot: "bg-danger" },
+  { label: "P1", value: "medium", activeClasses: "bg-primary/20 text-primary ring-1 ring-primary/30", dot: "bg-primary" },
+  { label: "P2", value: "low", activeClasses: "bg-secondary/20 text-secondary ring-1 ring-secondary/30", dot: "bg-secondary" },
 ];
 
 const KNOWLEDGE_STATUS_LABELS: Record<string, string> = {
@@ -312,6 +313,7 @@ export function RecordDetail({
   onUpdate,
   onConvertToTask,
   onUpdateTaskStatus,
+  onUpdateTaskPriority,
   onUpdateDueAt,
   onUpdateRepeatRule,
   onDelete,
@@ -915,6 +917,20 @@ export function RecordDetail({
     [record, updatingStatus, onUpdateTaskStatus],
   );
 
+  const handleUpdatePriority = useCallback(
+    async (priority: TaskPriority) => {
+      if (!record?.task || updatingStatus) return;
+      if (record.task.priority === priority) return;
+      setUpdatingStatus(true);
+      try {
+        await onUpdateTaskPriority(record.task.id, priority, record.id);
+      } finally {
+        setUpdatingStatus(false);
+      }
+    },
+    [record, updatingStatus, onUpdateTaskPriority],
+  );
+
   const handleUpdateDueAt = useCallback(
     async (dueAt: string | null) => {
       if (!record?.task) return;
@@ -1174,7 +1190,7 @@ export function RecordDetail({
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
-      {onBackToGraph && (
+      {onBackToGraph && record.type !== "task" && (
         <div className="flex shrink-0 items-center justify-between gap-3 border-b border-primary/15 bg-primary/[5%] px-5 py-2">
           <span className="truncate text-[11px] text-text-muted">知识图谱 / {record.title || "当前记录"}</span>
           <button
@@ -1445,19 +1461,19 @@ export function RecordDetail({
           <div className="flex min-w-0 flex-1 flex-col">
             {record.type === "task" && record.task && (
               <div className="mx-5 mt-4 shrink-0 space-y-4 rounded-xl border border-border bg-surface/60 p-4 backdrop-blur">
-                {/* 任务状态 */}
+                {/* 任务重要性 */}
                 <section>
                   <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.2em] text-text0">
-                    任务状态
+                    任务重要性
                   </p>
                   <div className="flex flex-wrap gap-1.5">
-                    {TASK_STATUS_OPTIONS.map((opt) => {
-                      const isActive = record.task!.task_status === opt.value;
+                    {TASK_PRIORITY_OPTIONS.map((opt) => {
+                      const isActive = record.task!.priority === opt.value;
                       return (
                         <button
                           key={opt.value}
                           type="button"
-                          onClick={() => void handleUpdateStatus(opt.value)}
+                          onClick={() => void handleUpdatePriority(opt.value)}
                           disabled={updatingStatus || isActive}
                           className={`
                             inline-flex items-center gap-1.5 rounded-full px-3 py-1.5
@@ -1825,16 +1841,16 @@ export function RecordDetail({
                     {/* Interactive status update buttons */}
                     <div className="mb-3">
                       <p className="mb-2 text-[10px] font-medium text-text-muted">
-                        更新状态
+                        更新重要性
                       </p>
                       <div className="flex flex-wrap gap-1.5">
-                        {TASK_STATUS_OPTIONS.map((opt) => {
-                          const isActive = record.task!.task_status === opt.value;
+                        {TASK_PRIORITY_OPTIONS.map((opt) => {
+                          const isActive = record.task!.priority === opt.value;
                           return (
                             <button
                               key={opt.value}
                               type="button"
-                              onClick={() => void handleUpdateStatus(opt.value)}
+                              onClick={() => void handleUpdatePriority(opt.value)}
                               disabled={updatingStatus || isActive}
                               className={`
                                 inline-flex items-center gap-1.5 rounded-full px-3 py-1.5
@@ -1865,13 +1881,23 @@ export function RecordDetail({
 
                     {/* Task metadata */}
                     <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 border-t border-secondary/10 pt-3">
+                      {record.task.task_status !== "done" && (
+                        <button
+                          type="button"
+                          onClick={() => void handleUpdateStatus("done")}
+                          disabled={updatingStatus}
+                          className="rounded-full bg-secondary/15 px-2.5 py-1 text-[11px] text-secondary hover:bg-secondary/25 disabled:opacity-60"
+                        >
+                          标记已完成
+                        </button>
+                      )}
                       <span className="text-[11px] text-text-muted">
-                        优先级：
+                        重要性：
                         {record.task.priority === "high"
-                          ? "高"
+                          ? "P0"
                           : record.task.priority === "low"
-                            ? "低"
-                            : "中"}
+                            ? "P2"
+                            : "P1"}
                       </span>
                       {record.task.due_at && (
                         <span className="rounded-full bg-danger/10 px-2 py-0.5 text-[10px] text-danger">

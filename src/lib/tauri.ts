@@ -132,6 +132,13 @@ export async function updateTaskStatus(
   return invoke<TaskItem>("update_task_status", { taskId, status });
 }
 
+export async function updateTaskPriority(
+  taskId: string,
+  priority: TaskItem["priority"],
+): Promise<TaskItem> {
+  return invoke<TaskItem>("update_task_priority", { taskId, priority });
+}
+
 export async function listUnfinishedTasks(): Promise<UnfinishedTaskItem[]> {
   return invoke<UnfinishedTaskItem[]>("list_unfinished_tasks");
 }

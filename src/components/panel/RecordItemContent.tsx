@@ -12,20 +12,6 @@ const TYPE_LABELS: Record<string, { dot: string }> = {
   task: { dot: "bg-secondary" },
 };
 
-const TASK_STATUS_BADGE: Record<
-  string,
-  { label: string; bg: string; text: string }
-> = {
-  todo: { label: "待办", bg: "bg-primary/15", text: "text-primary" },
-  doing: { label: "进行中", bg: "bg-sky-400/15", text: "text-sky-300" },
-  done: { label: "已完成", bg: "bg-secondary/15", text: "text-secondary" },
-  cancelled: {
-    label: "已取消",
-    bg: "bg-text-muted/15",
-    text: "text-text-muted",
-  },
-};
-
 function formatDate(iso: string): string {
   try {
     const d = new Date(iso);
@@ -57,6 +43,7 @@ export function RecordItemContent({ record, onDelete }: RecordItemContentProps) 
   const meta = TYPE_LABELS[record.type] ?? TYPE_LABELS.note;
   const hasTask = !!record.task;
   const ts = record.task?.task_status;
+  const priorityLabel = record.task?.priority === "high" ? "P0" : record.task?.priority === "low" ? "P2" : "P1";
 
   return (
     <div className="flex items-start justify-between gap-2">
@@ -79,21 +66,15 @@ export function RecordItemContent({ record, onDelete }: RecordItemContentProps) 
               <span className="text-text-muted">·</span>
               <span
                 className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ${
-                  TASK_STATUS_BADGE[ts].bg
-                } ${TASK_STATUS_BADGE[ts].text}`}
+                  ts === "done" ? "bg-secondary/15 text-secondary" : record.task?.priority === "high" ? "bg-danger/15 text-danger" : record.task?.priority === "low" ? "bg-secondary/15 text-secondary" : "bg-primary/15 text-primary"
+                }`}
               >
                 <span
                   className={`inline-block h-1 w-1 rounded-full ${
-                    ts === "todo"
-                      ? "bg-primary"
-                      : ts === "doing"
-                        ? "bg-sky-400"
-                        : ts === "done"
-                          ? "bg-secondary"
-                          : "bg-text-muted"
+                    ts === "done" ? "bg-secondary" : record.task?.priority === "high" ? "bg-danger" : record.task?.priority === "low" ? "bg-secondary" : "bg-primary"
                   }`}
                 />
-                {TASK_STATUS_BADGE[ts].label}
+                {ts === "done" ? "已完成" : priorityLabel}
               </span>
             </>
           )}

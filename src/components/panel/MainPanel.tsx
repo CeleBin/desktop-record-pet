@@ -2,12 +2,13 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 
 import { useColumnResize } from "../../lib/useColumnResize";
-import { updateTaskDueAt, updateTaskRepeatRule } from "../../lib/tauri";
+import { updateTaskDueAt, updateTaskPriority, updateTaskRepeatRule } from "../../lib/tauri";
 import { useRecordsStore } from "../../store/records";
 import { initTagsListener, useTagsStore } from "../../store/tags";
 import { useTasksStore } from "../../store/tasks";
 import type {
   RecordType,
+  TaskPriority,
   TaskStatus,
   UpdateRecordRequest,
 } from "../../types";
@@ -60,7 +61,7 @@ export function MainPanel() {
   const typeFilter = selectedType;
 
   // ── Local filter state ──
-  const [taskStatusFilter, setTaskStatusFilter] = useState<TaskStatus | null>(null);
+  const [taskFilter, setTaskFilter] = useState<TaskPriority | "done" | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
 
@@ -127,7 +128,7 @@ export function MainPanel() {
   // Clear task status filter when leaving tasks view
   useEffect(() => {
     if (viewMode !== "tasks") {
-      setTaskStatusFilter(null);
+      setTaskFilter(null);
     }
   }, [viewMode]);
 
@@ -141,11 +142,13 @@ export function MainPanel() {
   // Server-side `type_filter` handles the type filtering; client-side only
   // applies task-status filter on top for tasks view.
   const displayRecords = useMemo(() => {
-    if (viewMode === "tasks" && taskStatusFilter) {
-      return records.filter((r) => r.task?.task_status === taskStatusFilter);
+    if (viewMode === "tasks" && taskFilter) {
+      return records.filter((r) => taskFilter === "done"
+        ? r.task?.task_status === "done"
+        : r.task?.task_status !== "done" && r.task?.priority === taskFilter);
     }
     return records;
-  }, [records, viewMode, taskStatusFilter]);
+  }, [records, viewMode, taskFilter]);
 
   const handleSelect = useCallback(
     (id: string) => {
@@ -211,6 +214,14 @@ export function MainPanel() {
     [updateStatus, selectRecord],
   );
 
+  const handleUpdateTaskPriority = useCallback(
+    async (taskId: string, priority: TaskPriority, recordId: string) => {
+      await updateTaskPriority(taskId, priority);
+      await selectRecord(recordId);
+    },
+    [selectRecord],
+  );
+
   const handleUpdateDueAt = useCallback(
     async (recordId: string, taskId: string, dueAt: string | null) => {
       await updateTaskDueAt(taskId, dueAt);
@@ -240,14 +251,14 @@ export function MainPanel() {
           selectedType={selectedType}
           onSelectType={setSelectedType}
           viewMode={viewMode}
-          taskStatusFilter={taskStatusFilter}
+          taskFilter={taskFilter}
           searchQuery={searchQuery}
           settingsOpen={contentMode === "settings"}
           memoryOpen={contentMode === "memory"}
           graphOpen={contentMode === "graph"}
           chatOpen={contentMode === "chat"}
           growthPreviewEnabled={growthPreviewEnabled}
-          onTaskStatusFilterChange={setTaskStatusFilter}
+          onTaskFilterChange={setTaskFilter}
           onSearchChange={setSearchQuery}
           onToggleSettings={() => setContentMode((current) => current === "settings" ? "records" : "settings")}
           onToggleMemory={() => {
@@ -329,6 +340,7 @@ export function MainPanel() {
             onUpdate={handleUpdate}
             onConvertToTask={handleConvertToTask}
             onUpdateTaskStatus={handleUpdateTaskStatus}
+            onUpdateTaskPriority={handleUpdateTaskPriority}
             onUpdateDueAt={handleUpdateDueAt}
             onUpdateRepeatRule={handleUpdateRepeatRule}
             onDelete={handleDelete}

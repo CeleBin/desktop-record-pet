@@ -38,14 +38,14 @@ import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable"
 import {
   showMainPanel,
   updateRecord,
-  updateTaskStatus,
+  updateTaskPriority,
   updateTaskRepeatRule,
 } from "../../lib/tauri";
 // Zustand 状态管理：todoOverlay store 持有浮窗的条目、折叠态、Drawer 等
 import { useTodoOverlayStore } from "../../store/todoOverlay";
 // Zustand 状态管理：settings store 用于读取背景透明度、字号等配置
 import { useSettingsStore } from "../../store/settings";
-import type { TaskStatus, UnfinishedTaskItem } from "../../types";
+import type { TaskPriority, UnfinishedTaskItem } from "../../types";
 // 子组件：详情 Drawer、单条待办条目、分类区块、分类管理器
 import { TodoDrawer } from "./TodoDrawer";
 import { SortableTodoItem } from "./SortableTodoItem";
@@ -328,10 +328,9 @@ export function TodoOverlay() {
     [fetchItems],
   );
 
-  // 更新任务状态（如 pending / completed）并刷新列表
-  const handleUpdateTaskStatus = useCallback(
-    async (taskId: string, status: TaskStatus) => {
-      await updateTaskStatus(taskId, status);
+  const handleUpdateTaskPriority = useCallback(
+    async (taskId: string, priority: TaskPriority) => {
+      await updateTaskPriority(taskId, priority);
       await fetchItems();
     },
     [fetchItems],
@@ -767,7 +766,7 @@ export function TodoOverlay() {
           onClose={closeDrawer}
           onUpdateTitle={handleUpdateTitle}
           onUpdateContent={handleUpdateContent}
-          onUpdateTaskStatus={handleUpdateTaskStatus}
+          onUpdateTaskPriority={handleUpdateTaskPriority}
           onUpdateDueAt={updateDueAt}
           onUpdateRepeatRule={handleUpdateRepeatRule}
         />

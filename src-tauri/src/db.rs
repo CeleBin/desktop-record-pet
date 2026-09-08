@@ -587,6 +587,16 @@ pub fn update_task_status(conn: &Connection, id: &str, task_status: TaskStatus) 
     Ok(task)
 }
 
+pub fn update_task_priority(conn: &Connection, id: &str, priority: TaskPriority) -> AppResult<Task> {
+    let mut task = get_task(conn, id)?;
+    task.priority = priority;
+    conn.execute(
+        "UPDATE tasks SET priority = ?2 WHERE id = ?1",
+        params![task.id, task.priority.as_str()],
+    )?;
+    Ok(task)
+}
+
 /// 更新任务的重复规则。
 pub fn update_task_repeat_rule(
     conn: &Connection,

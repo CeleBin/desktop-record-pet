@@ -154,24 +154,14 @@ export function TodoItem({
           </p>
 
           {/**
-           * 状态标签（徽章）：
-           * - doing（进行中）：天蓝色文字 + 天蓝色圆点
-           * - todo（待办）：琥珀色文字 + 琥珀色圆点
+           * 重要性标签（徽章）：P0 最高，P1 中等，P2 普通。
            * 圆点使用 inline-block 模拟，与文字通过 gap-1 间距对齐。
            */}
-          <span
-            className={`inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ${
-              item.task_status === "doing"
-                ? "bg-sky-400/10 text-sky-300"
-                : "bg-primary/10 text-primary"
-            }`}
-          >
-            <span
-              className={`inline-block h-1 w-1 rounded-full ${
-                item.task_status === "doing" ? "bg-sky-400" : "bg-primary"
-              }`}
-            />
-            {item.task_status === "doing" ? "进行中" : "待办"}
+          <span className={`inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ${
+            item.priority === "high" ? "bg-danger/10 text-danger" : item.priority === "low" ? "bg-secondary/10 text-secondary" : "bg-primary/10 text-primary"
+          }`}>
+            <span className={`inline-block h-1 w-1 rounded-full ${item.priority === "high" ? "bg-danger" : item.priority === "low" ? "bg-secondary" : "bg-primary"}`} />
+            {item.priority === "high" ? "P0" : item.priority === "low" ? "P2" : "P1"}
           </span>
         </div>
 

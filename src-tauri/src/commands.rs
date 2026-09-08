@@ -15,7 +15,7 @@ use crate::models::{
     CreateAiResultRequest, CreateAttachmentRequest, CreateRecordRequest, CreateTaskRequest, Folder,
     ImportFilesRequest, KnowledgeMemoryDetail, KnowledgeMemoryItem, Record, RecordFilter,
     PetChatMessage, PetChatSession, RecordSource, RecordType, RecordWithRelations,
-    RunAiTaskRequest, SettingsEntry, Tag, Task, TaskFilter, TaskStatus, UnfinishedTaskItem,
+    RunAiTaskRequest, SettingsEntry, Tag, Task, TaskFilter, TaskPriority, TaskStatus, UnfinishedTaskItem,
     UpdateRecordRequest,
 };
 use crate::models::{CreateAiProfileRequest, UpdateAiProfileRequest};
@@ -481,6 +481,24 @@ pub fn update_task_status(
     let task = {
         let conn = database.conn.lock()?;
         db::update_task_status(&conn, &task_id, status)?
+    };
+    emit_data_changed(&app)?;
+    Ok(task)
+}
+
+#[tauri::command]
+pub fn update_task_priority(
+    app: AppHandle,
+    database: State<'_, Database>,
+    task_id: String,
+    priority: TaskPriority,
+) -> AppResult<Task> {
+    if task_id.trim().is_empty() {
+        return Err(AppError::Validation("task id is required".into()));
+    }
+    let task = {
+        let conn = database.conn.lock()?;
+        db::update_task_priority(&conn, &task_id, priority)?
     };
     emit_data_changed(&app)?;
     Ok(task)
