@@ -89,7 +89,7 @@ export function Navigation({
 
   const tagPopoverRef = useRef<HTMLDivElement>(null);
 
-  // ── Tag context menu (right-click on a tag filter button) ──
+  // ── Tag action menu (opened from the tag's overflow button) ──
   const [tagMenu, setTagMenu] = useState<{ tagId: string; x: number; y: number } | null>(null);
   const tagMenuRef = useRef<HTMLDivElement>(null);
 
@@ -114,7 +114,7 @@ export function Navigation({
     return () => document.removeEventListener("mousedown", handler);
   }, [showTagPopover]);
 
-  // Close context menu on outside click
+  // Close tag action menu on outside click
   useEffect(() => {
     if (!tagMenu) return;
     const handler = (e: MouseEvent) => {
@@ -124,6 +124,15 @@ export function Navigation({
     };
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
+  }, [tagMenu]);
+
+  useEffect(() => {
+    if (!tagMenu) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setTagMenu(null);
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
   }, [tagMenu]);
 
   // Close edit popover on outside click
@@ -282,44 +291,53 @@ export function Navigation({
                   const isActive = activeTagIds.includes(tag.id);
                   const hasColor = !!tag.color;
                   return (
-                    <button
-                      key={tag.id}
-                      type="button"
-                      onClick={() => onToggleTagFilter(tag.id)}
-                      onContextMenu={(e) => {
-                        e.preventDefault();
-                        setTagMenu({ tagId: tag.id, x: e.clientX, y: e.clientY });
-                      }}
-                      className={`
-                        rounded-full px-3 py-1.5 text-xs font-medium transition-all duration-150
-                        ${!hasColor
-                          ? isActive
-                            ? "bg-secondary/15 text-secondary ring-1 ring-secondary/30"
-                            : "bg-white/5 text-text-muted hover:bg-white/10 hover:text-text"
-                          : ""
+                    <div key={tag.id} className="group relative">
+                      <button
+                        type="button"
+                        onClick={() => onToggleTagFilter(tag.id)}
+                        className={`
+                          rounded-full py-1.5 pl-3 pr-7 text-xs font-medium transition-all duration-150
+                          ${!hasColor
+                            ? isActive
+                              ? "bg-secondary/15 text-secondary ring-1 ring-secondary/30"
+                              : "bg-white/5 text-text-muted hover:bg-white/10 hover:text-text"
+                            : ""
+                          }
+                        `}
+                        style={
+                          hasColor
+                            ? {
+                                backgroundColor: isActive
+                                  ? `${tag.color!}33`
+                                  : `${tag.color!}1a`,
+                                color: tag.color!,
+                                boxShadow: isActive
+                                  ? `0 0 0 1px ${tag.color!}4d`
+                                  : undefined,
+                              }
+                            : undefined
                         }
-                      `}
-                      style={
-                        hasColor
-                          ? {
-                              backgroundColor: isActive
-                                ? `${tag.color!}33`
-                                : `${tag.color!}1a`,
-                              color: tag.color!,
-                              boxShadow: isActive
-                                ? `0 0 0 1px ${tag.color!}4d`
-                                : undefined,
-                            }
-                          : undefined
-                      }
-                    >
-                      {tag.name}
-                      {isActive && (
-                        <svg className="ml-1 h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                        </svg>
-                      )}
-                    </button>
+                      >
+                        {tag.name}
+                        {isActive && (
+                          <svg className="ml-1 h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        )}
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={`管理标签 ${tag.name}`}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          const rect = event.currentTarget.getBoundingClientRect();
+                          setTagMenu({ tagId: tag.id, x: rect.right + 4, y: rect.top });
+                        }}
+                        className="absolute right-1 top-1/2 -translate-y-1/2 rounded-full px-1 text-sm leading-none text-current opacity-0 transition group-hover:opacity-70 hover:!opacity-100 focus:opacity-100"
+                      >
+                        ···
+                      </button>
+                    </div>
                   );
                 })}
               </div>
@@ -503,20 +521,26 @@ export function Navigation({
         </button>
       </div>
 
-      {/* Tag context menu (right-click) */}
+      {/* Tag action menu */}
       {tagMenu && (
         <div
           ref={tagMenuRef}
-          className="fixed z-50 w-32 rounded-xl border border-border bg-surface/95 p-1 shadow-2xl backdrop-blur-xl"
-          style={{ left: tagMenu.x, top: tagMenu.y }}
+          role="menu"
+          className="fixed z-50 w-36 rounded-xl border border-border bg-surface/95 p-1.5 shadow-2xl backdrop-blur-xl"
+          style={{
+            left: Math.min(tagMenu.x, Math.max(8, window.innerWidth - 152)),
+            top: Math.min(tagMenu.y, Math.max(8, window.innerHeight - 132)),
+          }}
         >
           {(() => {
             const tag = tags.find((t) => t.id === tagMenu.tagId);
             if (!tag) return null;
             return (
               <>
+                <p className="truncate px-2.5 py-1 text-[10px] text-text0">标签：{tag.name}</p>
                 <button
                   type="button"
+                  role="menuitem"
                   onClick={() => handleStartEditTag(tag)}
                   className="block w-full rounded-lg px-2.5 py-1.5 text-left text-xs text-text transition hover:bg-white/5"
                 >
@@ -524,6 +548,7 @@ export function Navigation({
                 </button>
                 <button
                   type="button"
+                  role="menuitem"
                   onClick={() => void handleDeleteTag(tag)}
                   className="block w-full rounded-lg px-2.5 py-1.5 text-left text-xs text-danger transition hover:bg-danger/10"
                 >
