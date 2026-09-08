@@ -602,6 +602,259 @@ select {
   letter-spacing: -0.02em;
 }
 
+/* BlockNote's default H1 is 3× the body text, which is too theatrical for
+   a compact note editor. Keep the hierarchy readable, but make it feel like
+   a working document rather than a poster. */
+.document-editor .bn-editor [data-content-type="heading"] {
+  padding-top: 10px;
+  line-height: 1.3;
+  --level: 1.7em;
+}
+
+.document-editor .bn-editor [data-content-type="heading"][data-level="2"] {
+  --level: 1.4em;
+}
+
+.document-editor .bn-editor [data-content-type="heading"][data-level="3"] {
+  --level: 1.2em;
+}
+
+.document-editor .bn-editor [data-content-type="heading"][data-level="4"] {
+  --level: 1.08em;
+}
+
+.document-editor .bn-editor [data-content-type="heading"][data-level="5"] {
+  --level: 1em;
+}
+
+.document-editor .bn-block-outer[data-prev-level="1"] {
+  --prev-level: 1.7em;
+}
+
+.document-editor .bn-block-outer[data-prev-level="2"] {
+  --prev-level: 1.4em;
+}
+
+.document-editor .bn-block-outer[data-prev-level="3"] {
+  --prev-level: 1.2em;
+}
+
+.document-editor .bn-block-outer[data-prev-level="4"] {
+  --prev-level: 1.08em;
+}
+
+.document-editor .bn-block-outer[data-prev-level="5"] {
+  --prev-level: 1em;
+}
+
+/* Code blocks — a light, document-native treatment inspired by modern
+   collaborative editors. The language picker stays visible so the block is
+   understandable without having to hunt for a hover-only control. */
+.document-editor .bn-block-content[data-content-type="codeBlock"] {
+  position: relative;
+  display: block;
+  padding: 0;
+  box-sizing: border-box;
+  overflow: visible;
+  border: 1px solid #d9dee7;
+  border-radius: 8px;
+  background: #f7f8fa;
+  color: #253040;
+  box-shadow: none;
+}
+
+.document-editor .document-code-toolbar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 36px;
+  padding: 0 10px;
+  border-radius: 8px 8px 0 0;
+  background: #f7f8fa;
+  color: #536173;
+  font-family: "IBM Plex Sans", "Noto Sans SC", sans-serif;
+  font-size: 12px;
+}
+
+.document-editor .document-code-language,
+.document-editor .document-code-action {
+  border: 0;
+  background: transparent;
+  color: #526072;
+  cursor: pointer;
+  font: inherit;
+  line-height: 26px;
+  white-space: nowrap;
+}
+
+.document-editor .document-code-language {
+  padding: 0 6px;
+  border-radius: 4px;
+  font-weight: 500;
+}
+
+.document-editor .document-code-language:hover,
+.document-editor .document-code-language[aria-expanded="true"],
+.document-editor .document-code-action:hover {
+  background: #eef2f6;
+  color: #276cf4;
+}
+
+.document-editor .document-code-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.document-editor .document-code-action {
+  padding: 0 6px;
+  border-radius: 4px;
+}
+
+.document-editor .document-code-language-menu {
+  position: absolute;
+  z-index: 20;
+  top: 31px;
+  left: 8px;
+  width: 220px;
+  overflow: hidden;
+  border: 1px solid #dfe5ec;
+  border-radius: 7px;
+  background: #fff;
+  box-shadow: 0 8px 24px rgb(27 39 58 / 14%);
+}
+
+.document-editor .document-code-language-menu[hidden] {
+  display: none !important;
+}
+
+.document-editor .document-code-language-search {
+  box-sizing: border-box;
+  width: calc(100% - 16px);
+  height: 30px;
+  margin: 8px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 4px;
+  outline: 0;
+  background: #f5f7fa;
+  color: #253040;
+  font: inherit;
+}
+
+.document-editor .document-code-language-list {
+  max-height: 360px;
+  padding: 3px 0 7px;
+  overflow-y: auto;
+}
+
+.document-editor .document-code-language-option {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  height: 34px;
+  padding: 0 18px;
+  border: 0;
+  background: transparent;
+  color: #303b4b;
+  cursor: pointer;
+  font: 13px/1.3 "IBM Plex Sans", "Noto Sans SC", sans-serif;
+  text-align: left;
+}
+
+.document-editor .document-code-language-option:hover {
+  background: #f4f7fb;
+}
+
+.document-editor .document-code-language-option.is-active {
+  color: #276cf4;
+  background: #f0f2f5;
+}
+
+.document-editor .document-code-language-option.is-active::after {
+  margin-left: auto;
+  content: "✓";
+  font-weight: 700;
+}
+
+.document-editor .document-code-language-empty {
+  margin: 10px 18px;
+  color: #8a96a5;
+  font: 12px/1.4 "IBM Plex Sans", "Noto Sans SC", sans-serif;
+}
+
+.document-editor .document-code-gutter {
+  position: absolute;
+  z-index: 1;
+  top: 49px;
+  left: 0;
+  width: 42px;
+  box-sizing: border-box;
+  bottom: 14px;
+  color: #9aa5b1;
+  font-family: "JetBrains Mono", Consolas, ui-monospace, monospace;
+  font-size: 12.5px;
+  line-height: 1.6;
+  text-align: right;
+  user-select: none;
+  pointer-events: none;
+}
+
+.document-editor .document-code-gutter > span {
+  position: absolute;
+  right: 0;
+}
+
+.document-editor .bn-block-content[data-content-type="codeBlock"] > pre {
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  padding: 13px 16px 14px 54px;
+  overflow-x: auto;
+  background: #f7f8fa;
+  border-radius: 0 0 8px 8px;
+  color: inherit;
+  font-family: "JetBrains Mono", Consolas, ui-monospace, monospace;
+  font-size: 12.5px;
+  line-height: 1.6;
+  tab-size: 2;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Make the editable content node cover the whole text area, so clicks to the
+   right of a short line still resolve to that line instead of the node-view
+   wrapper. */
+.document-editor .bn-block-content[data-content-type="codeBlock"] > pre > code {
+  display: block;
+  width: 100%;
+  min-height: 1.6em;
+  cursor: text;
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  padding: 0;
+  white-space: inherit;
+  overflow-wrap: inherit;
+}
+
+.document-editor .bn-block-content[data-content-type="codeBlock"] > pre.is-nowrap {
+  overflow-x: auto;
+  white-space: pre;
+  overflow-wrap: normal;
+}
+
+/* Match read mode with the editor's calmer code treatment. */
+.markdown-body pre {
+  border: 1px solid color-mix(in srgb, var(--border) 70%, #cbd5e1);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface-2) 82%, #f8fafc);
+  color: var(--text);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 35%);
+}
+
 .document-editor .bn-side-menu {
   left: -34px;
   /* The side-menu is clipped by .bn-wrapper's horizontal overflow but its DOM

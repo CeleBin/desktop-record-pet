@@ -5,10 +5,22 @@ import {
   useState,
   type CSSProperties,
 } from "react";
-import { type PartialBlock } from "@blocknote/core";
+import {
+  BlockNoteSchema,
+  createBlockSpec,
+  createCodeBlockSpec,
+  defaultBlockSpecs,
+  type PartialBlock,
+} from "@blocknote/core";
 import { BlockNoteView } from "@blocknote/shadcn";
 import { useCreateBlockNote } from "@blocknote/react";
+import { createHighlighter } from "shiki";
 import { listenForFileDrops } from "../../lib/dragDrop";
+import {
+  filterCodeLanguages,
+  getCodeBlockSourceText,
+  measureCodeLines,
+} from "./codeBlockUi";
 
 // BlockNote CSS — injected once at module load. Vite hoists these to the
 // document head. The `@source` directive in styles.css makes the shadcn
@@ -162,6 +174,283 @@ export function encodeEmptyParagraphBlocks(
 
 const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|bmp|svg)$/i;
 
+const CODE_LANGUAGES: Record<string, { name: string; aliases?: string[] }> = {
+  text: { name: "纯文本", aliases: ["plaintext", "txt"] },
+  json: { name: "JSON" },
+  javascript: { name: "JavaScript", aliases: ["js"] },
+  typescript: { name: "TypeScript", aliases: ["ts"] },
+  python: { name: "Python", aliases: ["py"] },
+  bash: { name: "Bash", aliases: ["shell", "sh"] },
+  powershell: { name: "PowerShell", aliases: ["ps1"] },
+  sql: { name: "SQL" },
+  html: { name: "HTML" },
+  css: { name: "CSS" },
+  markdown: { name: "Markdown", aliases: ["md"] },
+  yaml: { name: "YAML", aliases: ["yml"] },
+  xml: { name: "XML" },
+  java: { name: "Java" },
+  go: { name: "Go", aliases: ["golang"] },
+  rust: { name: "Rust", aliases: ["rs"] },
+  c: { name: "C" },
+  cpp: { name: "C++", aliases: ["c++"] },
+  csharp: { name: "C#", aliases: ["cs"] },
+};
+
+function copyCodeToClipboard(text: string): Promise<void> {
+  if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(text);
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.style.cssText = "position:fixed;opacity:0;pointer-events:none";
+  document.body.appendChild(textarea);
+  textarea.select();
+  document.execCommand("copy");
+  textarea.remove();
+  return Promise.resolve();
+}
+
+/**
+ * A BlockNote-owned node view for code blocks. The toolbar is created as part
+ * of the block's renderer rather than injected into ProseMirror afterwards,
+ * which keeps selection, updates, and teardown under BlockNote's control.
+ */
+function createDocumentCodeBlockSpec() {
+  // BlockNote recreates vanilla node views on edits. Keep presentation state
+  // for the lifetime of the editor without adding it to saved Markdown.
+  const wrapPreferences = new WeakMap<object, Map<string, boolean>>();
+  const baseSpec = createCodeBlockSpec({
+    defaultLanguage: "text",
+    supportedLanguages: CODE_LANGUAGES,
+    createHighlighter: () => createHighlighter({
+      themes: ["github-light"],
+      langs: [],
+    }),
+  });
+
+  return createBlockSpec(baseSpec.config, {
+      ...baseSpec.implementation,
+      toExternalHTML(block) {
+        const pre = document.createElement("pre");
+        const code = document.createElement("code");
+        code.className = `language-${block.props.language}`;
+        code.dataset.language = block.props.language;
+        pre.appendChild(code);
+        return { dom: pre, contentDOM: code };
+      },
+      render(block, editor) {
+        let preferences = wrapPreferences.get(editor);
+        if (!preferences) {
+          preferences = new Map();
+          wrapPreferences.set(editor, preferences);
+        }
+        const wrapper = document.createDocumentFragment();
+
+        const toolbar = document.createElement("div");
+        toolbar.className = "document-code-toolbar";
+        toolbar.contentEditable = "false";
+
+        const languageButton = document.createElement("button");
+        languageButton.type = "button";
+        languageButton.className = "document-code-language";
+        languageButton.textContent = `${CODE_LANGUAGES[block.props.language]?.name ?? "纯文本"} ▾`;
+        languageButton.setAttribute("aria-label", "选择代码语言");
+
+        const languageMenu = document.createElement("div");
+        languageMenu.className = "document-code-language-menu";
+        languageMenu.hidden = true;
+        languageMenu.setAttribute("role", "dialog");
+        languageMenu.setAttribute("aria-label", "代码语言");
+
+        const search = document.createElement("input");
+        search.type = "search";
+        search.placeholder = "搜索语言";
+        search.className = "document-code-language-search";
+        search.setAttribute("aria-label", "搜索代码语言");
+
+        const languageList = document.createElement("div");
+        languageList.className = "document-code-language-list";
+        languageMenu.append(search, languageList);
+
+        const closeLanguageMenu = () => {
+          languageMenu.hidden = true;
+          languageButton.setAttribute("aria-expanded", "false");
+          document.removeEventListener("mousedown", handleOutsideClick, true);
+        };
+        const handleOutsideClick = (event: MouseEvent) => {
+          if (!toolbar.contains(event.target as Node)) closeLanguageMenu();
+        };
+        const renderLanguages = (query = "") => {
+          languageList.replaceChildren();
+          const visibleLanguages = filterCodeLanguages(CODE_LANGUAGES, query);
+          if (visibleLanguages.length === 0) {
+            const empty = document.createElement("p");
+            empty.className = "document-code-language-empty";
+            empty.textContent = "未找到语言";
+            languageList.appendChild(empty);
+            return;
+          }
+          visibleLanguages.forEach(([id, language]) => {
+            const option = document.createElement("button");
+            option.type = "button";
+            option.className = "document-code-language-option";
+            option.textContent = language.name;
+            if (id === block.props.language) {
+              option.classList.add("is-active");
+              option.setAttribute("aria-current", "true");
+            }
+            option.addEventListener("mousedown", (event) => event.preventDefault());
+            option.addEventListener("click", () => {
+              closeLanguageMenu();
+              editor.updateBlock(block.id, { props: { language: id } });
+            });
+            languageList.appendChild(option);
+          });
+        };
+        renderLanguages();
+
+        languageButton.setAttribute("aria-expanded", "false");
+        languageButton.addEventListener("mousedown", (event) => event.preventDefault());
+        languageButton.addEventListener("click", () => {
+          const willOpen = languageMenu.hidden;
+          if (!willOpen) {
+            closeLanguageMenu();
+            return;
+          }
+          languageMenu.hidden = false;
+          languageButton.setAttribute("aria-expanded", "true");
+          search.value = "";
+          renderLanguages();
+          search.focus();
+          document.addEventListener("mousedown", handleOutsideClick, true);
+        });
+        search.addEventListener("input", () => renderLanguages(search.value));
+        search.addEventListener("keydown", (event) => {
+          if (event.key === "Escape") {
+            event.preventDefault();
+            closeLanguageMenu();
+            languageButton.focus();
+          }
+        });
+
+        const actions = document.createElement("div");
+        actions.className = "document-code-actions";
+        const wrapButton = document.createElement("button");
+        wrapButton.type = "button";
+        wrapButton.className = "document-code-action";
+        wrapButton.textContent = "↵ 取消自动换行";
+
+        const copyButton = document.createElement("button");
+        copyButton.type = "button";
+        copyButton.className = "document-code-action";
+        copyButton.textContent = "□ 复制";
+
+        const gutter = document.createElement("div");
+        gutter.className = "document-code-gutter";
+        gutter.contentEditable = "false";
+        gutter.setAttribute("aria-hidden", "true");
+        const pre = document.createElement("pre");
+        const code = document.createElement("code");
+        pre.appendChild(code);
+
+        let wraps = preferences.get(block.id) ?? true;
+        let destroyed = false;
+        let refreshFrame = 0;
+        let copyTimer = 0;
+        const updateWrapState = () => {
+          pre.classList.toggle("is-nowrap", !wraps);
+          wrapButton.setAttribute("aria-pressed", String(wraps));
+          wrapButton.textContent = wraps ? "↵ 取消自动换行" : "↵ 自动换行";
+        };
+        const updateGutter = () => {
+          if (destroyed || !code.isConnected) return;
+          const positions = measureCodeLines(code);
+          const signature = positions.join(",");
+          if (gutter.dataset.positions === signature) return;
+          gutter.dataset.positions = signature;
+          gutter.replaceChildren(...positions.map((top, index) => {
+            const line = document.createElement("span");
+            line.textContent = String(index + 1);
+            line.style.top = `${top}px`;
+            return line;
+          }));
+        };
+        updateWrapState();
+        // Hydration and syntax highlighting can replace the code DOM after
+        // the node view is mounted. Observe only this contentDOM and update
+        // its sibling gutter; the observer never mutates ProseMirror's tree.
+        const scheduleGutter = () => {
+          if (destroyed || refreshFrame) return;
+          refreshFrame = window.requestAnimationFrame(() => {
+            refreshFrame = 0;
+            updateGutter();
+          });
+        };
+        const contentObserver = new MutationObserver(scheduleGutter);
+        contentObserver.observe(code, {
+          childList: true,
+          characterData: true,
+          subtree: true,
+        });
+        const resizeObserver = new ResizeObserver(scheduleGutter);
+        resizeObserver.observe(code);
+        scheduleGutter();
+        void document.fonts.ready.then(scheduleGutter);
+
+        wrapButton.addEventListener("mousedown", (event) => event.preventDefault());
+        wrapButton.addEventListener("click", () => {
+          wraps = !wraps;
+          preferences.set(block.id, wraps);
+          updateWrapState();
+          scheduleGutter();
+        });
+        copyButton.addEventListener("mousedown", (event) => event.preventDefault());
+        copyButton.addEventListener("click", () => {
+          void copyCodeToClipboard(getCodeBlockSourceText(code))
+            .then(() => {
+              if (destroyed) return;
+              copyButton.textContent = "✓ 已复制";
+              window.clearTimeout(copyTimer);
+              copyTimer = window.setTimeout(() => { copyButton.textContent = "□ 复制"; }, 1200);
+            })
+            .catch(() => { copyButton.textContent = "复制失败"; });
+        });
+
+        actions.append(wrapButton, copyButton);
+        toolbar.append(languageButton, languageMenu, actions);
+        // Keep <pre> as a direct node-view child, matching BlockNote's
+        // built-in code block. ProseMirror can then map pointer positions to
+        // the contentDOM without crossing a layout wrapper.
+        wrapper.append(toolbar, gutter, pre);
+
+        return {
+          dom: wrapper,
+          contentDOM: code,
+          // Toolbar/gutter updates are view state, not document edits. Without
+          // this boundary ProseMirror reparses and recreates the node view.
+          ignoreMutation: (mutation) => mutation.type !== "selection" && (
+            toolbar.contains(mutation.target) || gutter.contains(mutation.target) ||
+            (mutation.type === "attributes" && mutation.target === pre)
+          ),
+          destroy: () => {
+            destroyed = true;
+            window.cancelAnimationFrame(refreshFrame);
+            window.clearTimeout(copyTimer);
+            resizeObserver.disconnect();
+            contentObserver.disconnect();
+            document.removeEventListener("mousedown", handleOutsideClick, true);
+          },
+        };
+      },
+    }, baseSpec.extensions)();
+}
+
+const EDITOR_SCHEMA = BlockNoteSchema.create({
+  blockSpecs: {
+    ...defaultBlockSpecs,
+    codeBlock: createDocumentCodeBlockSpec(),
+  },
+});
+
 function detectColorScheme(): "light" | "dark" {
   const mode = document.documentElement.dataset.mode;
   return mode === "light" ? "light" : "dark";
@@ -223,6 +512,7 @@ export function MarkdownEditor({
   // (BlockNote calls it with the clipboard File and inserts an image block
   // using the returned URL).
   const editor = useCreateBlockNote({
+    schema: EDITOR_SCHEMA,
     uploadFile: async (file: File) => {
       try {
         return await onAddImageFileRef.current?.(file) ?? "";
