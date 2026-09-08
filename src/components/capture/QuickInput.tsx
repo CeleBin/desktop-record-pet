@@ -7,6 +7,14 @@ import { createRecord, hideWindow, showMainPanel } from "../../lib/tauri";
 const QUICK_INPUT_LABEL = "quick-input";
 const RESET_EVENT = "quick-input:reset";
 
+interface QuickInputDragTarget {
+  closest: (selector: string) => unknown;
+}
+
+export function shouldStartQuickInputDrag(target: QuickInputDragTarget): boolean {
+  return !target.closest("button, input, textarea, label");
+}
+
 function normalizeContent(value: string) {
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
@@ -25,7 +33,7 @@ export function QuickInput() {
   async function handleDragMouseDown(e: React.MouseEvent<HTMLElement>) {
     if (e.button !== 0) return;
     const target = e.target as HTMLElement;
-    if (target.closest("button, input, textarea")) return;
+    if (!shouldStartQuickInputDrag(target)) return;
     e.preventDefault();
     try {
       await appWindow.startDragging();
@@ -106,7 +114,7 @@ export function QuickInput() {
   }
 
   return (
-    <main className="h-screen bg-transparent p-3 text-text">
+    <main className="h-screen overflow-hidden rounded-3xl bg-transparent p-0 text-text">
       <section className="flex h-full min-h-[148px] flex-col rounded-3xl bg-bg p-4 backdrop-blur-xl">
         <div
           onMouseDown={handleDragMouseDown}
