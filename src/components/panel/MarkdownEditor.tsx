@@ -8,9 +8,13 @@ import {
 import {
   BlockNoteSchema,
   createBlockSpec,
+  createExtension,
   createCodeBlockSpec,
   defaultBlockSpecs,
+  getBlockInfoFromTransaction,
+  type BlockNoteEditor,
   type PartialBlock,
+  updateBlockTr,
 } from "@blocknote/core";
 import { BlockNoteView } from "@blocknote/shadcn";
 import { useCreateBlockNote } from "@blocknote/react";
@@ -60,6 +64,61 @@ export function getDocumentKeyboardAction(
   ctrlOrMetaKey: boolean,
 ): "save" | null {
   return ctrlOrMetaKey && key.toLowerCase() === "s" ? "save" : null;
+}
+
+export function getQuoteEnterAction(
+  blockType: string,
+  selectionIsEmpty: boolean,
+  hasContent: boolean,
+): "continue" | "exit" | null {
+  if (blockType !== "quote" || !selectionIsEmpty) return null;
+  return hasContent ? "continue" : "exit";
+}
+
+function handleQuoteEnter(editor: BlockNoteEditor<any, any, any>): boolean {
+  const { blockInfo, selectionIsEmpty } = editor.transact((tr) => ({
+    blockInfo: getBlockInfoFromTransaction(tr),
+    selectionIsEmpty: tr.selection.anchor === tr.selection.head,
+  }));
+
+  if (!blockInfo.isBlockContainer) return false;
+
+  const { bnBlock: blockContainer, blockContent } = blockInfo;
+  const hasContent = blockContent.node.textContent.replace(/\u200b/g, "").trim() !== "";
+  const action = getQuoteEnterAction(
+    blockContent.node.type.name,
+    selectionIsEmpty,
+    hasContent,
+  );
+
+  if (action === "exit") {
+    editor.transact((tr) => {
+      updateBlockTr(tr, blockContainer.beforePos, {
+        type: "paragraph",
+        props: {},
+      });
+    });
+    return true;
+  }
+
+  if (action === "continue") {
+    return editor.transact((tr) => {
+      tr.deleteSelection();
+      tr.split(tr.selection.from, 2, [
+        {
+          type: blockContainer.node.type,
+          attrs: { ...blockContainer.node.attrs, id: undefined },
+        },
+        {
+          type: blockContent.node.type,
+          attrs: { ...blockContent.node.attrs },
+        },
+      ]);
+      return true;
+    });
+  }
+
+  return false;
 }
 
 interface RichEditorImageTarget {
@@ -444,10 +503,30 @@ function createDocumentCodeBlockSpec() {
     }, baseSpec.extensions)();
 }
 
+/**
+ * BlockNote's built-in quote is an inline block, so its generic Enter
+ * handler creates a paragraph. Keep the default quote implementation but
+ * intercept Enter to split non-empty quotes as quotes and exit empty quotes.
+ */
+function createDocumentQuoteBlockSpec() {
+  const baseSpec = defaultBlockSpecs.quote;
+  return createBlockSpec(baseSpec.config, baseSpec.implementation, [
+    ...(baseSpec.extensions ?? []),
+    createExtension({
+      key: "document-quote-enter",
+      runsBefore: ["default"],
+      keyboardShortcuts: {
+        Enter: ({ editor }) => handleQuoteEnter(editor),
+      },
+    }),
+  ])();
+}
+
 const EDITOR_SCHEMA = BlockNoteSchema.create({
   blockSpecs: {
     ...defaultBlockSpecs,
     codeBlock: createDocumentCodeBlockSpec(),
+    quote: createDocumentQuoteBlockSpec(),
   },
 });
 

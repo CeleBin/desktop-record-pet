@@ -6,12 +6,26 @@ import {
   isBlankMarkdown,
   getDocumentKeyboardAction,
   getRichEditorImagePreviewSource,
+  getQuoteEnterAction,
   saveLatestDocument,
   shouldApplySerializedRevision,
   shouldSerializeDocumentChange,
 } from "./MarkdownEditor";
 
 describe("rich document keyboard controls", () => {
+  it("continues a non-empty quote when Enter creates the next block", () => {
+    expect(getQuoteEnterAction("quote", true, true)).toBe("continue");
+  });
+
+  it("exits an empty quote when Enter is pressed", () => {
+    expect(getQuoteEnterAction("quote", true, false)).toBe("exit");
+  });
+
+  it("leaves non-quote and range selections to BlockNote", () => {
+    expect(getQuoteEnterAction("paragraph", true, true)).toBeNull();
+    expect(getQuoteEnterAction("quote", false, true)).toBeNull();
+  });
+
   it("extracts the source from a clicked BlockNote image", () => {
     expect(getRichEditorImagePreviewSource({
       tagName: "IMG",

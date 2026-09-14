@@ -448,6 +448,23 @@ select {
   color: var(--text-muted);
 }
 
+/* BlockNote keeps each quote line as an individual block. Removing only its
+ * vertical block padding lets adjacent quote borders meet as one continuous
+ * guide while preserving the normal line height and Markdown structure. */
+.bn-editor .bn-block-content[data-content-type="quote"] {
+  position: relative;
+  padding-block: 0;
+}
+
+/* BlockNote injects its empty-block placeholder as a flex sibling of the
+ * blockquote. Position it at the quote's text inset instead of after the
+ * full-width blockquote, where it would otherwise appear at the far right. */
+.bn-editor .bn-block-content[data-content-type="quote"]:has(.ProseMirror-trailingBreak:only-child)::after {
+  position: absolute;
+  top: 0;
+  left: calc(1em + 2px);
+}
+
 .markdown-body pre {
   margin: 20px 0;
   padding: 16px;
