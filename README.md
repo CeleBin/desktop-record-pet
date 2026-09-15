@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="src/assets/dog_logo.png" alt="Desktop Record Pet" width="180" />
+  <img src="public/index.png" alt="Desktop Record Pet" width="180" />
 </p>
 
 <h1 align="center">Desktop Record Pet</h1>
