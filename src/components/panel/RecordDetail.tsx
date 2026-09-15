@@ -360,17 +360,10 @@ export function RecordDetail({
   const { selectRecord, hydrateRecord } = useRecordsStore();
   const startLearningSession = useLearningCoachStore((state) => state.startSession);
   const allTags = useTagsStore((s) => s.tags);
-  const createTag = useTagsStore((s) => s.createTag);
 
   // ── Tag management ──
   const [showTagPopover, setShowTagPopover] = useState(false);
-  const [newTagName, setNewTagName] = useState("");
-  const [newTagColor, setNewTagColor] = useState("#a78bfa");
   const tagPopoverRef = useRef<HTMLDivElement>(null);
-  const TAG_PRESET_COLORS = [
-    "#a78bfa", "#fbbf24", "#34d399", "#fb7185",
-    "#38bdf8", "#fb923c", "#e879f9", "#2dd4bf",
-  ];
 
   // Close tag popover on outside click
   useEffect(() => {
@@ -470,17 +463,6 @@ export function RecordDetail({
     },
     [record, selectRecord],
   );
-
-  const handleCreateAndAddTag = useCallback(async () => {
-    if (!record || !newTagName.trim()) return;
-    try {
-      const tag = await createTag(newTagName.trim(), newTagColor);
-      setNewTagName("");
-      await handleAddTag(tag.id);
-    } catch {
-      // error handled by store
-    }
-  }, [record, newTagName, newTagColor, createTag, handleAddTag]);
 
   const titleRef = useRef<HTMLInputElement>(null);
 
@@ -1387,7 +1369,7 @@ export function RecordDetail({
               ref={tagPopoverRef}
               className="absolute left-0 z-50 mt-1 w-56 rounded-xl border border-border bg-surface/95 p-3 shadow-2xl backdrop-blur-xl"
             >
-              {availableTags.length > 0 && (
+              {availableTags.length > 0 ? (
                 <div className="mb-2">
                   <p className="mb-1.5 text-[10px] font-medium text-text-muted">已有标签</p>
                   <div className="flex flex-wrap gap-1">
@@ -1407,48 +1389,9 @@ export function RecordDetail({
                     })}
                   </div>
                 </div>
+              ) : (
+                <p className="text-[11px] text-text-muted">暂无可添加标签</p>
               )}
-              <p className="mb-1.5 text-[10px] font-medium text-text-muted">新建标签</p>
-              <input
-                type="text"
-                value={newTagName}
-                onChange={(e) => setNewTagName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    void handleCreateAndAddTag();
-                  }
-                  if (e.key === "Escape") {
-                    setShowTagPopover(false);
-                  }
-                }}
-                placeholder="输入名称…"
-                className="mb-2 w-full rounded-lg border border-border bg-white/5 px-2.5 py-1.5 text-xs text-text placeholder-text-muted outline-none transition focus:border-secondary/40 focus:ring-2 focus:ring-secondary/20"
-                autoFocus
-              />
-              <div className="mb-2 flex gap-1.5">
-                {TAG_PRESET_COLORS.map((color) => (
-                  <button
-                    key={color}
-                    type="button"
-                    onClick={() => setNewTagColor(color)}
-                    className={`h-4 w-4 rounded-full transition-all duration-150 ${
-                      newTagColor === color
-                        ? "ring-2 ring-white ring-offset-1 ring-offset-surface/95"
-                        : "ring-1 ring-white/10"
-                    }`}
-                    style={{ backgroundColor: color }}
-                  />
-                ))}
-              </div>
-              <button
-                type="button"
-                onClick={() => void handleCreateAndAddTag()}
-                disabled={!newTagName.trim()}
-                className="w-full rounded-lg bg-secondary/15 px-3 py-1.5 text-xs font-medium text-secondary transition hover:bg-secondary/25 disabled:opacity-40"
-              >
-                创建并添加
-              </button>
             </div>
           )}
         </div>
