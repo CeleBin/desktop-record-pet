@@ -374,6 +374,8 @@ pub struct Record {
     pub content: Option<String>,
     pub source: RecordSource,
     pub status: RecordStatus,
+    #[serde(rename = "folderId")]
+    pub folder_id: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -549,6 +551,8 @@ pub struct CreateRecordRequest {
     pub create_as_task: bool,
     #[serde(default, rename = "attachmentIds")]
     pub attachment_ids: Vec<String>,
+    #[serde(default, rename = "folderId")]
+    pub folder_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -793,6 +797,13 @@ pub struct RecordFilter {
     /// When None (the "all" view), records are ordered by created_at desc.
     #[serde(default, rename = "viewKey")]
     pub view_key: Option<String>,
+    /// Note-folder mode: all records, unfiled notes, or one folder.
+    #[serde(default, rename = "noteFolderMode")]
+    pub note_folder_mode: Option<String>,
+    #[serde(default, rename = "folderId")]
+    pub folder_id: Option<String>,
+    #[serde(default, rename = "includeDescendants")]
+    pub include_descendants: Option<bool>,
 }
 
 /// Lightweight filter for listing tasks.
@@ -833,9 +844,35 @@ pub struct UnfinishedTaskItem {
 pub struct Folder {
     pub id: String,
     pub name: String,
+    #[serde(rename = "parentId")]
+    pub parent_id: Option<String>,
+    pub scope: FolderScope,
     pub sort_order: i64,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum FolderScope {
+    Note,
+    Task,
+}
+
+impl FolderScope {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Note => "note",
+            Self::Task => "task",
+        }
+    }
+
+    pub fn parse(value: &str) -> Self {
+        match value {
+            "note" => Self::Note,
+            _ => Self::Task,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -952,6 +989,8 @@ pub struct RecordWithRelations {
     pub content: Option<String>,
     pub source: RecordSource,
     pub status: RecordStatus,
+    #[serde(rename = "folderId")]
+    pub folder_id: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub task: Option<Task>,
@@ -982,6 +1021,7 @@ impl RecordWithRelations {
             content: record.content,
             source: record.source,
             status: record.status,
+            folder_id: record.folder_id,
             created_at: record.created_at,
             updated_at: record.updated_at,
             task,
@@ -1002,6 +1042,7 @@ impl RecordWithRelations {
             content: record.content,
             source: record.source,
             status: record.status,
+            folder_id: record.folder_id,
             created_at: record.created_at,
             updated_at: record.updated_at,
             task: None,
@@ -1021,10 +1062,19 @@ mod tests {
     #[test]
     fn ai_task_type_roundtrips_learning_and_weekly() {
         assert_eq!(AiTaskType::LearningAnalysis.as_str(), "learning_analysis");
-        assert_eq!(AiTaskType::LearningDialogReply.as_str(), "learning_dialog_reply");
-        assert_eq!(AiTaskType::LearningConversation.as_str(), "learning_conversation");
+        assert_eq!(
+            AiTaskType::LearningDialogReply.as_str(),
+            "learning_dialog_reply"
+        );
+        assert_eq!(
+            AiTaskType::LearningConversation.as_str(),
+            "learning_conversation"
+        );
         assert_eq!(AiTaskType::WeeklyReport.as_str(), "weekly_report");
-        assert_eq!(AiTaskType::parse("learning_analysis"), AiTaskType::LearningAnalysis);
+        assert_eq!(
+            AiTaskType::parse("learning_analysis"),
+            AiTaskType::LearningAnalysis
+        );
         assert_eq!(
             AiTaskType::parse("learning_dialog_reply"),
             AiTaskType::LearningDialogReply

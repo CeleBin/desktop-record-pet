@@ -13,9 +13,9 @@ use crate::errors::{AppError, AppResult};
 use crate::models::{
     AiProfile, AiResult, AiTaskRun, AttachmentRole, AttachmentType, ClipboardImageRequest,
     CreateAiResultRequest, CreateAttachmentRequest, CreateRecordRequest, CreateTaskRequest, Folder,
-    ImportFilesRequest, KnowledgeMemoryDetail, KnowledgeMemoryItem, Record, RecordFilter,
-    PetChatMessage, PetChatSession, RecordSource, RecordType, RecordWithRelations,
-    RunAiTaskRequest, SettingsEntry, Tag, Task, TaskFilter, TaskPriority, TaskStatus, UnfinishedTaskItem,
+    ImportFilesRequest, KnowledgeMemoryDetail, KnowledgeMemoryItem, PetChatMessage, PetChatSession,
+    Record, RecordFilter, RecordSource, RecordType, RecordWithRelations, RunAiTaskRequest,
+    SettingsEntry, Tag, Task, TaskFilter, TaskPriority, TaskStatus, UnfinishedTaskItem,
     UpdateRecordRequest,
 };
 use crate::models::{CreateAiProfileRequest, UpdateAiProfileRequest};
@@ -83,6 +83,7 @@ fn import_files_impl(
             source: request.source,
             create_as_task: request.create_as_task,
             attachment_ids: vec![],
+            folder_id: None,
         },
     )?;
 
@@ -299,6 +300,7 @@ pub fn save_screenshot_record(
                 source: RecordSource::BuiltInScreenshot,
                 create_as_task,
                 attachment_ids: vec![],
+                folder_id: None,
             },
         )?;
 
@@ -620,14 +622,12 @@ pub async fn generate_pet_chat_title(
         &assistant_reply,
         profile_id.as_deref(),
         model.as_deref(),
-    ).await
+    )
+    .await
 }
 
 #[tauri::command]
-pub fn delete_pet_chat_session(
-    database: State<'_, Database>,
-    session_id: String,
-) -> AppResult<()> {
+pub fn delete_pet_chat_session(database: State<'_, Database>, session_id: String) -> AppResult<()> {
     let conn = database.conn.lock()?;
     db::delete_pet_chat_session(&conn, &session_id)
 }
@@ -1003,7 +1003,9 @@ pub fn create_ai_profile(
         db::set_setting(&conn, "ai_default_profile_id", &profile.id)?;
     }
     drop(conn);
-    let has_api_key = api_key.as_ref().is_some_and(|value| !value.trim().is_empty());
+    let has_api_key = api_key
+        .as_ref()
+        .is_some_and(|value| !value.trim().is_empty());
     if let Some(key) = api_key.as_deref().filter(|value| !value.trim().is_empty()) {
         credentials::set_ai_profile_api_key(&profile.id, key)?;
     }
@@ -1042,11 +1044,7 @@ pub fn delete_ai_profile(
 }
 
 #[tauri::command]
-pub fn set_ai_profile_api_key(
-    app: AppHandle,
-    profile_id: String,
-    value: String,
-) -> AppResult<()> {
+pub fn set_ai_profile_api_key(app: AppHandle, profile_id: String, value: String) -> AppResult<()> {
     credentials::set_ai_profile_api_key(&profile_id, &value)?;
     emit_settings_changed(&app)?;
     Ok(())

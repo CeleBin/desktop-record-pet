@@ -12,14 +12,14 @@ use uuid::Uuid;
 
 use crate::errors::{AppError, AppResult};
 use crate::models::{
-    AiResult, AiTaskRun, AiTaskType, AiTriggerMode, Attachment, AttachmentRole, AttachmentType,
-    CreateAiResultRequest, CreateAttachmentRequest, CreateRecordRequest, CreateTaskRequest, Folder,
-    KnowledgeEvidence, KnowledgeMemoryDetail, KnowledgeMemoryEvidence, KnowledgeMemoryItem,
-    KnowledgeTopic, LearningDialogSession, PetChatContextCandidate, PetChatMessage, PetChatSession,
-    Record, RecordAttachmentLink, RecordFilter,
-    RecordKnowledgeTopic, RecordSource, RecordStatus, RecordType, RecordWithRelations, RepeatRule,
-    AiProfile, CreateAiProfileRequest, SettingsEntry, Tag, Task, TaskFilter, TaskPriority, TaskStatus, UnfinishedTaskItem,
-    UpdateRecordRequest,
+    AiProfile, AiResult, AiTaskRun, AiTaskType, AiTriggerMode, Attachment, AttachmentRole,
+    AttachmentType, CreateAiProfileRequest, CreateAiResultRequest, CreateAttachmentRequest,
+    CreateRecordRequest, CreateTaskRequest, Folder, FolderScope, KnowledgeEvidence,
+    KnowledgeMemoryDetail, KnowledgeMemoryEvidence, KnowledgeMemoryItem, KnowledgeTopic,
+    LearningDialogSession, PetChatContextCandidate, PetChatMessage, PetChatSession, Record,
+    RecordAttachmentLink, RecordFilter, RecordKnowledgeTopic, RecordSource, RecordStatus,
+    RecordType, RecordWithRelations, RepeatRule, SettingsEntry, Tag, Task, TaskFilter,
+    TaskPriority, TaskStatus, UnfinishedTaskItem, UpdateRecordRequest,
 };
 
 pub struct Database {
@@ -63,6 +63,7 @@ pub fn run_migrations(conn: &Connection) -> AppResult<()> {
             content TEXT,
             source TEXT NOT NULL DEFAULT 'quick-text',
             status TEXT NOT NULL DEFAULT 'active',
+            folder_id TEXT REFERENCES folders(id),
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
@@ -219,6 +220,8 @@ pub fn run_migrations(conn: &Connection) -> AppResult<()> {
         CREATE TABLE IF NOT EXISTS folders (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
+            parent_id TEXT REFERENCES folders(id),
+            scope TEXT NOT NULL CHECK(scope IN ('note', 'task')),
             sort_order INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
@@ -255,15 +258,23 @@ pub fn run_migrations(conn: &Connection) -> AppResult<()> {
         [],
     )?;
 
-    // ── Migration: add sort_order column to tasks if missing ──
-    // CREATE TABLE IF NOT EXISTS won't add columns to existing tables,
-    // so we need an ALTER TABLE for databases created before this change.
-    let tasks_columns: Vec<String> = conn
-        .prepare("SELECT * FROM tasks LIMIT 0")?
-        .column_names()
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
+    let schema_version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    if schema_version >= 1 {
+        return Ok(());
+    }
+
+    // CREATE TABLE IF NOT EXISTS does not update existing tables. Keep this
+    // versioned migration deliberately idempotent so partially-upgraded local
+    // databases can safely retry at the next startup.
+    let table_columns = |table: &str| -> AppResult<Vec<String>> {
+        Ok(conn
+            .prepare(&format!("SELECT * FROM {table} LIMIT 0"))?
+            .column_names()
+            .iter()
+            .map(|s| s.to_string())
+            .collect())
+    };
+    let tasks_columns = table_columns("tasks")?;
     if !tasks_columns.iter().any(|c| c == "sort_order") {
         conn.execute_batch("ALTER TABLE tasks ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0")?;
     }
@@ -273,6 +284,110 @@ pub fn run_migrations(conn: &Connection) -> AppResult<()> {
         conn.execute_batch(
             "ALTER TABLE tasks ADD COLUMN folder_id TEXT REFERENCES folders(id) ON DELETE CASCADE",
         )?;
+    }
+
+    let records_columns = table_columns("records")?;
+    if !records_columns.iter().any(|c| c == "folder_id") {
+        conn.execute_batch("ALTER TABLE records ADD COLUMN folder_id TEXT REFERENCES folders(id)")?;
+    }
+
+    let folders_columns = table_columns("folders")?;
+    if !folders_columns.iter().any(|c| c == "parent_id") {
+        conn.execute_batch("ALTER TABLE folders ADD COLUMN parent_id TEXT")?;
+    }
+    if !folders_columns.iter().any(|c| c == "scope") {
+        conn.execute_batch("ALTER TABLE folders ADD COLUMN scope TEXT NOT NULL DEFAULT 'task'")?;
+    }
+
+    // Legacy task folders become root-level task folders. Normalize names
+    // before the final table gains its case-insensitive sibling uniqueness.
+    conn.execute(
+        "UPDATE folders SET scope = 'task' WHERE scope IS NULL OR scope NOT IN ('note', 'task')",
+        [],
+    )?;
+    conn.execute(
+        "UPDATE folders SET parent_id = NULL WHERE parent_id = id",
+        [],
+    )?;
+    let mut stmt = conn.prepare(
+        "SELECT id, name, scope, parent_id FROM folders ORDER BY scope, parent_id IS NOT NULL, parent_id, sort_order, created_at, id",
+    )?;
+    let folders = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Option<String>>(3)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut seen = std::collections::HashSet::new();
+    for (id, name, scope, parent_id) in folders {
+        let base = match name.trim() {
+            "" => "未命名文件夹".to_string(),
+            value => value.to_string(),
+        };
+        let parent_key = parent_id.clone().unwrap_or_else(|| "__root__".to_string());
+        let mut candidate = base.clone();
+        let mut suffix = 2;
+        while !seen.insert((
+            scope.clone(),
+            parent_key.clone(),
+            candidate.trim().to_lowercase(),
+        )) {
+            candidate = format!("{base} ({suffix})");
+            suffix += 1;
+        }
+        conn.execute(
+            "UPDATE folders SET name = ?2 WHERE id = ?1",
+            params![id, candidate],
+        )?;
+    }
+
+    // SQLite cannot add the final CHECK constraint with ALTER TABLE. Replace
+    // folders atomically, preserving every ID and both existing associations.
+    // Foreign keys are disabled only for the table swap and checked again
+    // immediately afterwards.
+    conn.execute_batch("PRAGMA foreign_keys = OFF; BEGIN IMMEDIATE;")?;
+    let migration_result: AppResult<()> = (|| {
+        conn.execute_batch(
+            "CREATE TABLE folders_new (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                parent_id TEXT REFERENCES folders_new(id),
+                scope TEXT NOT NULL CHECK(scope IN ('note', 'task')),
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+             );
+             INSERT INTO folders_new (id, name, parent_id, scope, sort_order, created_at, updated_at)
+                SELECT id, name, parent_id, scope, sort_order, created_at, updated_at FROM folders;
+             DROP TABLE folders;
+             ALTER TABLE folders_new RENAME TO folders;
+             CREATE UNIQUE INDEX IF NOT EXISTS folders_sibling_name_uq ON folders(scope, COALESCE(parent_id, '__root__'), lower(trim(name)));
+             CREATE INDEX IF NOT EXISTS folders_scope_parent_idx ON folders(scope, parent_id);
+             CREATE INDEX IF NOT EXISTS records_folder_id_idx ON records(folder_id);",
+        )?;
+        let foreign_key_errors: i64 =
+            conn.query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
+                row.get(0)
+            })?;
+        if foreign_key_errors != 0 {
+            return Err(AppError::Database(format!(
+                "foreign key check failed with {foreign_key_errors} violation(s)"
+            )));
+        }
+        Ok(())
+    })();
+    match migration_result {
+        Ok(()) => {
+            conn.execute_batch("COMMIT; PRAGMA foreign_keys = ON; PRAGMA user_version = 1;")?;
+        }
+        Err(error) => {
+            let _ = conn.execute_batch("ROLLBACK; PRAGMA foreign_keys = ON;");
+            return Err(error);
+        }
     }
 
     Ok(())
@@ -287,12 +402,33 @@ pub fn insert_record(conn: &Connection, request: CreateRecordRequest) -> AppResu
         content: request.content,
         source: request.source,
         status: RecordStatus::Active,
+        folder_id: request.folder_id.clone(),
         created_at: now,
         updated_at: now,
     };
 
+    if let Some(folder_id) = &record.folder_id {
+        if record.record_type != RecordType::Note {
+            return Err(AppError::Validation(
+                "task records cannot use note folders".into(),
+            ));
+        }
+        let scope: Option<String> = conn
+            .query_row(
+                "SELECT scope FROM folders WHERE id = ?1",
+                params![folder_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if scope.as_deref() != Some("note") {
+            return Err(AppError::Validation(
+                "record folder must be a note folder".into(),
+            ));
+        }
+    }
+
     conn.execute(
-        "INSERT INTO records (id, type, title, content, source, status, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        "INSERT INTO records (id, type, title, content, source, status, folder_id, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         params![
             record.id,
             record.record_type.as_str(),
@@ -300,6 +436,7 @@ pub fn insert_record(conn: &Connection, request: CreateRecordRequest) -> AppResu
             record.content,
             record.source.as_str(),
             record.status.as_str(),
+            record.folder_id,
             record.created_at.to_rfc3339(),
             record.updated_at.to_rfc3339(),
         ],
@@ -323,7 +460,7 @@ pub fn insert_record(conn: &Connection, request: CreateRecordRequest) -> AppResu
 
 pub fn get_record(conn: &Connection, id: &str) -> AppResult<Record> {
     conn.query_row(
-        "SELECT id, type, title, content, source, status, created_at, updated_at FROM records WHERE id = ?1",
+        "SELECT id, type, title, content, source, status, folder_id, created_at, updated_at FROM records WHERE id = ?1",
         params![id],
         map_record,
     )
@@ -333,7 +470,7 @@ pub fn get_record(conn: &Connection, id: &str) -> AppResult<Record> {
 
 pub fn list_records(conn: &Connection) -> AppResult<Vec<Record>> {
     let mut stmt = conn.prepare(
-        "SELECT id, type, title, content, source, status, created_at, updated_at FROM records ORDER BY datetime(created_at) DESC, rowid DESC",
+        "SELECT id, type, title, content, source, status, folder_id, created_at, updated_at FROM records ORDER BY datetime(created_at) DESC, rowid DESC",
     )?;
     let rows = stmt.query_map([], map_record)?;
     let records = rows.collect::<Result<Vec<_>, _>>()?;
@@ -554,6 +691,7 @@ pub fn update_task_status(conn: &Connection, id: &str, task_status: TaskStatus) 
                                 source: record.source,
                                 create_as_task: false,
                                 attachment_ids: vec![],
+                                folder_id: None,
                             },
                         )?;
 
@@ -587,7 +725,11 @@ pub fn update_task_status(conn: &Connection, id: &str, task_status: TaskStatus) 
     Ok(task)
 }
 
-pub fn update_task_priority(conn: &Connection, id: &str, priority: TaskPriority) -> AppResult<Task> {
+pub fn update_task_priority(
+    conn: &Connection,
+    id: &str,
+    priority: TaskPriority,
+) -> AppResult<Task> {
     let mut task = get_task(conn, id)?;
     task.priority = priority;
     conn.execute(
@@ -1137,7 +1279,9 @@ pub fn create_ai_profile(
         return Err(AppError::Validation("AI profile name is required".into()));
     }
     if request.provider.trim().is_empty() {
-        return Err(AppError::Validation("AI profile provider is required".into()));
+        return Err(AppError::Validation(
+            "AI profile provider is required".into(),
+        ));
     }
     let models = normalize_ai_models(&request.models, &request.default_model)?;
     let default_model = request.default_model.trim().to_string();
@@ -1157,7 +1301,11 @@ pub fn create_ai_profile(
         id,
         name: request.name.trim().into(),
         provider: request.provider.trim().into(),
-        base_url: request.base_url.as_ref().map(|value| value.trim().to_string()).filter(|value| !value.is_empty()),
+        base_url: request
+            .base_url
+            .as_ref()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty()),
         default_model,
         models,
         enabled: request.enabled,
@@ -1202,7 +1350,9 @@ pub fn update_ai_profile(
     request: &CreateAiProfileRequest,
 ) -> AppResult<()> {
     if request.name.trim().is_empty() || request.provider.trim().is_empty() {
-        return Err(AppError::Validation("AI profile name and provider are required".into()));
+        return Err(AppError::Validation(
+            "AI profile name and provider are required".into(),
+        ));
     }
     let models = normalize_ai_models(&request.models, &request.default_model)?;
     let now = Utc::now();
@@ -1213,7 +1363,10 @@ pub fn update_ai_profile(
     if changed == 0 {
         return Err(AppError::NotFound(format!("ai profile {id}")));
     }
-    conn.execute("DELETE FROM ai_profile_models WHERE profile_id = ?1", params![id])?;
+    conn.execute(
+        "DELETE FROM ai_profile_models WHERE profile_id = ?1",
+        params![id],
+    )?;
     for (sort_order, model) in models.iter().enumerate() {
         conn.execute(
             "INSERT INTO ai_profile_models (id, profile_id, model, sort_order) VALUES (?1, ?2, ?3, ?4)",
@@ -1239,7 +1392,9 @@ fn normalize_ai_models(models: &[String], default_model: &str) -> AppResult<Vec<
         .collect::<Vec<_>>();
     let default_model = default_model.trim();
     if default_model.is_empty() {
-        return Err(AppError::Validation("AI profile default model is required".into()));
+        return Err(AppError::Validation(
+            "AI profile default model is required".into(),
+        ));
     }
     if !normalized.iter().any(|model| model == default_model) {
         normalized.insert(0, default_model.to_string());
@@ -1310,13 +1465,34 @@ pub fn default_settings() -> Vec<SettingsEntry> {
             key: "pet_visible".into(),
             value: "true".into(),
         },
-        SettingsEntry { key: "pet_name".into(), value: "小宠物".into() },
-        SettingsEntry { key: "pet_persona".into(), value: "gentle-companion".into() },
-        SettingsEntry { key: "pet_custom_prompt".into(), value: "".into() },
-        SettingsEntry { key: "pet_proactive_ai_enabled".into(), value: "false".into() },
-        SettingsEntry { key: "pet_meal_companion_enabled".into(), value: "true".into() },
-        SettingsEntry { key: "pet_quiet_hours".into(), value: "22:00-08:00".into() },
-        SettingsEntry { key: "pet_proactive_min_interval_minutes".into(), value: "120".into() },
+        SettingsEntry {
+            key: "pet_name".into(),
+            value: "小宠物".into(),
+        },
+        SettingsEntry {
+            key: "pet_persona".into(),
+            value: "gentle-companion".into(),
+        },
+        SettingsEntry {
+            key: "pet_custom_prompt".into(),
+            value: "".into(),
+        },
+        SettingsEntry {
+            key: "pet_proactive_ai_enabled".into(),
+            value: "false".into(),
+        },
+        SettingsEntry {
+            key: "pet_meal_companion_enabled".into(),
+            value: "true".into(),
+        },
+        SettingsEntry {
+            key: "pet_quiet_hours".into(),
+            value: "22:00-08:00".into(),
+        },
+        SettingsEntry {
+            key: "pet_proactive_min_interval_minutes".into(),
+            value: "120".into(),
+        },
         // ── Todo-overlay settings ──
         SettingsEntry {
             key: "todo_overlay_visibility_mode".into(),
@@ -1387,7 +1563,12 @@ pub fn create_pet_chat_session(
     };
     conn.execute(
         "INSERT INTO pet_chat_sessions (id, title, created_at, updated_at) VALUES (?1, ?2, ?3, ?4)",
-        params![session.id, session.title, session.created_at, session.updated_at],
+        params![
+            session.id,
+            session.title,
+            session.created_at,
+            session.updated_at
+        ],
     )?;
     Ok(session)
 }
@@ -1399,7 +1580,9 @@ pub fn update_pet_chat_session_title(
 ) -> AppResult<PetChatSession> {
     let title = title.trim();
     if title.is_empty() {
-        return Err(AppError::Validation("conversation title cannot be empty".into()));
+        return Err(AppError::Validation(
+            "conversation title cannot be empty".into(),
+        ));
     }
     let changed = conn.execute(
         "UPDATE pet_chat_sessions SET title = ?2 WHERE id = ?1",
@@ -1412,11 +1595,15 @@ pub fn update_pet_chat_session_title(
         "SELECT id, title, created_at, updated_at FROM pet_chat_sessions WHERE id = ?1",
         params![session_id],
         map_pet_chat_session,
-    ).map_err(AppError::from)
+    )
+    .map_err(AppError::from)
 }
 
 pub fn delete_pet_chat_session(conn: &Connection, session_id: &str) -> AppResult<()> {
-    let changed = conn.execute("DELETE FROM pet_chat_sessions WHERE id = ?1", params![session_id])?;
+    let changed = conn.execute(
+        "DELETE FROM pet_chat_sessions WHERE id = ?1",
+        params![session_id],
+    )?;
     if changed == 0 {
         return Err(AppError::NotFound(format!("pet_chat_session {session_id}")));
     }
@@ -1449,10 +1636,7 @@ pub fn append_pet_chat_message(
     Ok(message)
 }
 
-pub fn list_pet_chat_sessions(
-    conn: &Connection,
-    limit: i64,
-) -> AppResult<Vec<PetChatSession>> {
+pub fn list_pet_chat_sessions(conn: &Connection, limit: i64) -> AppResult<Vec<PetChatSession>> {
     if limit == 0 {
         return Ok(vec![]);
     }
@@ -1471,7 +1655,11 @@ pub fn list_pet_chat_sessions(
 }
 
 pub fn count_pet_chat_sessions(conn: &Connection) -> AppResult<i64> {
-    Ok(conn.query_row("SELECT COUNT(*) FROM pet_chat_sessions", [], |row| row.get(0))?)
+    Ok(
+        conn.query_row("SELECT COUNT(*) FROM pet_chat_sessions", [], |row| {
+            row.get(0)
+        })?,
+    )
 }
 
 pub fn get_latest_pet_chat_session(conn: &Connection) -> AppResult<Option<PetChatSession>> {
@@ -1551,7 +1739,7 @@ pub fn list_records_filtered(
 
     // Build SQL in correct clause order: SELECT ... FROM ... [LEFT JOIN ...] WHERE 1=1 [AND ...]
     let mut sql = String::from(
-        "SELECT r.id, r.type, r.title, r.content, r.source, r.status, r.created_at, r.updated_at FROM records r",
+        "SELECT r.id, r.type, r.title, r.content, r.source, r.status, r.folder_id, r.created_at, r.updated_at FROM records r",
     );
     if has_view_key {
         param_values.push(filter.view_key.as_ref().unwrap().clone());
@@ -1851,15 +2039,17 @@ pub fn reorder_records(
 
 pub fn list_folders(conn: &Connection) -> AppResult<Vec<Folder>> {
     let mut stmt = conn.prepare(
-        "SELECT id, name, sort_order, created_at, updated_at FROM folders ORDER BY sort_order ASC, created_at ASC",
+        "SELECT id, name, parent_id, scope, sort_order, created_at, updated_at FROM folders ORDER BY scope, parent_id, sort_order ASC, created_at ASC",
     )?;
     let rows = stmt.query_map([], |row| {
         Ok(Folder {
             id: row.get(0)?,
             name: row.get(1)?,
-            sort_order: row.get(2)?,
-            created_at: parse_datetime(&row.get::<_, String>(3)?)?,
-            updated_at: parse_datetime(&row.get::<_, String>(4)?)?,
+            parent_id: row.get(2)?,
+            scope: FolderScope::parse(&row.get::<_, String>(3)?),
+            sort_order: row.get(4)?,
+            created_at: parse_datetime(&row.get::<_, String>(5)?)?,
+            updated_at: parse_datetime(&row.get::<_, String>(6)?)?,
         })
     })?;
     let folders = rows.collect::<Result<Vec<_>, _>>()?;
@@ -1879,14 +2069,16 @@ pub fn create_folder(conn: &Connection, name: &str) -> AppResult<Folder> {
     let folder = Folder {
         id: Uuid::new_v4().to_string(),
         name: name.to_string(),
+        parent_id: None,
+        scope: FolderScope::Task,
         sort_order: max_sort + 1,
         created_at: now,
         updated_at: now,
     };
 
     conn.execute(
-        "INSERT INTO folders (id, name, sort_order, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![folder.id, folder.name, folder.sort_order, folder.created_at.to_rfc3339(), folder.updated_at.to_rfc3339()],
+        "INSERT INTO folders (id, name, parent_id, scope, sort_order, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![folder.id, folder.name, folder.parent_id, folder.scope.as_str(), folder.sort_order, folder.created_at.to_rfc3339(), folder.updated_at.to_rfc3339()],
     )?;
 
     Ok(folder)
@@ -1900,15 +2092,17 @@ pub fn rename_folder(conn: &Connection, id: &str, name: &str) -> AppResult<Folde
     )?;
 
     conn.query_row(
-        "SELECT id, name, sort_order, created_at, updated_at FROM folders WHERE id = ?1",
+        "SELECT id, name, parent_id, scope, sort_order, created_at, updated_at FROM folders WHERE id = ?1",
         params![id],
         |row| {
             Ok(Folder {
                 id: row.get(0)?,
                 name: row.get(1)?,
-                sort_order: row.get(2)?,
-                created_at: parse_datetime(&row.get::<_, String>(3)?)?,
-                updated_at: parse_datetime(&row.get::<_, String>(4)?)?,
+                parent_id: row.get(2)?,
+                scope: FolderScope::parse(&row.get::<_, String>(3)?),
+                sort_order: row.get(4)?,
+                created_at: parse_datetime(&row.get::<_, String>(5)?)?,
+                updated_at: parse_datetime(&row.get::<_, String>(6)?)?,
             })
         },
     )
@@ -2084,8 +2278,9 @@ fn map_record(row: &Row<'_>) -> rusqlite::Result<Record> {
         content: row.get(3)?,
         source: RecordSource::parse(&row.get::<_, String>(4)?),
         status: RecordStatus::parse(&row.get::<_, String>(5)?),
-        created_at: parse_datetime(&row.get::<_, String>(6)?)?,
-        updated_at: parse_datetime(&row.get::<_, String>(7)?)?,
+        folder_id: row.get(6)?,
+        created_at: parse_datetime(&row.get::<_, String>(7)?)?,
+        updated_at: parse_datetime(&row.get::<_, String>(8)?)?,
     })
 }
 
@@ -2245,9 +2440,9 @@ fn parse_optional_datetime(value: Option<String>) -> rusqlite::Result<Option<Dat
 mod tests {
     use super::*;
     use crate::models::{
-        AttachmentRole, CreateAiProfileRequest, CreateAttachmentRequest, CreateRecordRequest, CreateTaskRequest,
+        AttachmentRole, CreateAiProfileRequest, CreateAttachmentRequest, CreateRecordRequest,
+        CreateTaskRequest, RecordSource, RecordType, TaskPriority, TaskStatus,
         UpdateAiProfileRequest,
-        RecordSource, RecordType, TaskPriority, TaskStatus,
     };
 
     fn in_memory() -> Connection {
@@ -2270,6 +2465,61 @@ mod tests {
     }
 
     #[test]
+    fn migrates_legacy_folders_to_scoped_schema_idempotently() {
+        let conn = Connection::open_in_memory().expect("in-memory db");
+        conn.execute_batch(
+            "CREATE TABLE folders (id TEXT PRIMARY KEY, name TEXT NOT NULL, sort_order INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+             CREATE TABLE records (id TEXT PRIMARY KEY, type TEXT NOT NULL, title TEXT, content TEXT, source TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+             CREATE TABLE tasks (id TEXT PRIMARY KEY, record_id TEXT NOT NULL UNIQUE, task_status TEXT NOT NULL, priority TEXT NOT NULL, due_at TEXT, remind_at TEXT, repeat_rule TEXT, completed_at TEXT, sort_order INTEGER NOT NULL DEFAULT 0, folder_id TEXT REFERENCES folders(id));
+             INSERT INTO folders VALUES ('f1', ' A ', 0, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+             INSERT INTO folders VALUES ('f2', 'A', 1, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+             INSERT INTO folders VALUES ('f3', '', 2, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+             INSERT INTO records VALUES ('r1', 'task', 'task', NULL, 'quick-text', 'active', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+             INSERT INTO tasks (id, record_id, task_status, priority, sort_order, folder_id) VALUES ('t1', 'r1', 'todo', 'medium', 0, 'f1');",
+        )
+        .expect("legacy fixture");
+
+        run_migrations(&conn).expect("migrate legacy schema");
+        run_migrations(&conn).expect("migration is idempotent");
+
+        let scope: String = conn
+            .query_row("SELECT scope FROM folders WHERE id = 'f1'", [], |r| {
+                r.get(0)
+            })
+            .expect("scope");
+        let task_folder: String = conn
+            .query_row("SELECT folder_id FROM tasks WHERE id = 't1'", [], |r| {
+                r.get(0)
+            })
+            .expect("task folder");
+        let names: Vec<String> = conn
+            .prepare("SELECT name FROM folders ORDER BY id")
+            .expect("names query")
+            .query_map([], |r| r.get(0))
+            .expect("names")
+            .collect::<Result<_, _>>()
+            .expect("names result");
+        let fk_errors: i64 = conn
+            .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |r| {
+                r.get(0)
+            })
+            .expect("fk check");
+        let index_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name IN ('folders_sibling_name_uq', 'folders_scope_parent_idx', 'records_folder_id_idx')",
+                [],
+                |r| r.get(0),
+            )
+            .expect("folder indexes");
+
+        assert_eq!(scope, "task");
+        assert_eq!(task_folder, "f1");
+        assert_eq!(names, vec!["A", "A (2)", "未命名文件夹"]);
+        assert_eq!(fk_errors, 0);
+        assert_eq!(index_count, 3);
+    }
+
+    #[test]
     fn inserts_and_reads_record() {
         let conn = in_memory();
         let record = insert_record(
@@ -2281,6 +2531,7 @@ mod tests {
                 source: RecordSource::QuickText,
                 create_as_task: false,
                 attachment_ids: vec![],
+                folder_id: None,
             },
         )
         .expect("insert record");
@@ -2288,6 +2539,26 @@ mod tests {
         let fetched = get_record(&conn, &record.id).expect("get record");
         assert_eq!(fetched.record_type, RecordType::Note);
         assert_eq!(fetched.title.as_deref(), Some("VPN broken"));
+    }
+
+    #[test]
+    fn rejects_task_record_folder_id() {
+        let conn = in_memory();
+        let folder = create_folder(&conn, "tasks").expect("task folder");
+        let error = insert_record(
+            &conn,
+            CreateRecordRequest {
+                record_type: Some(RecordType::Task),
+                title: Some("cannot be in note folder".into()),
+                content: None,
+                source: RecordSource::QuickText,
+                create_as_task: false,
+                attachment_ids: vec![],
+                folder_id: Some(folder.id),
+            },
+        )
+        .expect_err("task record folder must be rejected");
+        assert!(matches!(error, AppError::Validation(_)));
     }
 
     #[test]
@@ -2302,6 +2573,7 @@ mod tests {
                 source: RecordSource::QuickText,
                 create_as_task: false,
                 attachment_ids: vec![],
+                folder_id: None,
             },
         )
         .expect("record");
@@ -2336,6 +2608,7 @@ mod tests {
                 source: RecordSource::DragDrop,
                 create_as_task: false,
                 attachment_ids: vec![],
+                folder_id: None,
             },
         )
         .expect("record");
@@ -2372,6 +2645,7 @@ mod tests {
                 source: RecordSource::QuickText,
                 create_as_task: false,
                 attachment_ids: vec![],
+                folder_id: None,
             },
         )
         .expect("older");
@@ -2385,6 +2659,7 @@ mod tests {
                 source: RecordSource::QuickText,
                 create_as_task: false,
                 attachment_ids: vec![],
+                folder_id: None,
             },
         )
         .expect("newer");
@@ -2414,6 +2689,7 @@ mod tests {
                 source: RecordSource::QuickText,
                 create_as_task: false,
                 attachment_ids: vec![],
+                folder_id: None,
             },
         )
         .expect("record");
@@ -2468,6 +2744,7 @@ mod tests {
                 source: RecordSource::QuickText,
                 create_as_task: false,
                 attachment_ids: vec![],
+                folder_id: None,
             },
         )
         .expect("record");
@@ -2507,6 +2784,7 @@ mod tests {
                 source: RecordSource::QuickText,
                 create_as_task: false,
                 attachment_ids: vec![],
+                folder_id: None,
             },
         )
         .expect("record");
@@ -2572,6 +2850,7 @@ mod tests {
                 source: RecordSource::QuickText,
                 create_as_task: false,
                 attachment_ids: vec![],
+                folder_id: None,
             },
         )
         .expect("record");
@@ -2599,6 +2878,7 @@ mod tests {
                 source: RecordSource::QuickText,
                 create_as_task: false,
                 attachment_ids: vec![],
+                folder_id: None,
             },
         )
         .expect("record a");
@@ -2624,6 +2904,7 @@ mod tests {
                 source: RecordSource::QuickText,
                 create_as_task: false,
                 attachment_ids: vec![],
+                folder_id: None,
             },
         )
         .expect("record b");
@@ -2698,6 +2979,7 @@ mod tests {
                 source: RecordSource::QuickText,
                 create_as_task: false,
                 attachment_ids: vec![],
+                folder_id: None,
             },
         )
         .expect("record");
@@ -2755,6 +3037,7 @@ mod tests {
                 source: RecordSource::QuickText,
                 create_as_task: false,
                 attachment_ids: vec![],
+                folder_id: None,
             },
         )
         .expect("record");
@@ -2835,6 +3118,7 @@ mod tests {
                 source: RecordSource::QuickText,
                 create_as_task: false,
                 attachment_ids: vec![],
+                folder_id: None,
             },
         )
         .expect("record");
@@ -2885,6 +3169,7 @@ mod tests {
                 source: RecordSource::QuickText,
                 create_as_task: false,
                 attachment_ids: vec![],
+                folder_id: None,
             },
         )
         .expect("record A");
@@ -2897,6 +3182,7 @@ mod tests {
                 source: RecordSource::QuickText,
                 create_as_task: false,
                 attachment_ids: vec![],
+                folder_id: None,
             },
         )
         .expect("record B");
@@ -3024,6 +3310,7 @@ mod tests {
                 source: RecordSource::QuickText,
                 create_as_task: false,
                 attachment_ids: vec![],
+                folder_id: None,
             },
         )
         .expect("record");
@@ -3066,6 +3353,7 @@ mod tests {
                 source: RecordSource::QuickText,
                 create_as_task: false,
                 attachment_ids: vec![],
+                folder_id: None,
             },
         )
         .expect("first record");
@@ -3078,6 +3366,7 @@ mod tests {
                 source: RecordSource::QuickText,
                 create_as_task: false,
                 attachment_ids: vec![],
+                folder_id: None,
             },
         )
         .expect("second record");
@@ -3162,6 +3451,7 @@ mod tests {
                 source: RecordSource::QuickText,
                 create_as_task: false,
                 attachment_ids: vec![],
+                folder_id: None,
             },
         )
         .expect("record");
@@ -3275,18 +3565,21 @@ mod tests {
                     source: RecordSource::QuickText,
                     create_as_task: false,
                     attachment_ids: vec![],
+                    folder_id: None,
                 },
             )
             .expect("record");
         }
 
-        let candidates = list_pet_chat_context_candidates(&conn, "Signoz", 3)
-            .expect("context candidates");
+        let candidates =
+            list_pet_chat_context_candidates(&conn, "Signoz", 3).expect("context candidates");
         let messages = list_pet_chat_messages(&conn, &session.id).expect("messages");
 
         assert_eq!(messages.len(), 1);
         assert_eq!(candidates.len(), 3);
-        assert!(candidates.iter().all(|candidate| candidate.title.contains("Signoz")));
+        assert!(candidates
+            .iter()
+            .all(|candidate| candidate.title.contains("Signoz")));
     }
 
     #[test]
@@ -3303,7 +3596,13 @@ mod tests {
         let sessions = list_pet_chat_sessions(&conn, 10).expect("sessions");
         let latest = get_latest_pet_chat_session(&conn).expect("latest session");
 
-        assert_eq!(sessions.iter().map(|session| &session.id).collect::<Vec<_>>(), vec![&older.id, &newer.id]);
+        assert_eq!(
+            sessions
+                .iter()
+                .map(|session| &session.id)
+                .collect::<Vec<_>>(),
+            vec![&older.id, &newer.id]
+        );
         assert_eq!(latest.expect("a latest session").id, older.id);
     }
 
@@ -3319,6 +3618,7 @@ mod tests {
                 source: RecordSource::QuickText,
                 create_as_task: false,
                 attachment_ids: vec![],
+                folder_id: None,
             },
         )
         .expect("record");
@@ -3427,6 +3727,7 @@ mod tests {
                 source: RecordSource::QuickText,
                 create_as_task: false,
                 attachment_ids: vec![],
+                folder_id: None,
             },
         )
         .expect("record todo");
@@ -3452,6 +3753,7 @@ mod tests {
                 source: RecordSource::QuickText,
                 create_as_task: false,
                 attachment_ids: vec![],
+                folder_id: None,
             },
         )
         .expect("record doing");
@@ -3477,6 +3779,7 @@ mod tests {
                 source: RecordSource::QuickText,
                 create_as_task: false,
                 attachment_ids: vec![],
+                folder_id: None,
             },
         )
         .expect("record done");
@@ -3502,6 +3805,7 @@ mod tests {
                 source: RecordSource::QuickText,
                 create_as_task: false,
                 attachment_ids: vec![],
+                folder_id: None,
             },
         )
         .expect("record cancelled");

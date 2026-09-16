@@ -1807,6 +1807,7 @@ mod tests {
                 source: crate::models::RecordSource::QuickText,
                 create_as_task: false,
                 attachment_ids: vec![],
+                folder_id: None,
             },
         )
         .expect("record");
@@ -1851,6 +1852,7 @@ mod tests {
                 source: crate::models::RecordSource::QuickText,
                 create_as_task: false,
                 attachment_ids: vec![],
+                folder_id: None,
             },
         )
         .expect("first record");
@@ -1863,6 +1865,7 @@ mod tests {
                 source: crate::models::RecordSource::QuickText,
                 create_as_task: false,
                 attachment_ids: vec![],
+                folder_id: None,
             },
         )
         .expect("second record");
@@ -1963,6 +1966,7 @@ mod tests {
                 source: crate::models::RecordSource::QuickText,
                 create_as_task: false,
                 attachment_ids: vec![],
+                folder_id: None,
             },
         )
         .expect("record");
@@ -2006,6 +2010,7 @@ mod tests {
                 source: crate::models::RecordSource::QuickText,
                 create_as_task: false,
                 attachment_ids: vec![],
+                folder_id: None,
             },
         )
         .expect("record");
@@ -2049,6 +2054,7 @@ mod tests {
                 source: crate::models::RecordSource::QuickText,
                 create_as_task: false,
                 attachment_ids: vec![],
+                folder_id: None,
             },
         )
         .expect("record");
@@ -2092,6 +2098,7 @@ mod tests {
                 source: crate::models::RecordSource::QuickText,
                 create_as_task: false,
                 attachment_ids: vec![],
+                folder_id: None,
             },
         )
         .expect("record");
