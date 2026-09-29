@@ -13,6 +13,15 @@ const MARKDOWN_PATTERNS: RegExp[] = [
 ];
 
 /**
+ * BlockNote's Markdown fence parser expects LF line endings. Clipboard data
+ * and persisted Windows files commonly use CRLF, so normalize only at the
+ * parser boundary and keep the rest of the editor's text handling unchanged.
+ */
+export function normalizeMarkdownLineEndings(markdown: string): string {
+  return markdown.replace(/\r\n?/g, "\n");
+}
+
+/**
  * Decides whether a clipboard's plain text should override an accompanying
  * HTML representation and be pasted through BlockNote's Markdown parser.
  *

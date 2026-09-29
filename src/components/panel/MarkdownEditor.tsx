@@ -20,7 +20,10 @@ import { BlockNoteView } from "@blocknote/shadcn";
 import { useCreateBlockNote } from "@blocknote/react";
 import { createHighlighter } from "shiki";
 import { listenForFileDrops } from "../../lib/dragDrop";
-import { shouldPasteMarkdown } from "../../lib/markdownPaste";
+import {
+  normalizeMarkdownLineEndings,
+  shouldPasteMarkdown,
+} from "../../lib/markdownPaste";
 import {
   filterCodeLanguages,
   getCodeBlockSourceText,
@@ -604,7 +607,9 @@ export function MarkdownEditor({
     pasteHandler: ({ event, editor: pasteEditor, defaultPasteHandler }) => {
       const clipboardData = event.clipboardData;
       const plainText = clipboardData?.getData("text/plain") ?? "";
-      const markdownText = clipboardData?.getData("text/markdown") || plainText;
+      const markdownText = normalizeMarkdownLineEndings(
+        clipboardData?.getData("text/markdown") || plainText,
+      );
       const clipboardTypes = clipboardData ? Array.from(clipboardData.types) : [];
       const isInCodeBlock = pasteEditor.transact(
         (tr) =>
@@ -643,7 +648,9 @@ export function MarkdownEditor({
       const md = markdownRef.current;
       try {
         if (md.trim()) {
-          const blocks = await editor.tryParseMarkdownToBlocks(md);
+          const blocks = await editor.tryParseMarkdownToBlocks(
+            normalizeMarkdownLineEndings(md),
+          );
           if (cancelled || !blocks || blocks.length === 0) return;
           editor.replaceBlocks(editor.document, blocks as PartialBlock[]);
         }
