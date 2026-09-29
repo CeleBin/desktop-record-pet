@@ -9,6 +9,19 @@
    Apply via: <html data-theme="midnight-amber" data-mode="dark">
    ════════════════════════════════════════════════════════════════════ */
 
+/*
+   Scrollbar tokens must exist before any theme is selected.  The first
+   implementation put them inside one theme branch, which made every other
+   theme fall back to the native Windows scrollbar.
+*/
+:root {
+  --scrollbar-size: 9px;
+  --scrollbar-track: color-mix(in srgb, var(--surface, #fcf8f0) 52%, transparent);
+  --scrollbar-thumb: color-mix(in srgb, var(--text-muted, #7a6a55) 48%, transparent);
+  --scrollbar-thumb-hover: color-mix(in srgb, var(--primary, #8a6a20) 68%, var(--surface, #fcf8f0));
+  --scrollbar-thumb-active: var(--primary, #8a6a20);
+}
+
 /* ── Midnight Amber (午夜琥珀): 深夜终端 + 暖金金属光泽 ── */
 :root[data-theme="midnight-amber"][data-mode="dark"] {
   --bg: #060b18;
@@ -310,6 +323,63 @@ input,
 textarea,
 select {
   font: inherit;
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   Global scrollbars — quiet by default, theme-aware on interaction.
+   Chromium/Tauri uses the WebKit selectors; Firefox uses scrollbar-color.
+   The transparent border keeps the thumb visually slim without reducing
+   the hit area needed for comfortable dragging.
+   ════════════════════════════════════════════════════════════════════ */
+* {
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+  scrollbar-width: thin;
+}
+
+*::-webkit-scrollbar {
+  width: var(--scrollbar-size);
+  height: var(--scrollbar-size);
+  background: transparent;
+}
+
+*::-webkit-scrollbar-track,
+*::-webkit-scrollbar-track-piece {
+  background: var(--scrollbar-track);
+  border-radius: 999px;
+}
+
+*::-webkit-scrollbar-thumb {
+  min-height: 34px;
+  background: var(--scrollbar-thumb);
+  background-clip: padding-box;
+  border: 2px solid transparent;
+  border-radius: 999px;
+  -webkit-appearance: none;
+  transition: background-color 140ms ease;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+}
+
+*::-webkit-scrollbar-thumb:active {
+  background: var(--scrollbar-thumb-active);
+}
+
+*::-webkit-scrollbar-button,
+*::-webkit-scrollbar-button:single-button,
+*::-webkit-scrollbar-button:vertical:decrement,
+*::-webkit-scrollbar-button:vertical:increment,
+*::-webkit-scrollbar-button:horizontal:decrement,
+*::-webkit-scrollbar-button:horizontal:increment {
+  display: none;
+  width: 0;
+  height: 0;
+  background: transparent;
+}
+
+*::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 /* ════════════════════════════════════════════════════════════════════
