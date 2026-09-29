@@ -52,7 +52,9 @@ impl AiRuntimeSettings {
                 "opencode" if !base.ends_with("/responses") => {
                     format!("{}/responses", base.trim_end_matches('/'))
                 }
-                "openai" | "deepseek" | "custom-openai" | "ollama" if !base.ends_with("/chat/completions") => {
+                "openai" | "deepseek" | "custom-openai" | "ollama"
+                    if !base.ends_with("/chat/completions") =>
+                {
                     format!("{}/chat/completions", base.trim_end_matches('/'))
                 }
                 "claude" | "anthropic" if !base.ends_with("/messages") => {
@@ -135,12 +137,17 @@ pub async fn run_task(database: &Database, request: RunAiTaskRequest) -> AppResu
 }
 
 pub fn load_ai_runtime_settings(conn: &rusqlite::Connection) -> AppResult<AiRuntimeSettings> {
-    if let Some(profile_id) = db::get_setting(conn, "ai_default_profile_id")?.map(|entry| entry.value) {
+    if let Some(profile_id) =
+        db::get_setting(conn, "ai_default_profile_id")?.map(|entry| entry.value)
+    {
         if !profile_id.trim().is_empty() {
             return load_ai_runtime_settings_for_profile(conn, &profile_id, None);
         }
     }
-    if let Some(profile) = db::list_ai_profiles(conn)?.into_iter().find(|profile| profile.enabled) {
+    if let Some(profile) = db::list_ai_profiles(conn)?
+        .into_iter()
+        .find(|profile| profile.enabled)
+    {
         return load_ai_runtime_settings_for_profile(conn, &profile.id, None);
     }
     let secure_api_key = credentials::get_ai_api_key()?;
@@ -179,7 +186,9 @@ pub fn load_ai_runtime_settings_for_profile(
         .find(|profile| profile.id == profile_id)
         .ok_or_else(|| AppError::NotFound(format!("ai profile {profile_id}")))?;
     if !profile.enabled {
-        return Err(AppError::Validation("selected AI profile is disabled".into()));
+        return Err(AppError::Validation(
+            "selected AI profile is disabled".into(),
+        ));
     }
     let model = model_override
         .map(str::trim)
@@ -232,7 +241,9 @@ pub async fn generate_pet_chat_title(
         suggested_questions: vec![],
         messages: vec![],
     };
-    let raw_title = run_learning_dialog_reply_request(&settings, &payload).await?.reply;
+    let raw_title = run_learning_dialog_reply_request(&settings, &payload)
+        .await?
+        .reply;
     let title = raw_title
         .trim()
         .trim_matches(|character| character == '"' || character == '“' || character == '”')
@@ -240,7 +251,9 @@ pub async fn generate_pet_chat_title(
         .unwrap_or(raw_title.trim())
         .trim();
     if title.is_empty() {
-        return Err(AppError::State("AI title generation returned an empty title".into()));
+        return Err(AppError::State(
+            "AI title generation returned an empty title".into(),
+        ));
     }
     let title = title.chars().take(20).collect::<String>();
     let conn = database.conn.lock()?;
@@ -1435,17 +1448,19 @@ fn build_openai_compatible_request_body(
 ) -> serde_json::Value {
     let user_content = user_content
         .into_iter()
-        .map(|content| match content.get("type").and_then(serde_json::Value::as_str) {
-            Some("input_text") => serde_json::json!({
-                "type": "text",
-                "text": content["text"].as_str().unwrap_or_default(),
-            }),
-            Some("input_image") => serde_json::json!({
-                "type": "image_url",
-                "image_url": { "url": content["image_url"].as_str().unwrap_or_default() },
-            }),
-            _ => content,
-        })
+        .map(
+            |content| match content.get("type").and_then(serde_json::Value::as_str) {
+                Some("input_text") => serde_json::json!({
+                    "type": "text",
+                    "text": content["text"].as_str().unwrap_or_default(),
+                }),
+                Some("input_image") => serde_json::json!({
+                    "type": "image_url",
+                    "image_url": { "url": content["image_url"].as_str().unwrap_or_default() },
+                }),
+                _ => content,
+            },
+        )
         .collect::<Vec<_>>();
 
     serde_json::json!({
@@ -1491,39 +1506,59 @@ async fn run_pet_chat(database: &Database, payload: serde_json::Value) -> AppRes
         let session = if payload.proactive {
             db::create_pet_chat_session(&conn, Some("宠物主动问候".into()))?.id
         } else {
-            match payload.session_id.as_deref().filter(|id| !id.trim().is_empty()) {
+            match payload
+                .session_id
+                .as_deref()
+                .filter(|id| !id.trim().is_empty())
+            {
                 Some(id) => id.to_string(),
                 None => db::create_pet_chat_session(&conn, None)?.id,
             }
         };
-        let context_snapshot = serde_json::to_string(&payload.retained_record_ids)
-            .map_err(|error| AppError::State(format!("failed to serialize chat context: {error}")))?;
+        let context_snapshot =
+            serde_json::to_string(&payload.retained_record_ids).map_err(|error| {
+                AppError::State(format!("failed to serialize chat context: {error}"))
+            })?;
         if !payload.proactive {
-            db::append_pet_chat_message(&conn, &session, "user", &payload.content, &context_snapshot)?;
+            db::append_pet_chat_message(
+                &conn,
+                &session,
+                "user",
+                &payload.content,
+                &context_snapshot,
+            )?;
         }
-        let context_text = payload.retained_record_ids.iter().filter_map(|id| {
-            db::get_record(&conn, id).ok().and_then(|record| {
-                (record.status == crate::models::RecordStatus::Active).then(|| format!(
-                    "- {}:\n{}",
-                    record.title.unwrap_or_else(|| "未命名记录".into()),
-                    record.content.unwrap_or_default()
-                ))
+        let context_text = payload
+            .retained_record_ids
+            .iter()
+            .filter_map(|id| {
+                db::get_record(&conn, id).ok().and_then(|record| {
+                    (record.status == crate::models::RecordStatus::Active).then(|| {
+                        format!(
+                            "- {}:\n{}",
+                            record.title.unwrap_or_else(|| "未命名记录".into()),
+                            record.content.unwrap_or_default()
+                        )
+                    })
+                })
             })
-        }).collect::<Vec<_>>().join("\n\n");
+            .collect::<Vec<_>>()
+            .join("\n\n");
         let messages = if payload.proactive {
             Vec::new()
         } else {
             db::list_pet_chat_messages(&conn, &session)?
-            .into_iter()
-            .map(|message| crate::models::LearningConversationMessage { role: message.role, content: message.content })
-            .collect::<Vec<_>>()
+                .into_iter()
+                .map(|message| crate::models::LearningConversationMessage {
+                    role: message.role,
+                    content: message.content,
+                })
+                .collect::<Vec<_>>()
         };
         let settings = match payload.profile_id.as_deref() {
-            Some(profile_id) => load_ai_runtime_settings_for_profile(
-                &conn,
-                profile_id,
-                payload.model.as_deref(),
-            )?,
+            Some(profile_id) => {
+                load_ai_runtime_settings_for_profile(&conn, profile_id, payload.model.as_deref())?
+            }
             None => load_ai_runtime_settings(&conn)?,
         };
         (session, messages, context_text, settings)
@@ -1534,15 +1569,23 @@ async fn run_pet_chat(database: &Database, payload: serde_json::Value) -> AppRes
         topic_name: "桌宠日常对话".into(),
         source_record_id: "pet-chat".into(),
         summary: build_pet_chat_system_prompt(&payload.persona, payload.custom_prompt.as_deref()),
-        evidence_text: if context_text.is_empty() { "No user context retained for this message.".into() } else { context_text },
+        evidence_text: if context_text.is_empty() {
+            "No user context retained for this message.".into()
+        } else {
+            context_text
+        },
         note_example: None,
         suggested_questions: vec![],
         messages,
     };
     let result = run_learning_dialog_reply_request(&settings, &bridge).await?;
-    let response = PetChatResult { session_id: session_id.clone(), reply: result.reply };
-    let result_json = serde_json::to_string(&response)
-        .map_err(|error| AppError::State(format!("failed to serialize pet chat result: {error}")))?;
+    let response = PetChatResult {
+        session_id: session_id.clone(),
+        reply: result.reply,
+    };
+    let result_json = serde_json::to_string(&response).map_err(|error| {
+        AppError::State(format!("failed to serialize pet chat result: {error}"))
+    })?;
     let run = AiTaskRun {
         id: Uuid::new_v4().to_string(),
         task_type: AiTaskType::PetChat,

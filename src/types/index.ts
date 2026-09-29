@@ -28,6 +28,7 @@ export interface RecordItem {
   content: string | null;
   source: RecordSource;
   status: RecordStatus;
+  folderId: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -371,6 +372,7 @@ export interface CreateRecordRequest {
   source: RecordSource;
   createAsTask?: boolean;
   attachmentIds?: string[];
+  folderId?: string | null;
 }
 
 export interface ImportFilesRequest {
@@ -438,6 +440,9 @@ export interface RecordFilter {
   viewKey?: string;
   limit?: number;
   offset?: number;
+  noteFolderMode?: "all" | "unfiled" | "folder";
+  folderId?: string;
+  includeDescendants?: boolean;
 }
 
 export interface TaskFilter {
@@ -450,6 +455,8 @@ export interface TaskFilter {
 export interface FolderItem {
   id: string;
   name: string;
+  parentId: string | null;
+  scope: "note" | "task";
   sort_order: number;
   created_at: string;
   updated_at: string;

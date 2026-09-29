@@ -52,7 +52,7 @@ interface RecordsState {
   loading: boolean;
   error: string | null;
   fetchRecords: (filter?: RecordFilter) => Promise<void>;
-  createRecord: (request: CreateRecordRequest) => Promise<void>;
+  createRecord: (request: CreateRecordRequest) => Promise<RecordWithRelations | null>;
   selectRecord: (id: string | null) => Promise<void>;
   updateRecord: (id: string, update: UpdateRecordRequest) => Promise<void>;
   deleteRecord: (id: string) => Promise<void>;
@@ -101,11 +101,13 @@ export const useRecordsStore = create<RecordsState>((set, get) => ({
         selectedId: created.id,
         loading: false,
       }));
+      return hydrated;
     } catch (error) {
       set({
         loading: false,
         error: error instanceof Error ? error.message : String(error),
       });
+      return null;
     }
   },
   async selectRecord(id) {

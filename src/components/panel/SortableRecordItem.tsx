@@ -21,6 +21,7 @@ interface SortableRecordItemProps {
   isSelected: boolean;
   onSelect: (id: string) => void;
   onDelete: (id: string) => void;
+  onMoveNote?: (recordId: string) => void;
 }
 
 export function SortableRecordItem({
@@ -28,6 +29,7 @@ export function SortableRecordItem({
   isSelected,
   onSelect,
   onDelete,
+  onMoveNote,
 }: SortableRecordItemProps) {
   const {
     attributes,
@@ -65,7 +67,7 @@ export function SortableRecordItem({
         }
       `}
     >
-      <RecordItemContent record={record} onDelete={onDelete} />
+      <RecordItemContent record={record} onDelete={onDelete} onMoveNote={onMoveNote} />
     </div>
   );
 }

@@ -21,6 +21,11 @@ interface RecordListProps {
   onSelect: (id: string) => void;
   onDelete: (id: string) => void;
   onReorder?: (activeId: string, overId: string) => void;
+  onCreateNote?: () => void;
+  onMoveNote?: (recordId: string) => void;
+  notePath?: string[];
+  includeDescendants?: boolean;
+  onSetIncludeDescendants?: (value: boolean) => void;
 }
 
 export function RecordList({
@@ -31,6 +36,11 @@ export function RecordList({
   onSelect,
   onDelete,
   onReorder,
+  onCreateNote,
+  onMoveNote,
+  notePath,
+  includeDescendants,
+  onSetIncludeDescendants,
 }: RecordListProps) {
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -44,52 +54,72 @@ export function RecordList({
     onReorder?.(String(active.id), String(over.id));
   };
 
-  if (loading && records.length === 0) {
-    return (
-      <div className="flex h-full items-center justify-center">
-        <div className="flex flex-col items-center gap-3">
-          <div className="h-5 w-5 animate-spin rounded-full border-2 border-secondary/30 border-t-secondary" />
-          <p className="text-xs text-text0">加载中…</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (!loading && records.length === 0) {
-    return (
-      <div className="flex h-full items-center justify-center px-4">
-        <div className="text-center">
-          <p className="text-sm text-text0">
-            {viewMode === "tasks" ? "暂无任务" : "暂无笔记"}
-          </p>
-          <p className="mt-1 text-xs text-text-muted">
-            {viewMode === "tasks"
-              ? "在记录详情中可将记录转为待办"
-              : "Ctrl+Shift+R 打开速记窗口"}
-          </p>
-        </div>
-      </div>
-    );
-  }
-
   const sortable = onReorder != null;
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
       {/* Column header */}
-      <div className="shrink-0 border-b border-border px-4 py-3">
-        <p className="text-[10px] font-medium uppercase tracking-[0.2em] text-text0">
-          {viewMode === "tasks" ? "任务列表" : "笔记列表"}
-        </p>
-        <p className="mt-0.5 text-xs text-text-muted">
-          {records.length}{" "}
-          {viewMode === "tasks" ? "项任务" : "条笔记"}
-        </p>
+      <div className="flex shrink-0 items-center justify-between border-b border-border px-4 py-3">
+        <div>
+          <p className="text-[10px] font-medium uppercase tracking-[0.2em] text-text0">
+            {viewMode === "tasks" ? "任务列表" : "笔记列表"}
+          </p>
+          {viewMode === "notes" && notePath && notePath.length > 0 && (
+            <p className="mt-1 max-w-[18rem] truncate text-xs text-text-muted" title={notePath.join(" / ")}>
+              {notePath.join(" / ")}
+            </p>
+          )}
+          {viewMode === "notes" && notePath && notePath.length > 0 && notePath[0] !== "全部笔记" && notePath[0] !== "未归类" && onSetIncludeDescendants && (
+            <label className="mt-1.5 inline-flex cursor-pointer items-center gap-1.5 text-[11px] text-text-muted">
+              <input
+                type="checkbox"
+                checked={includeDescendants ?? false}
+                onChange={(event) => onSetIncludeDescendants(event.target.checked)}
+                className="accent-secondary"
+              />
+              包含子文件夹
+            </label>
+          )}
+          <p className="mt-0.5 text-xs text-text-muted">
+            {records.length}{" "}
+            {viewMode === "tasks" ? "项任务" : "条笔记"}
+          </p>
+        </div>
+        {viewMode === "notes" && onCreateNote && (
+          <button
+            type="button"
+            onClick={onCreateNote}
+            className="inline-flex items-center gap-1 rounded-lg bg-secondary/15 px-2.5 py-1.5 text-xs font-medium text-secondary transition hover:bg-secondary/25"
+          >
+            <span aria-hidden="true">＋</span>
+            新建笔记
+          </button>
+        )}
       </div>
 
       {/* Scrollable list */}
       <div className="flex-1 overflow-y-auto overscroll-contain">
-        {sortable ? (
+        {loading && records.length === 0 ? (
+          <div className="flex h-full items-center justify-center">
+            <div className="flex flex-col items-center gap-3">
+              <div className="h-5 w-5 animate-spin rounded-full border-2 border-secondary/30 border-t-secondary" />
+              <p className="text-xs text-text0">加载中…</p>
+            </div>
+          </div>
+        ) : !loading && records.length === 0 ? (
+          <div className="flex h-full items-center justify-center px-4">
+            <div className="text-center">
+              <p className="text-sm text-text0">
+                {viewMode === "tasks" ? "暂无任务" : "暂无笔记"}
+              </p>
+              <p className="mt-1 text-xs text-text-muted">
+                {viewMode === "tasks"
+                  ? "在记录详情中可将记录转为待办"
+                  : "点击右上角“新建笔记”开始记录"}
+              </p>
+            </div>
+          </div>
+        ) : sortable ? (
           <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
             <SortableContext
               items={records.map((r) => r.id)}
@@ -102,6 +132,7 @@ export function RecordList({
                   isSelected={record.id === selectedId}
                   onSelect={onSelect}
                   onDelete={onDelete}
+                  onMoveNote={onMoveNote}
                 />
               ))}
             </SortableContext>
@@ -122,7 +153,7 @@ export function RecordList({
                   }
                 `}
               >
-                <RecordItemContent record={record} onDelete={onDelete} />
+                <RecordItemContent record={record} onDelete={onDelete} onMoveNote={onMoveNote} />
               </div>
             );
           })

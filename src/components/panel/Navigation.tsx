@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 
-import type { RecordType, Tag, TaskPriority } from "../../types";
+import type { FolderItem, RecordType, Tag, TaskPriority } from "../../types";
 import { useTagsStore } from "../../store/tags";
 import { useSettingsStore } from "../../store/settings";
 import { ConfirmDialog } from "../common/ConfirmDialog";
+import { NoteFolderTree } from "./NoteFolderTree";
 
 type ViewMode = "notes" | "tasks";
 
@@ -26,6 +27,17 @@ interface NavigationProps {
   onToggleChat: () => void;
   activeTagIds: string[];
   onToggleTagFilter: (id: string) => void;
+  noteFolders: FolderItem[];
+  noteFolderView: "all" | "unfiled" | "folder";
+  selectedNoteFolderId: string | null;
+  onSelectAllNotes: () => void;
+  onSelectUnfiledNotes: () => void;
+  onSelectNoteFolder: (id: string) => void;
+  onCreateNoteFolder: (name: string, parentId: string | null) => void;
+  onRenameNoteFolder: (id: string, name: string) => void;
+  onDeleteNoteFolder: (id: string) => void;
+  onMoveNoteFolder: (id: string, parentId: string | null) => void;
+  noteFolderError?: string | null;
 }
 
 const TASK_FILTER_OPTIONS: { label: string; value: TaskPriority | "done" | null }[] = [
@@ -396,6 +408,17 @@ export function Navigation({
   onToggleGraph,
   onToggleChat,
   onToggleTagFilter,
+  noteFolders,
+  noteFolderView,
+  selectedNoteFolderId,
+  onSelectAllNotes,
+  onSelectUnfiledNotes,
+  onSelectNoteFolder,
+  onCreateNoteFolder,
+  onRenameNoteFolder,
+  onDeleteNoteFolder,
+  onMoveNoteFolder,
+  noteFolderError,
 }: NavigationProps) {
   const [focused, setFocused] = useState(false);
   const settings = useSettingsStore((state) => state.settings);
@@ -634,6 +657,19 @@ export function Navigation({
       {/* ── Record filters ── */}
       {viewMode !== "tasks" ? (
         <>
+          <NoteFolderTree
+            folders={noteFolders}
+            view={noteFolderView}
+            selectedFolderId={selectedNoteFolderId}
+            onSelectAll={onSelectAllNotes}
+            onSelectUnfiled={onSelectUnfiledNotes}
+            onSelectFolder={onSelectNoteFolder}
+            onCreateFolder={onCreateNoteFolder}
+            onRenameFolder={onRenameNoteFolder}
+            onDeleteFolder={onDeleteNoteFolder}
+            onMoveFolder={onMoveNoteFolder}
+            error={noteFolderError}
+          />
           {/* Tags filter */}
           <section>
             <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.2em] text-text0">

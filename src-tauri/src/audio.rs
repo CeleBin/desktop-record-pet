@@ -66,12 +66,12 @@ pub fn toggle_recording(app: &AppHandle, data_dir: &Path) -> AppResult<Option<St
 
 fn start_recording(app: &AppHandle, state: &RecordingState) -> AppResult<Option<String>> {
     let host = cpal::default_host();
-    let device = host.default_input_device().ok_or_else(|| {
-        AppError::Validation("未找到麦克风".into())
-    })?;
-    let config = device.default_input_config().map_err(|error| {
-        AppError::Validation(format!("无法获取麦克风默认配置: {error}"))
-    })?;
+    let device = host
+        .default_input_device()
+        .ok_or_else(|| AppError::Validation("未找到麦克风".into()))?;
+    let config = device
+        .default_input_config()
+        .map_err(|error| AppError::Validation(format!("无法获取麦克风默认配置: {error}")))?;
 
     let sample_rate = config.sample_rate().0;
     let channels = config.channels();
@@ -98,11 +98,7 @@ fn start_recording(app: &AppHandle, state: &RecordingState) -> AppResult<Option<
         cpal::SampleFormat::U16 => {
             build_input_stream::<u16>(&device, &stream_config, samples_arc, error_callback)
         }
-        other => {
-            return Err(AppError::Validation(format!(
-                "不支持的采样格式: {other:?}"
-            )))
-        }
+        other => return Err(AppError::Validation(format!("不支持的采样格式: {other:?}"))),
     }
     .map_err(|error| AppError::Io(format!("无法启动录音: {error}")))?;
 
@@ -221,7 +217,9 @@ pub fn encode_wav_bytes(samples: &[f32], sample_rate: u32, channels: u16) -> Vec
                 .write_sample((clamped * i16::MAX as f32) as i16)
                 .expect("writing a sample into a cursor cannot fail");
         }
-        writer.finalize().expect("finalizing an in-memory WAV cannot fail");
+        writer
+            .finalize()
+            .expect("finalizing an in-memory WAV cannot fail");
     }
     cursor.into_inner()
 }
@@ -248,7 +246,10 @@ mod tests {
     fn wav_samples_round_trip() {
         let bytes = encode_wav_bytes(&[0.0, 0.5, -0.5, 1.0, -1.0], 8_000, 1);
         let mut reader = hound::WavReader::new(bytes.as_slice()).expect("valid wav");
-        let samples: Vec<i16> = reader.samples::<i16>().map(|s| s.expect("sample")).collect();
+        let samples: Vec<i16> = reader
+            .samples::<i16>()
+            .map(|s| s.expect("sample"))
+            .collect();
         assert_eq!(samples.len(), 5);
         assert_eq!(samples[0], 0);
         assert!(samples[1] > 0);

@@ -37,9 +37,10 @@ export function contentPreview(record: RecordWithRelations): string {
 interface RecordItemContentProps {
   record: RecordWithRelations;
   onDelete: (id: string) => void;
+  onMoveNote?: (recordId: string) => void;
 }
 
-export function RecordItemContent({ record, onDelete }: RecordItemContentProps) {
+export function RecordItemContent({ record, onDelete, onMoveNote }: RecordItemContentProps) {
   const meta = TYPE_LABELS[record.type] ?? TYPE_LABELS.note;
   const hasTask = !!record.task;
   const ts = record.task?.task_status;
@@ -114,8 +115,26 @@ export function RecordItemContent({ record, onDelete }: RecordItemContentProps) 
         </div>
       </div>
 
-      {/* Delete button — stopPropagation 防止触发外层 onSelect 和 dnd 拖拽 */}
-      <button
+      <div className="flex shrink-0 items-start gap-1">
+        {record.type === "note" && onMoveNote && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onMoveNote(record.id);
+            }}
+            onPointerDown={(e) => e.stopPropagation()}
+            className="rounded-lg p-1 text-text-muted opacity-0 transition hover:bg-secondary/10 hover:text-secondary group-hover:opacity-100"
+            title="移动到文件夹"
+            aria-label="移动到文件夹"
+          >
+            <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M3 7.5A2.5 2.5 0 015.5 5H10l2 2h6.5A2.5 2.5 0 0121 9.5v7A2.5 2.5 0 0118.5 19h-13A2.5 2.5 0 013 16.5v-9z" />
+            </svg>
+          </button>
+        )}
+        {/* Delete button — stopPropagation 防止触发外层 onSelect 和 dnd 拖拽 */}
+        <button
         type="button"
         onClick={(e) => {
           e.stopPropagation();
@@ -129,7 +148,8 @@ export function RecordItemContent({ record, onDelete }: RecordItemContentProps) 
         <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
         </svg>
-      </button>
+        </button>
+      </div>
     </div>
   );
 }

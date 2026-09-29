@@ -780,6 +780,117 @@ pub fn reorder_folders(
     db::reorder_folders(&conn, &order_tuples)
 }
 
+#[tauri::command]
+pub fn list_note_folders(database: State<'_, Database>) -> AppResult<Vec<Folder>> {
+    let conn = database.conn.lock()?;
+    db::list_note_folders(&conn)
+}
+
+#[tauri::command]
+pub fn create_note_folder(
+    app: AppHandle,
+    database: State<'_, Database>,
+    name: String,
+    parent_id: Option<String>,
+) -> AppResult<Folder> {
+    if name.trim().is_empty() {
+        return Err(AppError::Validation("folder name is required".into()));
+    }
+    let folder = {
+        let conn = database.conn.lock()?;
+        db::create_note_folder(&conn, name.trim(), parent_id.as_deref())?
+    };
+    emit_data_changed(&app)?;
+    Ok(folder)
+}
+
+#[tauri::command]
+pub fn rename_note_folder(
+    app: AppHandle,
+    database: State<'_, Database>,
+    id: String,
+    name: String,
+) -> AppResult<Folder> {
+    if id.trim().is_empty() {
+        return Err(AppError::Validation("folder id is required".into()));
+    }
+    if name.trim().is_empty() {
+        return Err(AppError::Validation("folder name is required".into()));
+    }
+    let folder = {
+        let conn = database.conn.lock()?;
+        db::rename_note_folder(&conn, &id, name.trim())?
+    };
+    emit_data_changed(&app)?;
+    Ok(folder)
+}
+
+#[tauri::command]
+pub fn move_note_folder(
+    app: AppHandle,
+    database: State<'_, Database>,
+    id: String,
+    parent_id: Option<String>,
+) -> AppResult<()> {
+    if id.trim().is_empty() {
+        return Err(AppError::Validation("folder id is required".into()));
+    }
+    {
+        let conn = database.conn.lock()?;
+        db::move_note_folder(&conn, &id, parent_id.as_deref())?;
+    }
+    emit_data_changed(&app)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn delete_note_folder(
+    app: AppHandle,
+    database: State<'_, Database>,
+    id: String,
+) -> AppResult<()> {
+    if id.trim().is_empty() {
+        return Err(AppError::Validation("folder id is required".into()));
+    }
+    {
+        let conn = database.conn.lock()?;
+        db::delete_note_folder(&conn, &id)?;
+    }
+    emit_data_changed(&app)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn reorder_note_folders(
+    database: State<'_, Database>,
+    order: Vec<FolderSortOrder>,
+) -> AppResult<()> {
+    let conn = database.conn.lock()?;
+    let order_tuples: Vec<(String, i64)> = order
+        .iter()
+        .map(|item| (item.id.clone(), item.sort_order))
+        .collect();
+    db::reorder_note_folders(&conn, &order_tuples)
+}
+
+#[tauri::command]
+pub fn move_note_to_folder(
+    app: AppHandle,
+    database: State<'_, Database>,
+    record_id: String,
+    folder_id: Option<String>,
+) -> AppResult<()> {
+    if record_id.trim().is_empty() {
+        return Err(AppError::Validation("record id is required".into()));
+    }
+    {
+        let conn = database.conn.lock()?;
+        db::move_note_to_folder(&conn, &record_id, folder_id.as_deref())?;
+    }
+    emit_data_changed(&app)?;
+    Ok(())
+}
+
 // ── Tag commands ─────────────────────────────────────────────────
 
 #[tauri::command]

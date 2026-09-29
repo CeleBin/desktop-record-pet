@@ -396,6 +396,45 @@ export async function reorderFolders(
   return invoke<void>("reorder_folders", { order });
 }
 
+export async function listNoteFolders(): Promise<FolderItem[]> {
+  return invoke<FolderItem[]>("list_note_folders");
+}
+
+export async function createNoteFolder(
+  name: string,
+  parentId: string | null = null,
+): Promise<FolderItem> {
+  return invoke<FolderItem>("create_note_folder", { name, parentId });
+}
+
+export async function renameNoteFolder(id: string, name: string): Promise<FolderItem> {
+  return invoke<FolderItem>("rename_note_folder", { id, name });
+}
+
+export async function moveNoteFolder(
+  id: string,
+  parentId: string | null,
+): Promise<void> {
+  return invoke<void>("move_note_folder", { id, parentId });
+}
+
+export async function deleteNoteFolder(id: string): Promise<void> {
+  return invoke<void>("delete_note_folder", { id });
+}
+
+export async function reorderNoteFolders(
+  order: { id: string; sort_order: number }[],
+): Promise<void> {
+  return invoke<void>("reorder_note_folders", { order });
+}
+
+export async function moveNoteToFolder(
+  recordId: string,
+  folderId: string | null,
+): Promise<void> {
+  return invoke<void>("move_note_to_folder", { recordId, folderId });
+}
+
 // ── Tags ─────────────────────────────────────────────────────────────
 
 export async function listTags(): Promise<Tag[]> {

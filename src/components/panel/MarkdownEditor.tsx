@@ -20,6 +20,7 @@ import { BlockNoteView } from "@blocknote/shadcn";
 import { useCreateBlockNote } from "@blocknote/react";
 import { createHighlighter } from "shiki";
 import { listenForFileDrops } from "../../lib/dragDrop";
+import { shouldPasteMarkdown } from "../../lib/markdownPaste";
 import {
   filterCodeLanguages,
   getCodeBlockSourceText,
@@ -599,6 +600,32 @@ export function MarkdownEditor({
         console.error("uploadFile failed:", err);
         return "";
       }
+    },
+    pasteHandler: ({ event, editor: pasteEditor, defaultPasteHandler }) => {
+      const clipboardData = event.clipboardData;
+      const plainText = clipboardData?.getData("text/plain") ?? "";
+      const markdownText = clipboardData?.getData("text/markdown") || plainText;
+      const clipboardTypes = clipboardData ? Array.from(clipboardData.types) : [];
+      const isInCodeBlock = pasteEditor.transact(
+        (tr) =>
+          tr.selection.$from.parent.type.spec.code &&
+          tr.selection.$to.parent.type.spec.code,
+      );
+
+      // Markdown copied from chat/document tools often arrives with both
+      // text/plain and text/html. Parse the source explicitly so a narrow
+      // clipboard heuristic cannot downgrade it to literal Markdown text.
+      if (!isInCodeBlock && shouldPasteMarkdown(clipboardTypes, markdownText)) {
+        pasteEditor.pasteMarkdown(markdownText);
+        return true;
+      }
+
+      // Preserve BlockNote's normal handling for code blocks, images/files,
+      // and ordinary rich-text clipboard content.
+      return defaultPasteHandler({
+        prioritizeMarkdownOverHTML: true,
+        plainTextAsMarkdown: true,
+      });
     },
   });
 

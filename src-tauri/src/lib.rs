@@ -283,6 +283,13 @@ pub fn run() {
             commands::delete_folder,
             commands::move_task_to_folder,
             commands::reorder_folders,
+            commands::list_note_folders,
+            commands::create_note_folder,
+            commands::rename_note_folder,
+            commands::move_note_folder,
+            commands::delete_note_folder,
+            commands::reorder_note_folders,
+            commands::move_note_to_folder,
             // Tag commands
             commands::create_tag,
             commands::list_tags,

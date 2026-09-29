@@ -54,8 +54,18 @@ pub fn init_db(app_data_dir: &Path) -> AppResult<Database> {
 }
 
 pub fn run_migrations(conn: &Connection) -> AppResult<()> {
-    conn.execute_batch(
-        r#"
+    // SQLite only honors foreign_keys changes outside a transaction. Disable
+    // enforcement for the folders table swap, then keep every schema and data
+    // change (including user_version) inside one rollback boundary.
+    conn.execute_batch("PRAGMA foreign_keys = OFF;")?;
+    if let Err(error) = conn.execute_batch("BEGIN IMMEDIATE;") {
+        let _ = conn.execute_batch("PRAGMA foreign_keys = ON;");
+        return Err(error.into());
+    }
+
+    let migration_result: AppResult<()> = (|| {
+        conn.execute_batch(
+            r#"
         CREATE TABLE IF NOT EXISTS records (
             id TEXT PRIMARY KEY,
             type TEXT NOT NULL DEFAULT 'note',
@@ -250,107 +260,173 @@ pub fn run_migrations(conn: &Connection) -> AppResult<()> {
             FOREIGN KEY (record_id) REFERENCES records(id) ON DELETE CASCADE
         );
         "#,
-    )?;
+        )?;
 
-    // ── Migration: convert old record types to 'note' ──
-    conn.execute(
-        "UPDATE records SET type = 'note' WHERE type IN ('experience', 'issue', 'file-note')",
-        [],
-    )?;
+        // ── Migration: convert old record types to 'note' ──
+        conn.execute(
+            "UPDATE records SET type = 'note' WHERE type IN ('experience', 'issue', 'file-note')",
+            [],
+        )?;
 
-    let schema_version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-    if schema_version >= 1 {
-        return Ok(());
-    }
+        let schema_version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        if schema_version >= 1 {
+            return Ok(());
+        }
 
-    // CREATE TABLE IF NOT EXISTS does not update existing tables. Keep this
-    // versioned migration deliberately idempotent so partially-upgraded local
-    // databases can safely retry at the next startup.
-    let table_columns = |table: &str| -> AppResult<Vec<String>> {
-        Ok(conn
-            .prepare(&format!("SELECT * FROM {table} LIMIT 0"))?
-            .column_names()
-            .iter()
-            .map(|s| s.to_string())
-            .collect())
-    };
-    let tasks_columns = table_columns("tasks")?;
-    if !tasks_columns.iter().any(|c| c == "sort_order") {
-        conn.execute_batch("ALTER TABLE tasks ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0")?;
-    }
+        // CREATE TABLE IF NOT EXISTS does not update existing tables. Keep this
+        // versioned migration deliberately idempotent so partially-upgraded local
+        // databases can safely retry at the next startup.
+        let table_columns = |table: &str| -> AppResult<Vec<String>> {
+            Ok(conn
+                .prepare(&format!("SELECT * FROM {table} LIMIT 0"))?
+                .column_names()
+                .iter()
+                .map(|s| s.to_string())
+                .collect())
+        };
+        let tasks_columns = table_columns("tasks")?;
+        if !tasks_columns.iter().any(|c| c == "sort_order") {
+            conn.execute_batch(
+                "ALTER TABLE tasks ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0",
+            )?;
+        }
 
-    // ── Migration: add folder_id column to tasks if missing ──
-    if !tasks_columns.iter().any(|c| c == "folder_id") {
-        conn.execute_batch(
+        // ── Migration: add folder_id column to tasks if missing ──
+        if !tasks_columns.iter().any(|c| c == "folder_id") {
+            conn.execute_batch(
             "ALTER TABLE tasks ADD COLUMN folder_id TEXT REFERENCES folders(id) ON DELETE CASCADE",
         )?;
-    }
+        }
 
-    let records_columns = table_columns("records")?;
-    if !records_columns.iter().any(|c| c == "folder_id") {
-        conn.execute_batch("ALTER TABLE records ADD COLUMN folder_id TEXT REFERENCES folders(id)")?;
-    }
+        let records_columns = table_columns("records")?;
+        if !records_columns.iter().any(|c| c == "folder_id") {
+            conn.execute_batch(
+                "ALTER TABLE records ADD COLUMN folder_id TEXT REFERENCES folders(id)",
+            )?;
+        }
 
-    let folders_columns = table_columns("folders")?;
-    if !folders_columns.iter().any(|c| c == "parent_id") {
-        conn.execute_batch("ALTER TABLE folders ADD COLUMN parent_id TEXT")?;
-    }
-    if !folders_columns.iter().any(|c| c == "scope") {
-        conn.execute_batch("ALTER TABLE folders ADD COLUMN scope TEXT NOT NULL DEFAULT 'task'")?;
-    }
+        let folders_columns = table_columns("folders")?;
+        if !folders_columns.iter().any(|c| c == "parent_id") {
+            conn.execute_batch("ALTER TABLE folders ADD COLUMN parent_id TEXT")?;
+        }
+        if !folders_columns.iter().any(|c| c == "scope") {
+            conn.execute_batch(
+                "ALTER TABLE folders ADD COLUMN scope TEXT NOT NULL DEFAULT 'task'",
+            )?;
+        }
 
-    // Legacy task folders become root-level task folders. Normalize names
-    // before the final table gains its case-insensitive sibling uniqueness.
-    conn.execute(
-        "UPDATE folders SET scope = 'task' WHERE scope IS NULL OR scope NOT IN ('note', 'task')",
-        [],
-    )?;
-    conn.execute(
-        "UPDATE folders SET parent_id = NULL WHERE parent_id = id",
-        [],
-    )?;
-    let mut stmt = conn.prepare(
-        "SELECT id, name, scope, parent_id FROM folders ORDER BY scope, parent_id IS NOT NULL, parent_id, sort_order, created_at, id",
-    )?;
-    let folders = stmt
-        .query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, Option<String>>(3)?,
-            ))
-        })?
-        .collect::<Result<Vec<_>, _>>()?;
-    let mut seen = std::collections::HashSet::new();
-    for (id, name, scope, parent_id) in folders {
-        let base = match name.trim() {
-            "" => "未命名文件夹".to_string(),
-            value => value.to_string(),
-        };
-        let parent_key = parent_id.clone().unwrap_or_else(|| "__root__".to_string());
-        let mut candidate = base.clone();
-        let mut suffix = 2;
-        while !seen.insert((
-            scope.clone(),
-            parent_key.clone(),
-            candidate.trim().to_lowercase(),
-        )) {
-            candidate = format!("{base} ({suffix})");
-            suffix += 1;
+        let non_note_record_folders: i64 = conn.query_row(
+            "SELECT COUNT(*)
+             FROM records
+             WHERE type <> 'note' AND folder_id IS NOT NULL",
+            [],
+            |row| row.get(0),
+        )?;
+        if non_note_record_folders != 0 {
+            return Err(AppError::Database(format!(
+                "folder scope migration failed: {non_note_record_folders} non-note record(s) have records.folder_id set"
+            )));
+        }
+
+        // Legacy task folders become root-level task folders. Normalize names
+        // before the final table gains its case-insensitive sibling uniqueness.
+        conn.execute(
+            "UPDATE folders SET scope = 'task' WHERE scope IS NULL OR scope NOT IN ('note', 'task')",
+            [],
+        )?;
+        let mixed_scope_folders: i64 = conn.query_row(
+            "SELECT COUNT(*)
+             FROM folders f
+             WHERE EXISTS (
+                 SELECT 1 FROM records r
+                 WHERE r.folder_id = f.id AND r.type = 'note'
+             )
+               AND EXISTS (
+                 SELECT 1 FROM tasks t WHERE t.folder_id = f.id
+             )",
+            [],
+            |row| row.get(0),
+        )?;
+        if mixed_scope_folders != 0 {
+            return Err(AppError::Database(format!(
+                "folder scope migration failed: {mixed_scope_folders} folder(s) are referenced by both note and task records"
+            )));
         }
         conn.execute(
-            "UPDATE folders SET name = ?2 WHERE id = ?1",
-            params![id, candidate],
+            "UPDATE folders
+             SET scope = 'note'
+             WHERE id IN (
+                 SELECT folder_id FROM records
+                 WHERE type = 'note' AND folder_id IS NOT NULL
+             )",
+            [],
         )?;
-    }
+        conn.execute(
+            "UPDATE folders
+             SET scope = 'task'
+             WHERE id IN (SELECT folder_id FROM tasks WHERE folder_id IS NOT NULL)",
+            [],
+        )?;
+        let mismatched_parent_scopes: i64 = conn.query_row(
+            "SELECT COUNT(*)
+             FROM folders child
+             JOIN folders parent ON parent.id = child.parent_id
+             WHERE child.scope <> parent.scope",
+            [],
+            |row| row.get(0),
+        )?;
+        if mismatched_parent_scopes != 0 {
+            return Err(AppError::Database(format!(
+                "folder parent scope migration failed: {mismatched_parent_scopes} child folder(s) have a different scope from their parent"
+            )));
+        }
+        conn.execute(
+            "UPDATE folders SET parent_id = NULL WHERE parent_id = id",
+            [],
+        )?;
+        let mut stmt = conn.prepare(
+        "SELECT id, name, scope, parent_id FROM folders ORDER BY scope, parent_id IS NOT NULL, parent_id, sort_order, created_at, id",
+    )?;
+        let folders = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut seen = std::collections::HashSet::new();
+        for (id, name, scope, parent_id) in folders {
+            let base = match name.trim() {
+                "" => "未命名文件夹".to_string(),
+                value => value.to_string(),
+            };
+            let (suffix_base, mut next_suffix) = folder_name_suffix_base(&base);
+            let parent_key = parent_id.clone().unwrap_or_else(|| "__root__".to_string());
+            let mut candidate = base.clone();
+            while !seen.insert((
+                scope.clone(),
+                parent_key.clone(),
+                candidate.trim().to_lowercase(),
+            )) {
+                let suffix = next_suffix.ok_or_else(|| {
+                    AppError::Database(format!(
+                        "folder name suffix exhausted while normalizing '{base}'"
+                    ))
+                })?;
+                candidate = format!("{suffix_base} ({suffix})");
+                next_suffix = suffix.checked_add(1);
+            }
+            conn.execute(
+                "UPDATE folders SET name = ?2 WHERE id = ?1",
+                params![id, candidate],
+            )?;
+        }
 
-    // SQLite cannot add the final CHECK constraint with ALTER TABLE. Replace
-    // folders atomically, preserving every ID and both existing associations.
-    // Foreign keys are disabled only for the table swap and checked again
-    // immediately afterwards.
-    conn.execute_batch("PRAGMA foreign_keys = OFF; BEGIN IMMEDIATE;")?;
-    let migration_result: AppResult<()> = (|| {
+        // SQLite cannot add the final CHECK constraint with ALTER TABLE.
+        // Replace folders while preserving every ID and existing association.
         conn.execute_batch(
             "CREATE TABLE folders_new (
                 id TEXT PRIMARY KEY,
@@ -378,19 +454,44 @@ pub fn run_migrations(conn: &Connection) -> AppResult<()> {
                 "foreign key check failed with {foreign_key_errors} violation(s)"
             )));
         }
+        conn.execute_batch("PRAGMA user_version = 1;")?;
         Ok(())
     })();
+
     match migration_result {
         Ok(()) => {
-            conn.execute_batch("COMMIT; PRAGMA foreign_keys = ON; PRAGMA user_version = 1;")?;
+            if let Err(error) = conn.execute_batch("COMMIT;") {
+                let _ = conn.execute_batch("ROLLBACK;");
+                let _ = conn.execute_batch("PRAGMA foreign_keys = ON;");
+                return Err(error.into());
+            }
+            conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+            Ok(())
         }
         Err(error) => {
-            let _ = conn.execute_batch("ROLLBACK; PRAGMA foreign_keys = ON;");
-            return Err(error);
+            let rollback_result = conn.execute_batch("ROLLBACK;");
+            let foreign_keys_result = conn.execute_batch("PRAGMA foreign_keys = ON;");
+            rollback_result?;
+            foreign_keys_result?;
+            Err(error)
         }
     }
+}
 
-    Ok(())
+fn folder_name_suffix_base(name: &str) -> (&str, Option<usize>) {
+    let Some(prefix) = name.strip_suffix(')') else {
+        return (name, Some(2));
+    };
+    let Some(open_paren) = prefix.rfind(" (") else {
+        return (name, Some(2));
+    };
+    let Ok(suffix) = prefix[open_paren + 2..].parse::<usize>() else {
+        return (name, Some(2));
+    };
+    if suffix < 2 {
+        return (name, Some(2));
+    }
+    (&name[..open_paren], suffix.checked_add(1))
 }
 
 pub fn insert_record(conn: &Connection, request: CreateRecordRequest) -> AppResult<Record> {
@@ -1726,6 +1827,15 @@ pub fn list_records_filtered(
     };
 
     let mut param_values: Vec<String> = Vec::new();
+    let note_folder_mode = filter.note_folder_mode.as_deref();
+    let is_task_query = matches!(filter.type_filter, Some(RecordType::Task))
+        || matches!(filter.view_key.as_deref(), Some("tasks"));
+
+    if matches!(note_folder_mode, Some("folder")) && filter.folder_id.is_none() && !is_task_query {
+        return Err(AppError::Validation(
+            "folder id is required for note folder filtering".into(),
+        ));
+    }
 
     // If a view_key is provided (notes/tasks single-type view), LEFT JOIN the
     // per-view sort order table so results can be ordered by user-defined
@@ -1738,7 +1848,22 @@ pub fn list_records_filtered(
         .unwrap_or(false);
 
     // Build SQL in correct clause order: SELECT ... FROM ... [LEFT JOIN ...] WHERE 1=1 [AND ...]
-    let mut sql = String::from(
+    let mut sql = String::new();
+    if matches!(note_folder_mode, Some("folder"))
+        && filter.include_descendants.unwrap_or(false)
+        && !is_task_query
+    {
+        param_values.push(filter.folder_id.as_ref().unwrap().clone());
+        sql.push_str(
+            "WITH RECURSIVE note_folder_tree(id) AS ( \
+             SELECT id FROM folders WHERE id = ?1 AND scope = 'note' \
+             UNION ALL \
+             SELECT f.id FROM folders f JOIN note_folder_tree tree ON f.parent_id = tree.id \
+             WHERE f.scope = 'note' \
+             ) ",
+        );
+    }
+    sql.push_str(
         "SELECT r.id, r.type, r.title, r.content, r.source, r.status, r.folder_id, r.created_at, r.updated_at FROM records r",
     );
     if has_view_key {
@@ -1757,6 +1882,34 @@ pub fn list_records_filtered(
     if let Some(s) = &filter.status_filter {
         param_values.push(s.as_str().to_string());
         sql.push_str(&format!(" AND r.status = ?{}", param_values.len()));
+    }
+
+    if !is_task_query {
+        match note_folder_mode {
+            Some("all") => {
+                sql.push_str(" AND r.type = 'note' AND r.status = 'active'");
+            }
+            Some("unfiled") => {
+                sql.push_str(
+                    " AND r.type = 'note' AND r.status = 'active' AND r.folder_id IS NULL",
+                );
+            }
+            Some("folder") => {
+                sql.push_str(" AND r.type = 'note' AND r.status = 'active'");
+                if filter.include_descendants.unwrap_or(false) {
+                    sql.push_str(" AND r.folder_id IN (SELECT id FROM note_folder_tree)");
+                } else {
+                    param_values.push(filter.folder_id.as_ref().unwrap().clone());
+                    sql.push_str(&format!(" AND r.folder_id = ?{}", param_values.len()));
+                }
+            }
+            Some(other) => {
+                return Err(AppError::Validation(format!(
+                    "invalid note folder mode: {other}"
+                )));
+            }
+            None => {}
+        }
     }
     if let Some(q) = &filter.search_query {
         let idx = param_values.len() + 1;
@@ -2037,85 +2190,182 @@ pub fn reorder_records(
 
 // ── Folder CRUD ─────────────────────────────────────────────────
 
-pub fn list_folders(conn: &Connection) -> AppResult<Vec<Folder>> {
-    let mut stmt = conn.prepare(
-        "SELECT id, name, parent_id, scope, sort_order, created_at, updated_at FROM folders ORDER BY scope, parent_id, sort_order ASC, created_at ASC",
-    )?;
-    let rows = stmt.query_map([], |row| {
-        Ok(Folder {
-            id: row.get(0)?,
-            name: row.get(1)?,
-            parent_id: row.get(2)?,
-            scope: FolderScope::parse(&row.get::<_, String>(3)?),
-            sort_order: row.get(4)?,
-            created_at: parse_datetime(&row.get::<_, String>(5)?)?,
-            updated_at: parse_datetime(&row.get::<_, String>(6)?)?,
-        })
-    })?;
-    let folders = rows.collect::<Result<Vec<_>, _>>()?;
-    Ok(folders)
+fn map_folder(row: &Row<'_>) -> rusqlite::Result<Folder> {
+    Ok(Folder {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        parent_id: row.get(2)?,
+        scope: FolderScope::parse(&row.get::<_, String>(3)?),
+        sort_order: row.get(4)?,
+        created_at: parse_datetime(&row.get::<_, String>(5)?)?,
+        updated_at: parse_datetime(&row.get::<_, String>(6)?)?,
+    })
 }
 
-pub fn create_folder(conn: &Connection, name: &str) -> AppResult<Folder> {
-    let now = Utc::now();
-    let max_sort: i64 = conn
+fn get_folder(conn: &Connection, id: &str) -> AppResult<Folder> {
+    conn.query_row(
+        "SELECT id, name, parent_id, scope, sort_order, created_at, updated_at FROM folders WHERE id = ?1",
+        params![id],
+        map_folder,
+    )
+    .optional()?
+    .ok_or_else(|| AppError::NotFound(format!("folder {id}")))
+}
+
+fn list_scoped_folders(
+    conn: &Connection,
+    scope: FolderScope,
+    root_only: bool,
+) -> AppResult<Vec<Folder>> {
+    let parent_clause = if root_only {
+        " AND parent_id IS NULL"
+    } else {
+        ""
+    };
+    let sql = format!(
+        "SELECT id, name, parent_id, scope, sort_order, created_at, updated_at FROM folders \
+         WHERE scope = ?1{parent_clause} \
+         ORDER BY scope, parent_id, sort_order ASC, created_at ASC, id ASC"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(params![scope.as_str()], map_folder)?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
+fn required_folder_name(name: &str) -> AppResult<String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(AppError::Validation("folder name is required".into()));
+    }
+    Ok(name.to_string())
+}
+
+fn assert_unique_sibling_name(
+    conn: &Connection,
+    scope: FolderScope,
+    parent_id: Option<&str>,
+    name: &str,
+    excluding_id: Option<&str>,
+) -> AppResult<()> {
+    let duplicate: Option<String> = conn
         .query_row(
-            "SELECT COALESCE(MAX(sort_order), -1) FROM folders",
-            [],
+            "SELECT id FROM folders
+             WHERE scope = ?1 AND parent_id IS ?2
+               AND lower(trim(name)) = lower(trim(?3))
+               AND (?4 IS NULL OR id <> ?4)
+             LIMIT 1",
+            params![scope.as_str(), parent_id, name, excluding_id],
             |row| row.get(0),
         )
-        .unwrap_or(-1);
+        .optional()?;
+    if duplicate.is_some() {
+        return Err(AppError::Validation(
+            "a folder with this name already exists here".into(),
+        ));
+    }
+    Ok(())
+}
 
+fn append_sort_order(
+    conn: &Connection,
+    scope: FolderScope,
+    parent_id: Option<&str>,
+) -> AppResult<i64> {
+    Ok(conn.query_row(
+        "SELECT COALESCE(MAX(sort_order), -1) FROM folders WHERE scope = ?1 AND parent_id IS ?2",
+        params![scope.as_str(), parent_id],
+        |row| row.get::<_, i64>(0),
+    )? + 1)
+}
+
+fn reindex_note_siblings(conn: &Connection, parent_id: Option<&str>) -> AppResult<()> {
+    let mut stmt = conn.prepare(
+        "SELECT id FROM folders WHERE scope = 'note' AND parent_id IS ?1
+         ORDER BY sort_order ASC, created_at ASC, id ASC",
+    )?;
+    let ids = stmt
+        .query_map(params![parent_id], |row| row.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    for (sort_order, id) in ids.iter().enumerate() {
+        conn.execute(
+            "UPDATE folders SET sort_order = ?2 WHERE id = ?1",
+            params![id, sort_order as i64],
+        )?;
+    }
+    Ok(())
+}
+
+fn create_scoped_folder(
+    conn: &Connection,
+    scope: FolderScope,
+    name: &str,
+    parent_id: Option<&str>,
+) -> AppResult<Folder> {
+    let name = required_folder_name(name)?;
+    if let Some(parent_id) = parent_id {
+        let parent = get_folder(conn, parent_id)?;
+        if parent.scope != scope {
+            return Err(AppError::Validation(
+                "folder parent must have the same scope".into(),
+            ));
+        }
+    }
+    assert_unique_sibling_name(conn, scope, parent_id, &name, None)?;
+    let now = Utc::now();
     let folder = Folder {
         id: Uuid::new_v4().to_string(),
-        name: name.to_string(),
-        parent_id: None,
-        scope: FolderScope::Task,
-        sort_order: max_sort + 1,
+        name,
+        parent_id: parent_id.map(str::to_string),
+        scope,
+        sort_order: append_sort_order(conn, scope, parent_id)?,
         created_at: now,
         updated_at: now,
     };
-
     conn.execute(
-        "INSERT INTO folders (id, name, parent_id, scope, sort_order, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        params![folder.id, folder.name, folder.parent_id, folder.scope.as_str(), folder.sort_order, folder.created_at.to_rfc3339(), folder.updated_at.to_rfc3339()],
+        "INSERT INTO folders (id, name, parent_id, scope, sort_order, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            folder.id,
+            folder.name,
+            folder.parent_id,
+            folder.scope.as_str(),
+            folder.sort_order,
+            folder.created_at.to_rfc3339(),
+            folder.updated_at.to_rfc3339()
+        ],
     )?;
-
     Ok(folder)
 }
 
+pub fn list_folders(conn: &Connection) -> AppResult<Vec<Folder>> {
+    list_scoped_folders(conn, FolderScope::Task, true)
+}
+
+pub fn create_folder(conn: &Connection, name: &str) -> AppResult<Folder> {
+    create_scoped_folder(conn, FolderScope::Task, name, None)
+}
+
 pub fn rename_folder(conn: &Connection, id: &str, name: &str) -> AppResult<Folder> {
+    let folder = get_folder(conn, id)?;
+    if folder.scope != FolderScope::Task || folder.parent_id.is_some() {
+        return Err(AppError::Validation("folder is not a task folder".into()));
+    }
+    let name = required_folder_name(name)?;
+    assert_unique_sibling_name(conn, FolderScope::Task, None, &name, Some(id))?;
     let now = Utc::now();
     conn.execute(
         "UPDATE folders SET name = ?2, updated_at = ?3 WHERE id = ?1",
         params![id, name, now.to_rfc3339()],
     )?;
 
-    conn.query_row(
-        "SELECT id, name, parent_id, scope, sort_order, created_at, updated_at FROM folders WHERE id = ?1",
-        params![id],
-        |row| {
-            Ok(Folder {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                parent_id: row.get(2)?,
-                scope: FolderScope::parse(&row.get::<_, String>(3)?),
-                sort_order: row.get(4)?,
-                created_at: parse_datetime(&row.get::<_, String>(5)?)?,
-                updated_at: parse_datetime(&row.get::<_, String>(6)?)?,
-            })
-        },
-    )
-    .optional()?
-    .ok_or_else(|| AppError::NotFound(format!("folder {id}")))
+    get_folder(conn, id)
 }
 
 pub fn delete_folder(conn: &Connection, id: &str) -> AppResult<()> {
-    conn.query_row("SELECT id FROM folders WHERE id = ?1", params![id], |_| {
-        Ok(())
-    })
-    .optional()?
-    .ok_or_else(|| AppError::NotFound(format!("folder {id}")))?;
+    let folder = get_folder(conn, id)?;
+    if folder.scope != FolderScope::Task || folder.parent_id.is_some() {
+        return Err(AppError::Validation("folder is not a task folder".into()));
+    }
 
     conn.execute("DELETE FROM folders WHERE id = ?1", params![id])?;
     Ok(())
@@ -2126,6 +2376,14 @@ pub fn move_task_to_folder(
     task_id: &str,
     folder_id: Option<&str>,
 ) -> AppResult<()> {
+    if let Some(folder_id) = folder_id {
+        let folder = get_folder(conn, folder_id)?;
+        if folder.scope != FolderScope::Task || folder.parent_id.is_some() {
+            return Err(AppError::Validation(
+                "task folder must be a root task folder".into(),
+            ));
+        }
+    }
     let updated = conn.execute(
         "UPDATE tasks SET folder_id = ?2 WHERE id = ?1",
         params![task_id, folder_id],
@@ -2137,15 +2395,252 @@ pub fn move_task_to_folder(
 }
 
 pub fn reorder_folders(conn: &Connection, order: &[(String, i64)]) -> AppResult<()> {
-    conn.execute_batch("BEGIN")?;
-    for (folder_id, sort_order) in order {
-        conn.execute(
-            "UPDATE folders SET sort_order = ?2 WHERE id = ?1",
-            params![folder_id, sort_order],
-        )?;
+    conn.execute_batch("BEGIN IMMEDIATE")?;
+    let result: AppResult<()> = (|| {
+        for (folder_id, sort_order) in order {
+            let folder = get_folder(conn, folder_id)?;
+            if folder.scope != FolderScope::Task || folder.parent_id.is_some() {
+                return Err(AppError::Validation("folder is not a task folder".into()));
+            }
+            conn.execute(
+                "UPDATE folders SET sort_order = ?2 WHERE id = ?1",
+                params![folder_id, sort_order],
+            )?;
+        }
+        Ok(())
+    })();
+    match result {
+        Ok(()) => {
+            conn.execute_batch("COMMIT")?;
+            Ok(())
+        }
+        Err(error) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            Err(error)
+        }
     }
-    conn.execute_batch("COMMIT")?;
+}
+
+pub fn list_note_folders(conn: &Connection) -> AppResult<Vec<Folder>> {
+    list_scoped_folders(conn, FolderScope::Note, false)
+}
+
+pub fn create_note_folder(
+    conn: &Connection,
+    name: &str,
+    parent_id: Option<&str>,
+) -> AppResult<Folder> {
+    create_scoped_folder(conn, FolderScope::Note, name, parent_id)
+}
+
+pub fn rename_note_folder(conn: &Connection, id: &str, name: &str) -> AppResult<Folder> {
+    let folder = get_folder(conn, id)?;
+    if folder.scope != FolderScope::Note {
+        return Err(AppError::Validation("folder is not a note folder".into()));
+    }
+    let name = required_folder_name(name)?;
+    assert_unique_sibling_name(
+        conn,
+        FolderScope::Note,
+        folder.parent_id.as_deref(),
+        &name,
+        Some(id),
+    )?;
+    conn.execute(
+        "UPDATE folders SET name = ?2, updated_at = ?3 WHERE id = ?1",
+        params![id, name, Utc::now().to_rfc3339()],
+    )?;
+    get_folder(conn, id)
+}
+
+pub fn move_note_folder(conn: &Connection, id: &str, parent_id: Option<&str>) -> AppResult<()> {
+    let folder = get_folder(conn, id)?;
+    if folder.scope != FolderScope::Note {
+        return Err(AppError::Validation("folder is not a note folder".into()));
+    }
+    if parent_id == Some(id) {
+        return Err(AppError::Validation(
+            "a folder cannot be its own parent".into(),
+        ));
+    }
+    if let Some(parent_id) = parent_id {
+        let parent = get_folder(conn, parent_id)?;
+        if parent.scope != FolderScope::Note {
+            return Err(AppError::Validation(
+                "folder parent must be a note folder".into(),
+            ));
+        }
+        let is_descendant: bool = conn.query_row(
+            "WITH RECURSIVE descendants(id) AS (
+                 SELECT id FROM folders WHERE parent_id = ?1
+                 UNION ALL
+                 SELECT f.id FROM folders f JOIN descendants d ON f.parent_id = d.id
+             ) SELECT EXISTS(SELECT 1 FROM descendants WHERE id = ?2)",
+            params![id, parent_id],
+            |row| row.get(0),
+        )?;
+        if is_descendant {
+            return Err(AppError::Validation(
+                "a folder cannot move into a descendant".into(),
+            ));
+        }
+    }
+    assert_unique_sibling_name(conn, FolderScope::Note, parent_id, &folder.name, Some(id))?;
+    conn.execute_batch("BEGIN IMMEDIATE")?;
+    let result: AppResult<()> = (|| {
+        let new_sort_order = append_sort_order(conn, FolderScope::Note, parent_id)?;
+        conn.execute(
+            "UPDATE folders SET parent_id = ?2, sort_order = ?3, updated_at = ?4 WHERE id = ?1",
+            params![id, parent_id, new_sort_order, Utc::now().to_rfc3339()],
+        )?;
+        reindex_note_siblings(conn, folder.parent_id.as_deref())?;
+        if folder.parent_id.as_deref() != parent_id {
+            reindex_note_siblings(conn, parent_id)?;
+        }
+        Ok(())
+    })();
+    match result {
+        Ok(()) => {
+            conn.execute_batch("COMMIT")?;
+            Ok(())
+        }
+        Err(error) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            Err(error)
+        }
+    }
+}
+
+pub fn move_note_to_folder(
+    conn: &Connection,
+    record_id: &str,
+    folder_id: Option<&str>,
+) -> AppResult<()> {
+    let record = get_record(conn, record_id)?;
+    if record.record_type != RecordType::Note {
+        return Err(AppError::Validation(
+            "only note records can be filed in note folders".into(),
+        ));
+    }
+    if let Some(folder_id) = folder_id {
+        let folder = get_folder(conn, folder_id)?;
+        if folder.scope != FolderScope::Note {
+            return Err(AppError::Validation(
+                "record folder must be a note folder".into(),
+            ));
+        }
+    }
+    conn.execute(
+        "UPDATE records SET folder_id = ?2, updated_at = ?3 WHERE id = ?1",
+        params![record_id, folder_id, Utc::now().to_rfc3339()],
+    )?;
     Ok(())
+}
+
+pub fn delete_note_folder(conn: &Connection, id: &str) -> AppResult<()> {
+    conn.execute_batch("BEGIN IMMEDIATE")?;
+    let result: AppResult<()> = (|| {
+        let folder = get_folder(conn, id)?;
+        if folder.scope != FolderScope::Note {
+            return Err(AppError::Validation("folder is not a note folder".into()));
+        }
+        let mut child_stmt = conn.prepare(
+            "SELECT id, name FROM folders WHERE parent_id = ?1 AND scope = 'note'
+             ORDER BY sort_order ASC, created_at ASC, id ASC",
+        )?;
+        let children = child_stmt
+            .query_map(params![id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        for (_, name) in &children {
+            assert_unique_sibling_name(
+                conn,
+                FolderScope::Note,
+                folder.parent_id.as_deref(),
+                name,
+                Some(id),
+            )?;
+        }
+        // A direct child may share this folder's name because it previously
+        // lived under a different parent. Release that sibling name before
+        // promoting children so the unique sibling index sees the final,
+        // rather than a transient, folder layout.
+        conn.execute(
+            "UPDATE folders SET name = ?2 WHERE id = ?1",
+            params![id, format!("__deleting__{}", Uuid::new_v4())],
+        )?;
+        let mut promoted_sort_order =
+            append_sort_order(conn, FolderScope::Note, folder.parent_id.as_deref())?;
+        for (child_id, _) in &children {
+            conn.execute(
+                "UPDATE folders SET parent_id = ?2, sort_order = ?3, updated_at = ?4 WHERE id = ?1",
+                params![
+                    child_id,
+                    folder.parent_id,
+                    promoted_sort_order,
+                    Utc::now().to_rfc3339()
+                ],
+            )?;
+            promoted_sort_order += 1;
+        }
+        conn.execute(
+            "UPDATE records SET folder_id = ?2, updated_at = ?3 WHERE folder_id = ?1 AND type = 'note'",
+            params![id, folder.parent_id, Utc::now().to_rfc3339()],
+        )?;
+        conn.execute("DELETE FROM folders WHERE id = ?1", params![id])?;
+        reindex_note_siblings(conn, folder.parent_id.as_deref())?;
+        Ok(())
+    })();
+    match result {
+        Ok(()) => {
+            conn.execute_batch("COMMIT")?;
+            Ok(())
+        }
+        Err(error) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            Err(error)
+        }
+    }
+}
+
+pub fn reorder_note_folders(conn: &Connection, order: &[(String, i64)]) -> AppResult<()> {
+    conn.execute_batch("BEGIN IMMEDIATE")?;
+    let result: AppResult<()> = (|| {
+        let mut shared_parent_id: Option<Option<String>> = None;
+        for (folder_id, _) in order {
+            let folder = get_folder(conn, folder_id)?;
+            if folder.scope != FolderScope::Note {
+                return Err(AppError::Validation("folder is not a note folder".into()));
+            }
+            if let Some(parent_id) = &shared_parent_id {
+                if parent_id != &folder.parent_id {
+                    return Err(AppError::Validation(
+                        "note folders must share the same parent".into(),
+                    ));
+                }
+            } else {
+                shared_parent_id = Some(folder.parent_id);
+            }
+        }
+        for (folder_id, sort_order) in order {
+            conn.execute(
+                "UPDATE folders SET sort_order = ?2 WHERE id = ?1",
+                params![folder_id, sort_order],
+            )?;
+        }
+        Ok(())
+    })();
+    match result {
+        Ok(()) => {
+            conn.execute_batch("COMMIT")?;
+            Ok(())
+        }
+        Err(error) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            Err(error)
+        }
+    }
 }
 
 // ── Tag CRUD ────────────────────────────────────────────────────
@@ -2451,9 +2946,445 @@ mod tests {
         conn
     }
 
+    fn note(conn: &Connection, title: &str, folder_id: Option<String>) -> Record {
+        insert_record(
+            conn,
+            CreateRecordRequest {
+                record_type: Some(RecordType::Note),
+                title: Some(title.into()),
+                content: Some("body".into()),
+                source: RecordSource::QuickText,
+                create_as_task: false,
+                attachment_ids: vec![],
+                folder_id,
+            },
+        )
+        .expect("note record")
+    }
+
+    #[test]
+    fn note_folders_are_scoped_nested_and_validate_moves() {
+        let conn = in_memory();
+        let project = create_note_folder(&conn, " Project ", None).expect("root folder");
+        let child = create_note_folder(&conn, "Ideas", Some(&project.id)).expect("child folder");
+        let task = create_folder(&conn, "Project").expect("task folder may share name");
+
+        assert_eq!(project.name, "Project");
+        assert_eq!(child.parent_id.as_deref(), Some(project.id.as_str()));
+        assert_eq!(list_note_folders(&conn).expect("note folders").len(), 2);
+        assert_eq!(
+            list_folders(&conn).expect("task folders"),
+            vec![task.clone()]
+        );
+        assert!(create_note_folder(&conn, "project", None).is_err());
+        assert!(create_note_folder(&conn, " ", None).is_err());
+        assert!(move_note_folder(&conn, &project.id, Some(&child.id)).is_err());
+        assert!(move_note_folder(&conn, &child.id, Some(&child.id)).is_err());
+
+        move_note_folder(&conn, &child.id, None).expect("move child to root");
+        let moved = list_note_folders(&conn).expect("note folders");
+        assert_eq!(
+            moved
+                .iter()
+                .find(|folder| folder.id == child.id)
+                .unwrap()
+                .parent_id,
+            None
+        );
+        assert!(rename_note_folder(&conn, &project.id, "IDEAS").is_err());
+    }
+
+    #[test]
+    fn note_folder_filters_and_note_moves_exclude_tasks_and_archived_notes() {
+        let conn = in_memory();
+        let root = create_note_folder(&conn, "Root", None).expect("root");
+        let child = create_note_folder(&conn, "Child", Some(&root.id)).expect("child");
+        let direct = note(&conn, "direct", None);
+        let descendant = note(&conn, "descendant", Some(child.id.clone()));
+        let archived = note(&conn, "archived", Some(root.id.clone()));
+        conn.execute(
+            "UPDATE records SET status = 'archived' WHERE id = ?1",
+            params![archived.id],
+        )
+        .expect("archive note");
+        let task_record = insert_record(
+            &conn,
+            CreateRecordRequest {
+                record_type: Some(RecordType::Task),
+                title: Some("task".into()),
+                content: None,
+                source: RecordSource::QuickText,
+                create_as_task: false,
+                attachment_ids: vec![],
+                folder_id: None,
+            },
+        )
+        .expect("task record");
+
+        move_note_to_folder(&conn, &direct.id, Some(&root.id)).expect("file note");
+        assert!(move_note_to_folder(&conn, &task_record.id, Some(&root.id)).is_err());
+        assert!(move_note_to_folder(&conn, &direct.id, Some("missing")).is_err());
+
+        let direct_ids: Vec<_> = list_records_filtered(
+            &conn,
+            Some(&RecordFilter {
+                note_folder_mode: Some("folder".into()),
+                folder_id: Some(root.id.clone()),
+                include_descendants: Some(false),
+                ..RecordFilter::default()
+            }),
+            &[],
+        )
+        .expect("direct folder query")
+        .into_iter()
+        .map(|record| record.id)
+        .collect();
+        assert_eq!(direct_ids, vec![direct.id.clone()]);
+        let recursive_ids: Vec<_> = list_records_filtered(
+            &conn,
+            Some(&RecordFilter {
+                note_folder_mode: Some("folder".into()),
+                folder_id: Some(root.id.clone()),
+                include_descendants: Some(true),
+                ..RecordFilter::default()
+            }),
+            &[],
+        )
+        .expect("recursive folder query")
+        .into_iter()
+        .map(|record| record.id)
+        .collect();
+        assert!(recursive_ids.contains(&direct.id));
+        assert!(recursive_ids.contains(&descendant.id));
+        assert!(!recursive_ids.contains(&archived.id));
+        assert!(!recursive_ids.contains(&task_record.id));
+        let unfiled = note(&conn, "unfiled", None);
+        let unfiled_ids: Vec<_> = list_records_filtered(
+            &conn,
+            Some(&RecordFilter {
+                note_folder_mode: Some("unfiled".into()),
+                ..RecordFilter::default()
+            }),
+            &[],
+        )
+        .expect("unfiled query")
+        .into_iter()
+        .map(|record| record.id)
+        .collect();
+        assert_eq!(unfiled_ids, vec![unfiled.id.clone()]);
+        let all_ids: Vec<_> = list_records_filtered(
+            &conn,
+            Some(&RecordFilter {
+                note_folder_mode: Some("all".into()),
+                ..RecordFilter::default()
+            }),
+            &[],
+        )
+        .expect("all note query")
+        .into_iter()
+        .map(|record| record.id)
+        .collect();
+        assert!(all_ids.contains(&direct.id));
+        assert!(all_ids.contains(&descendant.id));
+        assert!(all_ids.contains(&unfiled.id));
+    }
+
+    #[test]
+    fn deleting_note_folder_promotes_direct_contents_and_rolls_back_on_conflict() {
+        let conn = in_memory();
+        let root = create_note_folder(&conn, "Root", None).expect("root");
+        let deleting = create_note_folder(&conn, "Deleting", Some(&root.id)).expect("deleting");
+        let child = create_note_folder(&conn, "Child", Some(&deleting.id)).expect("child");
+        let grandchild =
+            create_note_folder(&conn, "Grandchild", Some(&child.id)).expect("grandchild");
+        let direct = note(&conn, "direct", Some(deleting.id.clone()));
+        let nested = note(&conn, "nested", Some(grandchild.id.clone()));
+        let tag = create_tag(&conn, "preserved", None).expect("tag");
+        set_record_tags(&conn, &direct.id, std::slice::from_ref(&tag.id)).expect("tag note");
+        delete_note_folder(&conn, &deleting.id).expect("delete folder");
+        assert_eq!(
+            get_record(&conn, &direct.id)
+                .expect("direct note")
+                .folder_id,
+            Some(root.id.clone())
+        );
+        assert_eq!(
+            list_note_folders(&conn)
+                .expect("folders")
+                .iter()
+                .find(|folder| folder.id == child.id)
+                .unwrap()
+                .parent_id,
+            Some(root.id.clone())
+        );
+        assert_eq!(
+            get_record(&conn, &nested.id)
+                .expect("nested note")
+                .folder_id,
+            Some(grandchild.id)
+        );
+        assert_eq!(
+            list_record_tags(&conn, &direct.id)
+                .expect("preserved tags")
+                .into_iter()
+                .map(|tag| tag.id)
+                .collect::<Vec<_>>(),
+            vec![tag.id]
+        );
+
+        let top_level = create_note_folder(&conn, "Top", None).expect("top level");
+        let top_child =
+            create_note_folder(&conn, "Top child", Some(&top_level.id)).expect("top child");
+        let top_note = note(&conn, "top note", Some(top_level.id.clone()));
+        delete_note_folder(&conn, &top_level.id).expect("delete top level folder");
+        assert_eq!(
+            get_record(&conn, &top_note.id)
+                .expect("top level note")
+                .folder_id,
+            None
+        );
+        assert_eq!(
+            list_note_folders(&conn)
+                .expect("top child promoted")
+                .iter()
+                .find(|folder| folder.id == top_child.id)
+                .unwrap()
+                .parent_id,
+            None
+        );
+
+        let conflict =
+            create_note_folder(&conn, "Conflict", Some(&root.id)).expect("conflict parent");
+        let duplicate_child = create_note_folder(&conn, "Same", Some(&conflict.id)).expect("child");
+        let existing =
+            create_note_folder(&conn, "Same", Some(&root.id)).expect("existing root child");
+        let error =
+            delete_note_folder(&conn, &conflict.id).expect_err("promotion duplicate rejects");
+        assert!(matches!(error, AppError::Validation(_)));
+        assert_eq!(
+            list_note_folders(&conn)
+                .expect("rollback folders")
+                .iter()
+                .find(|folder| folder.id == duplicate_child.id)
+                .unwrap()
+                .parent_id,
+            Some(conflict.id)
+        );
+        assert!(list_note_folders(&conn)
+            .expect("existing folder")
+            .iter()
+            .any(|folder| folder.id == existing.id));
+    }
+
+    #[test]
+    fn deleting_note_folder_releases_its_name_before_promoting_same_named_child() {
+        let conn = in_memory();
+        let parent = create_note_folder(&conn, "Parent", None).expect("parent");
+        let deleting =
+            create_note_folder(&conn, "Repeat", Some(&parent.id)).expect("deleting folder");
+        let child =
+            create_note_folder(&conn, "Repeat", Some(&deleting.id)).expect("same child name");
+
+        delete_note_folder(&conn, &deleting.id).expect("promotion may reuse deleted name");
+
+        let promoted = list_note_folders(&conn)
+            .expect("folders")
+            .into_iter()
+            .find(|folder| folder.id == child.id)
+            .expect("promoted child");
+        assert_eq!(promoted.parent_id.as_deref(), Some(parent.id.as_str()));
+        assert_eq!(promoted.name, "Repeat");
+    }
+
+    #[test]
+    fn note_folder_sorting_keeps_fractional_created_at_and_reorders_siblings() {
+        let conn = in_memory();
+        conn.execute_batch(
+            "INSERT INTO folders (id, name, parent_id, scope, sort_order, created_at, updated_at)
+             VALUES
+               ('z-earlier', 'Earlier', NULL, 'note', 0, '2026-01-01T00:00:00.100Z', '2026-01-01T00:00:00.100Z'),
+               ('a-later', 'Later', NULL, 'note', 0, '2026-01-01T00:00:00.900Z', '2026-01-01T00:00:00.900Z');",
+        )
+        .expect("folder fixtures");
+        let initial_ids: Vec<_> = list_note_folders(&conn)
+            .expect("sorted folders")
+            .into_iter()
+            .map(|folder| folder.id)
+            .collect();
+        assert_eq!(initial_ids, vec!["z-earlier", "a-later"]);
+
+        reorder_note_folders(&conn, &[("a-later".into(), -1), ("z-earlier".into(), 1)])
+            .expect("reorder note folders");
+        let reordered_ids: Vec<_> = list_note_folders(&conn)
+            .expect("reordered folders")
+            .into_iter()
+            .map(|folder| folder.id)
+            .collect();
+        assert_eq!(reordered_ids, vec!["a-later", "z-earlier"]);
+    }
+
+    #[test]
+    fn note_folder_reorder_rejects_mixed_parents_before_any_update() {
+        let conn = in_memory();
+        let root = create_note_folder(&conn, "Root", None).expect("root");
+        let other_root = create_note_folder(&conn, "Other", None).expect("other root");
+        let nested = create_note_folder(&conn, "Nested", Some(&root.id)).expect("nested");
+        let original_root_order = other_root.sort_order;
+        let original_nested_order = nested.sort_order;
+        conn.execute_batch(
+            "CREATE TRIGGER reject_folder_sort_update
+             BEFORE UPDATE OF sort_order ON folders
+             BEGIN SELECT RAISE(ABORT, 'sort must not be touched'); END;",
+        )
+        .expect("update guard");
+
+        let error =
+            reorder_note_folders(&conn, &[(other_root.id.clone(), 9), (nested.id.clone(), 8)])
+                .expect_err("mixed parents must be rejected before updates");
+        assert!(matches!(error, AppError::Validation(_)));
+        assert_eq!(
+            get_folder(&conn, &other_root.id)
+                .expect("other root")
+                .sort_order,
+            original_root_order
+        );
+        assert_eq!(
+            get_folder(&conn, &nested.id).expect("nested").sort_order,
+            original_nested_order
+        );
+    }
+
+    #[test]
+    fn note_folder_operations_reject_cross_scope_and_same_name_move_target() {
+        let conn = in_memory();
+        let task_folder = create_folder(&conn, "Tasks").expect("task folder");
+        let root = create_note_folder(&conn, "Root", None).expect("note root");
+        let target = create_note_folder(&conn, "Target", None).expect("target root");
+        let sibling = create_note_folder(&conn, "Same", Some(&target.id)).expect("target child");
+        let moving = create_note_folder(&conn, "Same", Some(&root.id)).expect("moving child");
+        let record = note(&conn, "note", Some(root.id.clone()));
+
+        assert!(rename_note_folder(&conn, &task_folder.id, "Nope").is_err());
+        assert!(move_note_folder(&conn, &moving.id, Some(&task_folder.id)).is_err());
+        assert!(move_note_to_folder(&conn, &record.id, Some(&task_folder.id)).is_err());
+        assert!(move_note_folder(&conn, &moving.id, Some(&target.id)).is_err());
+        assert_eq!(
+            list_note_folders(&conn)
+                .expect("same-name move left untouched")
+                .into_iter()
+                .find(|folder| folder.id == moving.id)
+                .unwrap()
+                .parent_id,
+            Some(root.id)
+        );
+        assert!(list_note_folders(&conn)
+            .expect("target sibling remains")
+            .iter()
+            .any(|folder| folder.id == sibling.id));
+    }
+
+    #[test]
+    fn task_filters_ignore_note_folder_modes_and_note_move_can_unfile() {
+        let conn = in_memory();
+        let note_folder = create_note_folder(&conn, "Notes", None).expect("note folder");
+        let filed = note(&conn, "filed", Some(note_folder.id.clone()));
+        let task = insert_record(
+            &conn,
+            CreateRecordRequest {
+                record_type: Some(RecordType::Task),
+                title: Some("task".into()),
+                content: None,
+                source: RecordSource::QuickText,
+                create_as_task: false,
+                attachment_ids: vec![],
+                folder_id: None,
+            },
+        )
+        .expect("task record");
+
+        move_note_to_folder(&conn, &filed.id, None).expect("unfile note");
+        assert_eq!(
+            get_record(&conn, &filed.id)
+                .expect("unfiled note")
+                .folder_id,
+            None
+        );
+        let task_ids: Vec<_> = list_records_filtered(
+            &conn,
+            Some(&RecordFilter {
+                type_filter: Some(RecordType::Task),
+                note_folder_mode: Some("unfiled".into()),
+                ..RecordFilter::default()
+            }),
+            &[],
+        )
+        .expect("task query ignores note filter")
+        .into_iter()
+        .map(|record| record.id)
+        .collect();
+        assert_eq!(task_ids, vec![task.id]);
+
+        let legacy_note_ids: Vec<_> = list_records_filtered(
+            &conn,
+            Some(&RecordFilter {
+                type_filter: Some(RecordType::Note),
+                // These fields were ignored before noteFolderMode existed and
+                // must remain inert until that mode is explicitly selected.
+                folder_id: Some("missing-folder".into()),
+                include_descendants: Some(true),
+                ..RecordFilter::default()
+            }),
+            &[],
+        )
+        .expect("legacy note query remains compatible")
+        .into_iter()
+        .map(|record| record.id)
+        .collect();
+        assert_eq!(legacy_note_ids, vec![filed.id]);
+    }
+
+    #[test]
+    fn note_folder_delete_rolls_back_after_a_sql_failure() {
+        let conn = in_memory();
+        let parent = create_note_folder(&conn, "Parent", None).expect("parent");
+        let deleting = create_note_folder(&conn, "Delete", Some(&parent.id)).expect("deleting");
+        let child = create_note_folder(&conn, "Child", Some(&deleting.id)).expect("child");
+        let direct = note(&conn, "direct", Some(deleting.id.clone()));
+        conn.execute_batch(&format!(
+            "CREATE TRIGGER fail_note_folder_delete BEFORE DELETE ON folders
+             WHEN OLD.id = '{}' BEGIN SELECT RAISE(ABORT, 'forced delete failure'); END;",
+            deleting.id
+        ))
+        .expect("failure trigger");
+
+        assert!(delete_note_folder(&conn, &deleting.id).is_err());
+        assert_eq!(
+            get_record(&conn, &direct.id)
+                .expect("record rolled back")
+                .folder_id,
+            Some(deleting.id.clone())
+        );
+        assert_eq!(
+            list_note_folders(&conn)
+                .expect("child rolled back")
+                .into_iter()
+                .find(|folder| folder.id == child.id)
+                .unwrap()
+                .parent_id,
+            Some(deleting.id.clone())
+        );
+        assert_eq!(
+            get_folder(&conn, &deleting.id)
+                .expect("folder rolled back")
+                .name,
+            "Delete"
+        );
+    }
+
     #[test]
     fn creates_schema_in_memory() {
         let conn = in_memory();
+        run_migrations(&conn).expect("second migration run");
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('records','tasks','attachments','record_attachments','ai_results','ai_task_runs','knowledge_topics','knowledge_evidence','reminders','settings','tags','record_tags')",
@@ -2462,6 +3393,56 @@ mod tests {
             )
             .expect("table count");
         assert_eq!(count, 12);
+
+        let record_columns: Vec<(String, i64)> = conn
+            .prepare("PRAGMA table_info(records)")
+            .expect("record columns query")
+            .query_map([], |row| Ok((row.get(1)?, row.get(3)?)))
+            .expect("record columns")
+            .collect::<Result<_, _>>()
+            .expect("record columns result");
+        let folder_columns: Vec<(String, i64)> = conn
+            .prepare("PRAGMA table_info(folders)")
+            .expect("folder columns query")
+            .query_map([], |row| Ok((row.get(1)?, row.get(3)?)))
+            .expect("folder columns")
+            .collect::<Result<_, _>>()
+            .expect("folder columns result");
+        let task_columns: Vec<(String, i64)> = conn
+            .prepare("PRAGMA table_info(tasks)")
+            .expect("task columns query")
+            .query_map([], |row| Ok((row.get(1)?, row.get(3)?)))
+            .expect("task columns")
+            .collect::<Result<_, _>>()
+            .expect("task columns result");
+        let folder_schema: String = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'folders'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("folder schema");
+        let user_version: i64 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .expect("user version");
+        let foreign_keys: i64 = conn
+            .query_row("PRAGMA foreign_keys", [], |row| row.get(0))
+            .expect("foreign keys");
+
+        assert!(record_columns.contains(&("folder_id".into(), 0)));
+        assert!(folder_columns.contains(&("parent_id".into(), 0)));
+        assert!(folder_columns.contains(&("scope".into(), 1)));
+        assert!(task_columns.contains(&("sort_order".into(), 1)));
+        assert!(task_columns.contains(&("folder_id".into(), 0)));
+        assert!(folder_schema.contains("CHECK(scope IN ('note', 'task'))"));
+        assert_eq!(user_version, 1);
+        assert_eq!(foreign_keys, 1);
+        assert!(conn
+            .execute(
+                "INSERT INTO folders (id, name, scope, created_at, updated_at) VALUES ('bad', 'bad', 'other', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+                [],
+            )
+            .is_err());
     }
 
     #[test]
@@ -2470,11 +3451,13 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE folders (id TEXT PRIMARY KEY, name TEXT NOT NULL, sort_order INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
              CREATE TABLE records (id TEXT PRIMARY KEY, type TEXT NOT NULL, title TEXT, content TEXT, source TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
-             CREATE TABLE tasks (id TEXT PRIMARY KEY, record_id TEXT NOT NULL UNIQUE, task_status TEXT NOT NULL, priority TEXT NOT NULL, due_at TEXT, remind_at TEXT, repeat_rule TEXT, completed_at TEXT, sort_order INTEGER NOT NULL DEFAULT 0, folder_id TEXT REFERENCES folders(id));
+             CREATE TABLE tasks (id TEXT PRIMARY KEY, record_id TEXT NOT NULL UNIQUE, task_status TEXT NOT NULL, priority TEXT NOT NULL, due_at TEXT, remind_at TEXT, repeat_rule TEXT, completed_at TEXT, sort_order INTEGER NOT NULL DEFAULT 0, folder_id TEXT REFERENCES folders(id) ON DELETE CASCADE);
              INSERT INTO folders VALUES ('f1', ' A ', 0, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
              INSERT INTO folders VALUES ('f2', 'A', 1, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
-             INSERT INTO folders VALUES ('f3', '', 2, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
-             INSERT INTO records VALUES ('r1', 'task', 'task', NULL, 'quick-text', 'active', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+             INSERT INTO folders VALUES ('f3', 'A (2)', 2, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+             INSERT INTO folders VALUES ('f4', '', 3, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+             INSERT INTO records VALUES ('r1', 'task', 'task', 'keep task content', 'quick-text', 'active', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+             INSERT INTO records VALUES ('r2', 'note', 'note', 'keep note content', 'quick-text', 'active', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
              INSERT INTO tasks (id, record_id, task_status, priority, sort_order, folder_id) VALUES ('t1', 'r1', 'todo', 'medium', 0, 'f1');",
         )
         .expect("legacy fixture");
@@ -2492,6 +3475,18 @@ mod tests {
                 r.get(0)
             })
             .expect("task folder");
+        let task_record: (String, String) = conn
+            .query_row("SELECT id, content FROM records WHERE id = 'r1'", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .expect("migrated task record");
+        let note: (String, String, Option<String>) = conn
+            .query_row(
+                "SELECT id, content, folder_id FROM records WHERE id = 'r2'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .expect("migrated note");
         let names: Vec<String> = conn
             .prepare("SELECT name FROM folders ORDER BY id")
             .expect("names query")
@@ -2514,9 +3509,301 @@ mod tests {
 
         assert_eq!(scope, "task");
         assert_eq!(task_folder, "f1");
-        assert_eq!(names, vec!["A", "A (2)", "未命名文件夹"]);
+        assert_eq!(task_record, ("r1".into(), "keep task content".into()));
+        assert_eq!(note, ("r2".into(), "keep note content".into(), None));
+        assert_eq!(names, vec!["A", "A (2)", "A (3)", "未命名文件夹"]);
         assert_eq!(fk_errors, 0);
         assert_eq!(index_count, 3);
+    }
+
+    #[test]
+    fn migration_infers_note_scope_from_existing_record_folder_association() {
+        let conn = Connection::open_in_memory().expect("in-memory db");
+        conn.execute_batch(
+            "CREATE TABLE folders (id TEXT PRIMARY KEY, name TEXT NOT NULL, parent_id TEXT, scope TEXT NOT NULL DEFAULT 'task', sort_order INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+             CREATE TABLE records (id TEXT PRIMARY KEY, type TEXT NOT NULL, title TEXT, content TEXT, source TEXT NOT NULL, status TEXT NOT NULL, folder_id TEXT REFERENCES folders(id), created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+             CREATE TABLE tasks (id TEXT PRIMARY KEY, record_id TEXT NOT NULL UNIQUE, task_status TEXT NOT NULL, priority TEXT NOT NULL, due_at TEXT, remind_at TEXT, repeat_rule TEXT, completed_at TEXT, sort_order INTEGER NOT NULL DEFAULT 0, folder_id TEXT REFERENCES folders(id) ON DELETE CASCADE);
+             INSERT INTO folders VALUES ('parent', 'Notes', NULL, 'note', 0, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+             INSERT INTO folders VALUES ('child', 'Child', 'parent', 'task', 0, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+             INSERT INTO records VALUES ('note-1', 'note', 'note', 'keep this body', 'quick-text', 'active', 'child', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');",
+        )
+        .expect("partially upgraded fixture");
+
+        run_migrations(&conn).expect("migration");
+
+        let migrated: (String, String, String, String) = conn
+            .query_row(
+                "SELECT r.id, r.content, r.folder_id, f.scope FROM records r JOIN folders f ON f.id = r.folder_id WHERE r.id = 'note-1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .expect("migrated note association");
+        assert_eq!(
+            migrated,
+            (
+                "note-1".into(),
+                "keep this body".into(),
+                "child".into(),
+                "note".into()
+            )
+        );
+    }
+
+    #[test]
+    fn migration_rejects_folder_shared_by_note_and_task_and_rolls_back() {
+        let conn = Connection::open_in_memory().expect("in-memory db");
+        conn.execute_batch(
+            "CREATE TABLE folders (id TEXT PRIMARY KEY, name TEXT NOT NULL, parent_id TEXT, scope TEXT NOT NULL DEFAULT 'task', sort_order INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+             CREATE TABLE records (id TEXT PRIMARY KEY, type TEXT NOT NULL, title TEXT, content TEXT, source TEXT NOT NULL, status TEXT NOT NULL, folder_id TEXT REFERENCES folders(id), created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+             CREATE TABLE tasks (id TEXT PRIMARY KEY, record_id TEXT NOT NULL UNIQUE, task_status TEXT NOT NULL, priority TEXT NOT NULL, due_at TEXT, remind_at TEXT, repeat_rule TEXT, completed_at TEXT, sort_order INTEGER NOT NULL DEFAULT 0, folder_id TEXT REFERENCES folders(id) ON DELETE CASCADE);
+             INSERT INTO folders VALUES ('shared', ' Shared ', NULL, 'task', 0, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+             INSERT INTO records VALUES ('note-1', 'note', 'note', 'note body', 'quick-text', 'active', 'shared', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+             INSERT INTO records VALUES ('task-record', 'task', 'task', 'task body', 'quick-text', 'active', NULL, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+             INSERT INTO tasks (id, record_id, task_status, priority, sort_order, folder_id) VALUES ('task-1', 'task-record', 'todo', 'medium', 0, 'shared');",
+        )
+        .expect("conflicting fixture");
+
+        let error = run_migrations(&conn).expect_err("shared scope must be rejected");
+
+        let folder: (String, String) = conn
+            .query_row(
+                "SELECT name, scope FROM folders WHERE id = 'shared'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("rolled back folder");
+        let user_version: i64 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .expect("user version");
+        assert!(error.to_string().contains("both note and task"));
+        assert_eq!(folder, (" Shared ".into(), "task".into()));
+        assert_eq!(user_version, 0);
+    }
+
+    #[test]
+    fn migration_rejects_non_note_record_folder_id_and_rolls_back() {
+        let conn = Connection::open_in_memory().expect("in-memory db");
+        conn.execute_batch(
+            "CREATE TABLE folders (id TEXT PRIMARY KEY, name TEXT NOT NULL, sort_order INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+             CREATE TABLE records (id TEXT PRIMARY KEY, type TEXT NOT NULL, title TEXT, content TEXT, source TEXT NOT NULL, status TEXT NOT NULL, folder_id TEXT REFERENCES folders(id), created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+             CREATE TABLE tasks (id TEXT PRIMARY KEY, record_id TEXT NOT NULL UNIQUE, task_status TEXT NOT NULL, priority TEXT NOT NULL, due_at TEXT, remind_at TEXT, repeat_rule TEXT, completed_at TEXT, sort_order INTEGER NOT NULL DEFAULT 0, folder_id TEXT REFERENCES folders(id) ON DELETE CASCADE);
+             INSERT INTO folders VALUES ('f1', ' Tasks ', 0, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+             INSERT INTO records VALUES ('task-record', 'task', 'task', 'task body', 'quick-text', 'active', 'f1', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');",
+        )
+        .expect("partially upgraded fixture");
+        let original_record_columns: Vec<String> = conn
+            .prepare("PRAGMA table_info(records)")
+            .expect("original record columns query")
+            .query_map([], |row| row.get(1))
+            .expect("original record columns")
+            .collect::<Result<_, _>>()
+            .expect("original record columns result");
+
+        let error = run_migrations(&conn).expect_err("task record folder must be rejected");
+
+        let record_columns: Vec<String> = conn
+            .prepare("PRAGMA table_info(records)")
+            .expect("record columns query")
+            .query_map([], |row| row.get(1))
+            .expect("record columns")
+            .collect::<Result<_, _>>()
+            .expect("record columns result");
+        let folder_columns: Vec<String> = conn
+            .prepare("PRAGMA table_info(folders)")
+            .expect("folder columns query")
+            .query_map([], |row| row.get(1))
+            .expect("folder columns")
+            .collect::<Result<_, _>>()
+            .expect("folder columns result");
+        let folder_id: String = conn
+            .query_row(
+                "SELECT folder_id FROM records WHERE id = 'task-record'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("rolled back record folder");
+        let folder_name: String = conn
+            .query_row("SELECT name FROM folders WHERE id = 'f1'", [], |row| {
+                row.get(0)
+            })
+            .expect("rolled back folder name");
+        let user_version: i64 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .expect("user version");
+
+        assert!(error.to_string().contains("non-note"));
+        assert_eq!(record_columns, original_record_columns);
+        assert!(!folder_columns.iter().any(|column| column == "parent_id"));
+        assert!(!folder_columns.iter().any(|column| column == "scope"));
+        assert_eq!(folder_id, "f1");
+        assert_eq!(folder_name, " Tasks ");
+        assert_eq!(user_version, 0);
+    }
+
+    #[test]
+    fn migration_rejects_parent_child_scope_mismatch_and_rolls_back() {
+        let conn = Connection::open_in_memory().expect("in-memory db");
+        conn.execute_batch(
+            "CREATE TABLE folders (id TEXT PRIMARY KEY, name TEXT NOT NULL, parent_id TEXT, scope TEXT NOT NULL DEFAULT 'task', sort_order INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+             CREATE TABLE records (id TEXT PRIMARY KEY, type TEXT NOT NULL, title TEXT, content TEXT, source TEXT NOT NULL, status TEXT NOT NULL, folder_id TEXT REFERENCES folders(id), created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+             CREATE TABLE tasks (id TEXT PRIMARY KEY, record_id TEXT NOT NULL UNIQUE, task_status TEXT NOT NULL, priority TEXT NOT NULL, due_at TEXT, remind_at TEXT, repeat_rule TEXT, completed_at TEXT, sort_order INTEGER NOT NULL DEFAULT 0, folder_id TEXT REFERENCES folders(id) ON DELETE CASCADE);
+             INSERT INTO folders VALUES ('parent', 'Tasks', NULL, 'task', 0, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+             INSERT INTO folders VALUES ('child', 'Notes', 'parent', 'task', 0, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+             INSERT INTO records VALUES ('note-1', 'note', 'note', 'body', 'quick-text', 'active', 'child', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');",
+        )
+        .expect("scope mismatch fixture");
+
+        let error = run_migrations(&conn).expect_err("scope mismatch must be rejected");
+
+        let child_scope: String = conn
+            .query_row("SELECT scope FROM folders WHERE id = 'child'", [], |row| {
+                row.get(0)
+            })
+            .expect("rolled back child scope");
+        let user_version: i64 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .expect("user version");
+        assert!(error.to_string().contains("parent scope"));
+        assert_eq!(child_scope, "task");
+        assert_eq!(user_version, 0);
+    }
+
+    #[test]
+    fn migration_reports_folder_suffix_exhaustion_without_panicking() {
+        let conn = Connection::open_in_memory().expect("in-memory db");
+        conn.execute_batch(
+            "CREATE TABLE folders (id TEXT PRIMARY KEY, name TEXT NOT NULL, sort_order INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+             CREATE TABLE records (id TEXT PRIMARY KEY, type TEXT NOT NULL, title TEXT, content TEXT, source TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+             CREATE TABLE tasks (id TEXT PRIMARY KEY, record_id TEXT NOT NULL UNIQUE, task_status TEXT NOT NULL, priority TEXT NOT NULL, due_at TEXT, remind_at TEXT, repeat_rule TEXT, completed_at TEXT, sort_order INTEGER NOT NULL DEFAULT 0, folder_id TEXT REFERENCES folders(id) ON DELETE CASCADE);",
+        )
+        .expect("legacy schema");
+        let exhausted_name = format!("A ({})", usize::MAX);
+        conn.execute(
+            "INSERT INTO folders VALUES ('f1', ?1, 0, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+            params![exhausted_name],
+        )
+        .expect("first folder");
+        conn.execute(
+            "INSERT INTO folders VALUES ('f2', ?1, 1, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+            params![exhausted_name],
+        )
+        .expect("second folder");
+
+        let error = run_migrations(&conn).expect_err("suffix exhaustion must be reported");
+
+        let names: Vec<String> = conn
+            .prepare("SELECT name FROM folders ORDER BY id")
+            .expect("names query")
+            .query_map([], |row| row.get(0))
+            .expect("names")
+            .collect::<Result<_, _>>()
+            .expect("names result");
+        let user_version: i64 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .expect("user version");
+        assert!(error.to_string().contains("suffix"));
+        assert_eq!(names, vec![exhausted_name.clone(), exhausted_name]);
+        assert_eq!(user_version, 0);
+    }
+
+    #[test]
+    fn foreign_key_violation_rolls_back_real_legacy_migration() {
+        let conn = Connection::open_in_memory().expect("in-memory db");
+        conn.execute_batch(
+            "PRAGMA foreign_keys = OFF;
+             CREATE TABLE folders (id TEXT PRIMARY KEY, name TEXT NOT NULL, sort_order INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+             CREATE TABLE records (id TEXT PRIMARY KEY, type TEXT NOT NULL, title TEXT, content TEXT, source TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+             CREATE TABLE tasks (id TEXT PRIMARY KEY, record_id TEXT NOT NULL UNIQUE, task_status TEXT NOT NULL, priority TEXT NOT NULL, due_at TEXT, remind_at TEXT, repeat_rule TEXT, completed_at TEXT, sort_order INTEGER NOT NULL DEFAULT 0, folder_id TEXT REFERENCES folders(id) ON DELETE CASCADE);
+             INSERT INTO records VALUES ('r1', 'experience', 'title', 'content', 'quick-text', 'active', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+             INSERT INTO tasks (id, record_id, task_status, priority, sort_order, folder_id) VALUES ('t1', 'r1', 'todo', 'medium', 0, 'missing-folder');
+             PRAGMA foreign_keys = ON;",
+        )
+        .expect("invalid legacy fixture");
+
+        let error = run_migrations(&conn).expect_err("foreign key violation must fail migration");
+
+        let record_type: String = conn
+            .query_row("SELECT type FROM records WHERE id = 'r1'", [], |row| {
+                row.get(0)
+            })
+            .expect("record type");
+        let record_columns: Vec<String> = conn
+            .prepare("PRAGMA table_info(records)")
+            .expect("record columns query")
+            .query_map([], |row| row.get(1))
+            .expect("record columns")
+            .collect::<Result<_, _>>()
+            .expect("record columns result");
+        let user_version: i64 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .expect("user version");
+        let foreign_keys: i64 = conn
+            .query_row("PRAGMA foreign_keys", [], |row| row.get(0))
+            .expect("foreign keys");
+        assert!(error.to_string().contains("foreign key check failed"));
+        assert_eq!(record_type, "experience");
+        assert!(!record_columns.iter().any(|column| column == "folder_id"));
+        assert_eq!(user_version, 0);
+        assert_eq!(foreign_keys, 1);
+    }
+
+    #[test]
+    fn migration_failure_rolls_back_every_schema_and_data_change() {
+        let conn = Connection::open_in_memory().expect("in-memory db");
+        conn.execute_batch(
+            "PRAGMA foreign_keys = ON;
+             CREATE TABLE folders (id TEXT PRIMARY KEY, name TEXT NOT NULL, sort_order INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+             CREATE TABLE records (id TEXT PRIMARY KEY, type TEXT NOT NULL, title TEXT, content TEXT, source TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+             CREATE TABLE tasks (id TEXT PRIMARY KEY, record_id TEXT NOT NULL UNIQUE, task_status TEXT NOT NULL, priority TEXT NOT NULL, due_at TEXT, remind_at TEXT, repeat_rule TEXT, completed_at TEXT);
+             CREATE TABLE folders_sibling_name_uq (collision TEXT);
+             INSERT INTO folders VALUES ('f1', ' A ', 0, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+             INSERT INTO records VALUES ('r1', 'experience', 'title', 'content', 'quick-text', 'active', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');",
+        )
+        .expect("legacy fixture");
+
+        run_migrations(&conn).expect_err("index name collision must fail migration");
+
+        let record_type: String = conn
+            .query_row("SELECT type FROM records WHERE id = 'r1'", [], |r| r.get(0))
+            .expect("record type");
+        let folder_name: String = conn
+            .query_row("SELECT name FROM folders WHERE id = 'f1'", [], |r| r.get(0))
+            .expect("folder name");
+        let record_columns: Vec<String> = conn
+            .prepare("PRAGMA table_info(records)")
+            .expect("record columns query")
+            .query_map([], |row| row.get(1))
+            .expect("record columns")
+            .collect::<Result<_, _>>()
+            .expect("record columns result");
+        let task_columns: Vec<String> = conn
+            .prepare("PRAGMA table_info(tasks)")
+            .expect("task columns query")
+            .query_map([], |row| row.get(1))
+            .expect("task columns")
+            .collect::<Result<_, _>>()
+            .expect("task columns result");
+        let attachments_table: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'attachments'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("attachments table count");
+        let user_version: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .expect("user version");
+        let foreign_keys: i64 = conn
+            .query_row("PRAGMA foreign_keys", [], |r| r.get(0))
+            .expect("foreign keys");
+
+        assert_eq!(record_type, "experience");
+        assert_eq!(folder_name, " A ");
+        assert!(!record_columns.iter().any(|column| column == "folder_id"));
+        assert!(!task_columns.iter().any(|column| column == "sort_order"));
+        assert_eq!(attachments_table, 0);
+        assert_eq!(user_version, 0);
+        assert_eq!(foreign_keys, 1);
     }
 
     #[test]
@@ -2539,6 +3826,49 @@ mod tests {
         let fetched = get_record(&conn, &record.id).expect("get record");
         assert_eq!(fetched.record_type, RecordType::Note);
         assert_eq!(fetched.title.as_deref(), Some("VPN broken"));
+    }
+
+    #[test]
+    fn note_folder_id_roundtrips_through_every_record_read_path() {
+        let conn = in_memory();
+        conn.execute(
+            "INSERT INTO folders (id, name, parent_id, scope, sort_order, created_at, updated_at) VALUES ('notes', 'Notes', NULL, 'note', 0, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .expect("note folder");
+        let record = insert_record(
+            &conn,
+            CreateRecordRequest {
+                record_type: Some(RecordType::Note),
+                title: Some("folder roundtrip".into()),
+                content: Some("body".into()),
+                source: RecordSource::QuickText,
+                create_as_task: false,
+                attachment_ids: vec![],
+                folder_id: Some("notes".into()),
+            },
+        )
+        .expect("insert record");
+
+        let fetched = get_record(&conn, &record.id).expect("get record");
+        let listed = list_records(&conn).expect("list records");
+        let filtered = list_records_filtered(
+            &conn,
+            Some(&RecordFilter {
+                type_filter: Some(RecordType::Note),
+                search_query: Some("folder roundtrip".into()),
+                ..RecordFilter::default()
+            }),
+            &[],
+        )
+        .expect("filtered records");
+        let detailed = get_record_with_relations(&conn, &record.id).expect("record relations");
+
+        assert_eq!(record.folder_id.as_deref(), Some("notes"));
+        assert_eq!(fetched.folder_id.as_deref(), Some("notes"));
+        assert_eq!(listed[0].folder_id.as_deref(), Some("notes"));
+        assert_eq!(filtered[0].folder_id.as_deref(), Some("notes"));
+        assert_eq!(detailed.folder_id.as_deref(), Some("notes"));
     }
 
     #[test]
