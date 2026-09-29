@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   createDocumentWriteQueue,
   getDocumentSaveStatus,
+  getTocEntryIndent,
   getTocHeadingSelector,
   saveDocumentWithLatestMarkdown,
   shouldFlushRichEditorForRecord,
@@ -32,8 +33,14 @@ describe("document workspace save status", () => {
   });
 
   it("prefers rich heading blocks for WYSIWYG TOC navigation", () => {
-    expect(getTocHeadingSelector(2)).toBe('[data-content-type="heading"]');
+    expect(getTocHeadingSelector(2)).toBe('[data-content-type="heading"][data-level="1"], [data-content-type="heading"][data-level="2"], [data-content-type="heading"][data-level="3"]');
     expect(getTocHeadingSelector(0)).toBe("h1, h2, h3");
+  });
+
+  it("normalizes TOC indentation from the first visible heading level", () => {
+    expect(getTocEntryIndent(2, 2)).toBe(4);
+    expect(getTocEntryIndent(2, 1)).toBe(16);
+    expect(getTocEntryIndent(3, 2)).toBe(16);
   });
 
   it("awaits the header flush before persisting its latest markdown", async () => {

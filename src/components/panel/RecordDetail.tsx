@@ -119,7 +119,13 @@ export function getRecordDetailInstanceKey(recordId: string | null): string {
 }
 
 export function getTocHeadingSelector(richHeadingCount: number): string {
-  return richHeadingCount > 0 ? '[data-content-type="heading"]' : "h1, h2, h3";
+  return richHeadingCount > 0
+    ? '[data-content-type="heading"][data-level="1"], [data-content-type="heading"][data-level="2"], [data-content-type="heading"][data-level="3"]'
+    : "h1, h2, h3";
+}
+
+export function getTocEntryIndent(level: number, minimumLevel: number): number {
+  return Math.max(0, level - minimumLevel) * 12 + 4;
 }
 
 export async function saveDocumentWithLatestMarkdown(
@@ -651,6 +657,7 @@ export function RecordDetail({
   // TOC source — draft while editing, final content while viewing
   const tocSource = editingContent ? contentDraft : (record?.content ?? "");
   const toc = useMemo(() => extractMarkdownToc(tocSource), [tocSource]);
+  const tocMinimumLevel = toc.length > 0 ? Math.min(...toc.map((entry) => entry.level)) : 1;
 
   // Keep lastSaved* refs in sync with the record from the server.
   useEffect(() => {
@@ -2103,7 +2110,7 @@ export function RecordDetail({
                   type="button"
                   onClick={() => scrollToHeading(entry.index)}
                   title={entry.text}
-                  style={{ paddingLeft: `${(entry.level - 1) * 12 + 4}px` }}
+                  style={{ paddingLeft: `${getTocEntryIndent(entry.level, tocMinimumLevel)}px` }}
                   className="block w-full truncate text-left text-[11px] leading-5 text-text-muted transition hover:text-secondary"
                 >
                   {entry.text}
