@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 
 import { buildNoteFolderTree, type NoteFolderNode } from "../../lib/noteFolders";
 import type { FolderItem } from "../../types";
+import { ConfirmDialog } from "../common/ConfirmDialog";
 
 interface NoteFolderTreeProps {
   folders: FolderItem[];
@@ -24,7 +25,7 @@ function FolderNode({
   onSelectFolder,
   onCreateFolder,
   onRenameFolder,
-  onDeleteFolder,
+  onRequestDelete,
   onMoveFolder,
   collapsed,
   onToggleCollapsed,
@@ -36,7 +37,7 @@ function FolderNode({
   onSelectFolder: (id: string) => void;
   onCreateFolder: (name: string, parentId: string | null) => void;
   onRenameFolder: (id: string, name: string) => void;
-  onDeleteFolder: (id: string) => void;
+  onRequestDelete: (node: NoteFolderNode) => void;
   onMoveFolder: (id: string, parentId: string | null) => void;
   collapsed: boolean;
   onToggleCollapsed: (id: string) => void;
@@ -52,9 +53,7 @@ function FolderNode({
     if (name?.trim() && name.trim() !== node.name) onRenameFolder(node.id, name.trim());
   };
   const askDelete = () => {
-    if (window.confirm(`删除文件夹「${node.name}」？其中的笔记和子文件夹会移动到上一级。`)) {
-      onDeleteFolder(node.id);
-    }
+    onRequestDelete(node);
   };
 
   return (
@@ -107,7 +106,7 @@ function FolderNode({
               onSelectFolder={onSelectFolder}
               onCreateFolder={onCreateFolder}
               onRenameFolder={onRenameFolder}
-              onDeleteFolder={onDeleteFolder}
+              onRequestDelete={onRequestDelete}
               onMoveFolder={onMoveFolder}
               collapsed={isCollapsed(child.id)}
               onToggleCollapsed={onToggleCollapsed}
@@ -134,6 +133,7 @@ export function NoteFolderTree({
   error,
 }: NoteFolderTreeProps) {
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(() => new Set());
+  const [pendingDelete, setPendingDelete] = useState<NoteFolderNode | null>(null);
   const tree = useMemo(() => buildNoteFolderTree(folders), [folders]);
   const askCreateRoot = () => {
     const name = window.prompt("新建文件夹", "");
@@ -185,7 +185,7 @@ export function NoteFolderTree({
               onSelectFolder={onSelectFolder}
               onCreateFolder={onCreateFolder}
               onRenameFolder={onRenameFolder}
-              onDeleteFolder={onDeleteFolder}
+              onRequestDelete={setPendingDelete}
               onMoveFolder={onMoveFolder}
               collapsed={collapsedIds.has(node.id)}
               onToggleCollapsed={(id) => setCollapsedIds((current) => {
@@ -198,6 +198,18 @@ export function NoteFolderTree({
           ))}
         </ul>
       )}
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        title="删除文件夹"
+        message={`删除文件夹「${pendingDelete?.name ?? ""}」？其中的笔记和子文件夹会移动到上一级。`}
+        confirmLabel="删除"
+        onConfirm={() => {
+          if (!pendingDelete) return;
+          onDeleteFolder(pendingDelete.id);
+          setPendingDelete(null);
+        }}
+        onCancel={() => setPendingDelete(null)}
+      />
     </section>
   );
 }

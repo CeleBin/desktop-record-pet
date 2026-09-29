@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { clearAiProfileApiKey, createAiProfile, deleteAiProfile, listAiProfiles, setAiProfileApiKey, updateAiProfile } from "../../lib/tauri";
 import type { AiProfile } from "../../types";
+import { ConfirmDialog } from "../common/ConfirmDialog";
 
 type Draft = { name: string; provider: string; baseUrl: string; defaultModel: string; modelsText: string; enabled: boolean };
 type ProviderPreset = { label: string; value: string; protocol: string; baseUrl: string; models: string[]; needsBaseUrl: boolean };
@@ -24,6 +25,7 @@ export function AiProfilesPanel({ defaultProfileId, onDefaultProfileChange, onSu
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<AiProfile | null>(null);
   const selected = useMemo(() => profiles.find((p) => p.id === selectedId) ?? null, [profiles, selectedId]);
 
   const reload = async (selectId?: string | null) => {
@@ -51,9 +53,12 @@ export function AiProfilesPanel({ defaultProfileId, onDefaultProfileChange, onSu
       setDialogOpen(false);
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setSaving(false); }
   };
-  const remove = async () => {
-    if (!selected || !window.confirm(`删除配置“${selected.name}”？`)) return;
-    try { await deleteAiProfile(selected.id); if (defaultProfileId === selected.id) onDefaultProfileChange(""); onSuccess("AI 配置已删除"); await reload(null); setDialogOpen(false); }
+  const remove = () => {
+    if (selected) setPendingDelete(selected);
+  };
+  const confirmRemove = async () => {
+    if (!pendingDelete) return;
+    try { await deleteAiProfile(pendingDelete.id); if (defaultProfileId === pendingDelete.id) onDefaultProfileChange(""); onSuccess("AI 配置已删除"); await reload(null); setDialogOpen(false); setPendingDelete(null); }
     catch (e) { setError(e instanceof Error ? e.message : String(e)); }
   };
 
@@ -79,8 +84,16 @@ export function AiProfilesPanel({ defaultProfileId, onDefaultProfileChange, onSu
           <details className="rounded-lg border border-border bg-surface-2/30 px-3 py-2"><summary className="cursor-pointer text-xs text-text-muted">高级设置</summary><div className="mt-2 space-y-2"><label className="block text-xs text-text-muted">Base URL{PROVIDERS.find((x) => x.value === draft.provider)?.needsBaseUrl ? "" : "（可覆盖默认值）"}<input value={draft.baseUrl} onChange={(e) => setDraft({ ...draft, baseUrl: e.target.value })} className="mt-1 w-full rounded-lg border border-border bg-surface-2/80 px-3 py-2 text-xs text-text" placeholder="https://api.example.com/v1" /></label><label className="block text-xs text-text-muted">模型列表（一行一个）<textarea value={draft.modelsText} onChange={(e) => setDraft({ ...draft, modelsText: e.target.value })} className="mt-1 min-h-16 w-full rounded-lg border border-border bg-surface-2/80 px-3 py-2 text-xs text-text" placeholder="model-a\nmodel-b" /></label><label className="block text-xs text-text-muted">默认模型<input value={draft.defaultModel} onChange={(e) => setDraft({ ...draft, defaultModel: e.target.value })} className="mt-1 w-full rounded-lg border border-border bg-surface-2/80 px-3 py-2 text-xs text-text" placeholder="model-a" /></label></div></details>
           <label className="flex items-center gap-2 text-xs text-text-muted"><input type="checkbox" checked={draft.enabled} onChange={(e) => setDraft({ ...draft, enabled: e.target.checked })} />在聊天模型列表中启用</label>{error && <p className="text-xs text-danger">{error}</p>}
         </div>
-        <div className="mt-4 flex items-center justify-between gap-2 border-t border-border pt-3">{selected ? <button type="button" onClick={() => void remove()} className="text-xs text-danger">删除配置</button> : <span />}<div className="flex gap-2">{selected?.apiKeyConfigured && <button type="button" onClick={() => void clearAiProfileApiKey(selected.id).then(() => { onSuccess("API 密钥已清除"); return reload(selected.id); })} className="rounded-full border border-border px-3 py-1.5 text-xs text-text-muted">清除密钥</button>}{selected && <button type="button" onClick={() => onDefaultProfileChange(selected.id)} className={`rounded-full border px-3 py-1.5 text-xs ${defaultProfileId === selected.id ? "border-secondary/50 text-secondary" : "border-border text-text-muted"}`}>{defaultProfileId === selected.id ? "默认配置" : "设为默认"}</button>}<button type="button" onClick={() => void save()} disabled={saving} className="rounded-full bg-primary/15 px-3 py-1.5 text-xs text-primary disabled:opacity-50">{saving ? "保存中…" : "保存配置"}</button></div></div>
+        <div className="mt-4 flex items-center justify-between gap-2 border-t border-border pt-3">{selected ? <button type="button" onClick={remove} className="text-xs text-danger">删除配置</button> : <span />}<div className="flex gap-2">{selected?.apiKeyConfigured && <button type="button" onClick={() => void clearAiProfileApiKey(selected.id).then(() => { onSuccess("API 密钥已清除"); return reload(selected.id); })} className="rounded-full border border-border px-3 py-1.5 text-xs text-text-muted">清除密钥</button>}{selected && <button type="button" onClick={() => onDefaultProfileChange(selected.id)} className={`rounded-full border px-3 py-1.5 text-xs ${defaultProfileId === selected.id ? "border-secondary/50 text-secondary" : "border-border text-text-muted"}`}>{defaultProfileId === selected.id ? "默认配置" : "设为默认"}</button>}<button type="button" onClick={() => void save()} disabled={saving} className="rounded-full bg-primary/15 px-3 py-1.5 text-xs text-primary disabled:opacity-50">{saving ? "保存中…" : "保存配置"}</button></div></div>
       </div>
     </div>}
+    <ConfirmDialog
+      open={pendingDelete !== null}
+      title="删除 AI 配置"
+      message={`删除配置“${pendingDelete?.name ?? ""}”？`}
+      confirmLabel="删除"
+      onConfirm={() => void confirmRemove()}
+      onCancel={() => setPendingDelete(null)}
+    />
   </div>;
 }

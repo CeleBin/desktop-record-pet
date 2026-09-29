@@ -17,14 +17,18 @@ export interface ConfirmDialogProps {
   message: string;
   /** 确认按钮文案，默认「确认删除」 */
   confirmLabel?: string;
-  /** 取消按钮文案，默认「取消」 */
-  cancelLabel?: string;
+  /** 取消按钮文案，默认「取消」；传 null 时使用单按钮提示模式 */
+  cancelLabel?: string | null;
   /** 是否危险操作；true 时确认按钮为红色样式（默认 true） */
   destructive?: boolean;
   /** 点击确认按钮（是否关闭由父组件决定，便于先做异步操作） */
   onConfirm: () => void;
   /** 点击取消 / 遮罩 / 按 ESC（由父组件负责关闭） */
   onCancel: () => void;
+}
+
+export function shouldRenderCancelButton(cancelLabel: string | null | undefined): boolean {
+  return cancelLabel !== null;
 }
 
 export function ConfirmDialog({
@@ -38,6 +42,7 @@ export function ConfirmDialog({
   onCancel,
 }: ConfirmDialogProps) {
   const cancelRef = useRef<HTMLButtonElement>(null);
+  const confirmRef = useRef<HTMLButtonElement>(null);
 
   // ESC 取消：仅在打开时注册 keydown 监听，卸载时移除（同 TodoDrawer 生命周期）
   useEffect(() => {
@@ -55,9 +60,13 @@ export function ConfirmDialog({
   // 打开时自动聚焦取消按钮（应用既有 autoFocus 约定）
   useEffect(() => {
     if (open) {
-      cancelRef.current?.focus();
+      if (shouldRenderCancelButton(cancelLabel)) {
+        cancelRef.current?.focus();
+      } else {
+        confirmRef.current?.focus();
+      }
     }
-  }, [open]);
+  }, [open, cancelLabel]);
 
   if (!open) return null;
 
@@ -83,15 +92,18 @@ export function ConfirmDialog({
           )}
           <p className="whitespace-pre-line text-[12px] text-text">{message}</p>
           <div className="mt-3 flex justify-end gap-2">
+            {shouldRenderCancelButton(cancelLabel) && (
+              <button
+                ref={cancelRef}
+                type="button"
+                onClick={onCancel}
+                className="rounded-lg px-3 py-1.5 text-[11px] text-text-muted transition hover:bg-white/5"
+              >
+                {cancelLabel}
+              </button>
+            )}
             <button
-              ref={cancelRef}
-              type="button"
-              onClick={onCancel}
-              className="rounded-lg px-3 py-1.5 text-[11px] text-text-muted transition hover:bg-white/5"
-            >
-              {cancelLabel}
-            </button>
-            <button
+              ref={confirmRef}
               type="button"
               onClick={onConfirm}
               className={

@@ -1,6 +1,7 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 
+import { ConfirmDialog } from "./components/common/ConfirmDialog";
 import { MainPanel } from "./components/panel/MainPanel";
 import { PetShell } from "./components/pet/PetShell";
 import { QuickInput } from "./components/capture/QuickInput";
@@ -17,6 +18,7 @@ import {
 
 /** Event broadcast by the Rust backend whenever a setting changes. */
 const SETTINGS_CHANGED_EVENT = "settings-changed";
+const SECOND_INSTANCE_EVENT = "app:second-instance";
 
 /** Subscribes to settings store and re-applies theme when theme/theme_mode changes. */
 function ThemeManager() {
@@ -65,10 +67,41 @@ function ThemeManager() {
 function App() {
   const windowLabel =
     new URLSearchParams(window.location.search).get("window") ?? "main-panel";
+  const [secondInstanceMessage, setSecondInstanceMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (windowLabel !== "main-panel") return;
+
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    void listen<string>(SECOND_INSTANCE_EVENT, (event) => {
+      setSecondInstanceMessage(event.payload);
+    }).then((dispose) => {
+      if (disposed) dispose();
+      else unlisten = dispose;
+    });
+
+    return () => {
+      disposed = true;
+      if (unlisten) {
+        unlisten();
+      }
+    };
+  }, [windowLabel]);
 
   return (
     <>
       <ThemeManager />
+      <ConfirmDialog
+        open={windowLabel === "main-panel" && secondInstanceMessage !== null}
+        title="程序已在运行"
+        message={secondInstanceMessage ?? ""}
+        confirmLabel="知道了"
+        cancelLabel={null}
+        destructive={false}
+        onConfirm={() => setSecondInstanceMessage(null)}
+        onCancel={() => setSecondInstanceMessage(null)}
+      />
       {windowLabel === "pet" ? (
         <PetShell />
       ) : windowLabel === "quick-input" ? (

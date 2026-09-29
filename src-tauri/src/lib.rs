@@ -6,6 +6,7 @@ mod db;
 mod errors;
 mod models;
 mod screenshot;
+mod single_instance;
 mod windows;
 
 use std::sync::Mutex;
@@ -56,6 +57,15 @@ fn emit_recording_error(app: &tauri::AppHandle, message: String) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            let _ = windows::show_main_panel(app);
+            let (_, message) = single_instance::second_instance_notice();
+            let _ = app.emit_to(
+                windows::MAIN_PANEL_LABEL,
+                single_instance::SECOND_INSTANCE_EVENT,
+                message,
+            );
+        }))
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_opener::init())
@@ -328,6 +338,16 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::register_shortcut_best_effort;
+    use super::single_instance::second_instance_notice;
+
+    #[test]
+    fn second_instance_notice_explains_that_the_app_is_already_running() {
+        let (title, message) = second_instance_notice();
+
+        assert_eq!(title, "Desktop Record Pet");
+        assert!(message.contains("已经在运行"));
+        assert!(message.contains("主窗口"));
+    }
 
     #[test]
     fn shortcut_registration_failure_is_non_fatal() {

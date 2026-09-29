@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { listRecords } from "../../lib/tauri";
 import { useSettingsStore } from "../../store/settings";
 import type { KnowledgeGraphData, KnowledgeGraphEdge, KnowledgeGraphNode, KnowledgeGraphNodeStatus, KnowledgeGraphSuggestion, RecordWithRelations } from "../../types";
+import { ConfirmDialog } from "../common/ConfirmDialog";
 
 const GRAPH_SETTING_KEY = "knowledge_graph_data";
 const NODE_RADIUS = 30;
@@ -19,6 +20,10 @@ const EDGE_LABELS: Record<KnowledgeGraphEdge["type"], string> = {
   prerequisite: "前置",
   "applies-to": "应用于",
 };
+
+type PendingDelete =
+  | { kind: "node"; id: string; label: string }
+  | { kind: "edge"; id: string; source: string; target: string };
 
 function seedGraph(): KnowledgeGraphData {
   const nodes: KnowledgeGraphNode[] = [
@@ -135,6 +140,7 @@ export function KnowledgeGraphPanel({ onOpenRecord, initialNodeId }: { onOpenRec
   const [sidebarWidth, setSidebarWidth] = useState(300);
   const [pointerPoint, setPointerPoint] = useState<{ x: number; y: number } | null>(null);
   const [relationMenu, setRelationMenu] = useState<{ x: number; y: number; nodeId: string } | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null);
   const dragRef = useRef<{ id: string; dx: number; dy: number } | null>(null);
   const panRef = useRef<{ x: number; y: number; startX: number; startY: number } | null>(null);
   const sidebarResizeRef = useRef<{ startX: number; startWidth: number } | null>(null);
@@ -176,9 +182,19 @@ export function KnowledgeGraphPanel({ onOpenRecord, initialNodeId }: { onOpenRec
     persist({ ...graph, nodes: [...graph.nodes, node] }); setSelectedId(id); setMessage("已创建自定义知识点");
   };
   const deleteSelected = () => {
-    if (!selected || !window.confirm(`确定删除“${selected.label}”吗？关联笔记不会被删除。`)) return;
-    persist({ ...graph, nodes: graph.nodes.filter((node) => node.id !== selected.id), edges: graph.edges.filter((edge) => edge.source !== selected.id && edge.target !== selected.id) });
-    setSelectedId(graph.nodes.find((node) => node.id !== selected.id)?.id ?? "");
+    if (selected) setPendingDelete({ kind: "node", id: selected.id, label: selected.label });
+  };
+  const confirmDelete = () => {
+    if (!pendingDelete) return;
+    if (pendingDelete.kind === "node") {
+      persist({ ...graph, nodes: graph.nodes.filter((node) => node.id !== pendingDelete.id), edges: graph.edges.filter((edge) => edge.source !== pendingDelete.id && edge.target !== pendingDelete.id) });
+      setSelectedId(graph.nodes.find((node) => node.id !== pendingDelete.id)?.id ?? "");
+    } else {
+      persist({ ...graph, edges: graph.edges.filter((edge) => edge.id !== pendingDelete.id) });
+      setSelectedEdgeId(null);
+      setMessage("已删除知识关系");
+    }
+    setPendingDelete(null);
   };
   const handleNodeClick = (id: string) => {
     setSelectedEdgeId(null);
@@ -255,10 +271,7 @@ export function KnowledgeGraphPanel({ onOpenRecord, initialNodeId }: { onOpenRec
     if (!selectedEdge) return;
     const source = graph.nodes.find((node) => node.id === selectedEdge.source)?.label ?? "当前节点";
     const target = graph.nodes.find((node) => node.id === selectedEdge.target)?.label ?? "目标节点";
-    if (!window.confirm(`确定删除“${source}”与“${target}”之间的关系吗？`)) return;
-    persist({ ...graph, edges: graph.edges.filter((edge) => edge.id !== selectedEdge.id) });
-    setSelectedEdgeId(null);
-    setMessage("已删除知识关系");
+    setPendingDelete({ kind: "edge", id: selectedEdge.id, source, target });
   };
   const startSidebarResize = (event: React.PointerEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -274,6 +287,14 @@ export function KnowledgeGraphPanel({ onOpenRecord, initialNodeId }: { onOpenRec
   const stopSidebarResize = () => { sidebarResizeRef.current = null; };
 
   return <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
+    <ConfirmDialog
+      open={pendingDelete !== null}
+      title={pendingDelete?.kind === "edge" ? "删除知识关系" : "删除知识点"}
+      message={pendingDelete?.kind === "edge" ? `确定删除“${pendingDelete.source}”与“${pendingDelete.target}”之间的关系吗？` : `确定删除“${pendingDelete?.label ?? ""}”吗？关联笔记不会被删除。`}
+      confirmLabel="删除"
+      onConfirm={confirmDelete}
+      onCancel={() => setPendingDelete(null)}
+    />
     <div className="flex flex-wrap items-center gap-2 border-b border-border px-5 py-3">
       <div className="mr-auto"><p className="text-[11px] uppercase tracking-[0.2em] text-text0">个人知识库</p><h2 className="mt-1 text-lg font-semibold text-text">知识图谱</h2></div>
       <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索知识点" className="w-36 rounded-lg border border-border bg-surface-2 px-2.5 py-1.5 text-xs text-text outline-none focus:border-primary/50" />
