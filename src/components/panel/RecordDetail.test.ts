@@ -33,7 +33,7 @@ describe("document workspace save status", () => {
   });
 
   it("prefers rich heading blocks for WYSIWYG TOC navigation", () => {
-    expect(getTocHeadingSelector(2)).toBe('[data-content-type="heading"][data-level="1"], [data-content-type="heading"][data-level="2"], [data-content-type="heading"][data-level="3"]');
+    expect(getTocHeadingSelector(2)).toBe('[data-content-type="heading"] h1, [data-content-type="heading"] h2, [data-content-type="heading"] h3');
     expect(getTocHeadingSelector(0)).toBe("h1, h2, h3");
   });
 

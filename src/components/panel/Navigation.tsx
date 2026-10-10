@@ -28,10 +28,9 @@ interface NavigationProps {
   activeTagIds: string[];
   onToggleTagFilter: (id: string) => void;
   noteFolders: FolderItem[];
-  noteFolderView: "all" | "unfiled" | "folder";
+  noteFolderView: "root" | "all" | "folder";
   selectedNoteFolderId: string | null;
-  onSelectAllNotes: () => void;
-  onSelectUnfiledNotes: () => void;
+  onToggleAllNotes: () => void;
   onSelectNoteFolder: (id: string) => void;
   onCreateNoteFolder: (name: string, parentId: string | null) => void;
   onRenameNoteFolder: (id: string, name: string) => void;
@@ -411,8 +410,7 @@ export function Navigation({
   noteFolders,
   noteFolderView,
   selectedNoteFolderId,
-  onSelectAllNotes,
-  onSelectUnfiledNotes,
+  onToggleAllNotes,
   onSelectNoteFolder,
   onCreateNoteFolder,
   onRenameNoteFolder,
@@ -565,20 +563,20 @@ export function Navigation({
 
   return (
     <>
-      <nav ref={navigationRef} className="flex h-full flex-col gap-5 overflow-y-auto p-4">
-      <button type="button" onClick={onToggleChat} className={`rounded-xl border px-3 py-2 text-xs font-medium transition ${chatOpen ? "border-primary/40 bg-primary/10 text-primary" : "border-border text-text-muted hover:text-text"}`}>和{petName}聊聊</button>
-      <button type="button" onClick={onToggleGraph} className={`rounded-xl border px-3 py-2 text-xs font-medium transition ${graphOpen ? "border-primary/40 bg-primary/10 text-primary" : "border-border text-text-muted hover:text-text"}`}>知识图谱</button>
+      <nav ref={navigationRef} className="flex h-full flex-col gap-4 overflow-y-auto p-4">
+      <button type="button" onClick={onToggleChat} className={`rounded-lg border px-3 py-2 text-[13px] font-medium transition ${chatOpen ? "border-secondary/35 bg-secondary/5 text-text" : "border-border/70 text-text-muted hover:border-secondary/30 hover:bg-secondary/5 hover:text-text"}`}>和{petName}聊聊</button>
+      <button type="button" onClick={onToggleGraph} className={`rounded-lg border px-3 py-2 text-[13px] font-medium transition ${graphOpen ? "border-secondary/35 bg-secondary/5 text-text" : "border-border/70 text-text-muted hover:border-secondary/30 hover:bg-secondary/5 hover:text-text"}`}>知识图谱</button>
       {/* ── Type filter (single-select: 笔记 OR 待办) ── */}
-      <div className="flex rounded-xl bg-surface/60 p-0.5 ring-1 ring-white/[5%]">
+      <div className="flex gap-3 border-b border-border/70">
         <button
           type="button"
           onClick={() => onSelectType("note")}
           className={`
-            flex-1 rounded-lg px-3 py-1.5 text-xs font-medium transition-all duration-150
+            flex-1 border-b-2 px-2 py-2 text-[13px] font-medium transition-colors duration-150
             ${
               selectedType === "note"
-                ? "bg-secondary/15 text-secondary shadow-sm shadow-secondary/10"
-                : "text-text-muted hover:text-text"
+                ? "border-secondary/65 text-secondary"
+                : "border-transparent text-text-muted hover:text-text"
             }
           `}
         >
@@ -593,11 +591,11 @@ export function Navigation({
           type="button"
           onClick={() => onSelectType("task")}
           className={`
-            flex-1 rounded-lg px-3 py-1.5 text-xs font-medium transition-all duration-150
+            flex-1 border-b-2 px-2 py-2 text-[13px] font-medium transition-colors duration-150
             ${
               selectedType === "task"
-                ? "bg-secondary/15 text-secondary shadow-sm shadow-secondary/10"
-                : "text-text-muted hover:text-text"
+                ? "border-secondary/65 text-secondary"
+                : "border-transparent text-text-muted hover:text-text"
             }
           `}
         >
@@ -614,8 +612,8 @@ export function Navigation({
       <div className="relative">
         <div
           className={`
-            flex items-center gap-2 rounded-2xl border bg-surface/60 px-3 py-2.5
-            text-sm transition-all duration-200
+            flex items-center gap-2 rounded-lg border bg-surface/40 px-3 py-2
+            text-[13px] transition-all duration-200
             ${focused
               ? "border-secondary/40 ring-2 ring-secondary/15"
               : "border-border"
@@ -638,7 +636,7 @@ export function Navigation({
             onFocus={() => setFocused(true)}
             onBlur={() => setFocused(false)}
             placeholder={viewMode === "tasks" ? "搜索待办…" : "搜索笔记…"}
-            className="min-w-0 flex-1 bg-transparent text-sm text-text placeholder-text-muted outline-none"
+            className="min-w-0 flex-1 bg-transparent text-[13px] text-text placeholder-text-muted outline-none"
           />
           {searchQuery.length > 0 && (
             <button
@@ -661,8 +659,7 @@ export function Navigation({
             folders={noteFolders}
             view={noteFolderView}
             selectedFolderId={selectedNoteFolderId}
-            onSelectAll={onSelectAllNotes}
-            onSelectUnfiled={onSelectUnfiledNotes}
+            onToggleAll={onToggleAllNotes}
             onSelectFolder={onSelectNoteFolder}
             onCreateFolder={onCreateNoteFolder}
             onRenameFolder={onRenameNoteFolder}
@@ -678,7 +675,7 @@ export function Navigation({
             {tags.length === 0 ? (
               <p className="text-[11px] text-text-muted">暂无标签</p>
             ) : (
-              <div className="flex flex-wrap gap-1.5">
+              <div className="flex flex-wrap gap-1">
                 {tags.map((tag) => {
                   const isActive = activeTagIds.includes(tag.id);
                   const hasColor = !!tag.color;
@@ -688,8 +685,8 @@ export function Navigation({
                         type="button"
                         onClick={() => onToggleTagFilter(tag.id)}
                         className={`
-                          inline-flex items-center justify-center rounded-full py-1.5 pl-3 pr-3
-                          text-xs font-medium transition-all duration-150
+                          inline-flex items-center justify-center rounded-full py-1 pl-2.5 pr-2.5
+                          text-sm font-medium transition-all duration-150
                           group-hover:justify-start group-hover:pr-7
                           ${!hasColor
                             ? isActive
@@ -835,7 +832,7 @@ export function Navigation({
         <>
           {/* ── Task status filter ── */}
           <section>
-            <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.2em] text-text0">
+            <p className="mb-2 text-xs font-medium text-text-muted">
               任务重要性
             </p>
             <div className="flex flex-wrap gap-1.5">

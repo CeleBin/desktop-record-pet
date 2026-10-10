@@ -60,13 +60,13 @@ export function RecordItemContent({ record, onDelete, onMoveNote }: RecordItemCo
         </div>
 
         {/* Meta row */}
-        <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[11px] text-text0">
+        <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs text-text-muted">
           <span>{formatDate(record.created_at)}</span>
           {hasTask && ts && (
             <>
               <span className="text-text-muted">·</span>
               <span
-                className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                className={`inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-medium ${
                   ts === "done" ? "bg-secondary/15 text-secondary" : record.task?.priority === "high" ? "bg-danger/15 text-danger" : record.task?.priority === "low" ? "bg-secondary/15 text-secondary" : "bg-primary/15 text-primary"
                 }`}
               >

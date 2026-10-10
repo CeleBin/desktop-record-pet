@@ -7,9 +7,8 @@ import { ConfirmDialog } from "../common/ConfirmDialog";
 interface NoteFolderTreeProps {
   folders: FolderItem[];
   selectedFolderId: string | null;
-  view: "all" | "unfiled" | "folder";
-  onSelectAll: () => void;
-  onSelectUnfiled: () => void;
+  view: "root" | "all" | "folder";
+  onToggleAll: () => void;
   onSelectFolder: (id: string) => void;
   onCreateFolder: (name: string, parentId: string | null) => void;
   onRenameFolder: (id: string, name: string) => void;
@@ -59,8 +58,8 @@ function FolderNode({
   return (
     <li>
       <div
-        className={`group flex items-center gap-1 rounded-lg transition ${selected ? "bg-secondary/15 text-secondary" : "text-text-muted hover:bg-white/5 hover:text-text"}`}
-        style={{ paddingLeft: `${depth * 14}px` }}
+        className={`group relative flex items-center gap-0 rounded-md border-l-2 transition ${selected ? "border-l-secondary/65 bg-secondary/5 text-text" : "border-l-transparent text-text-muted hover:bg-white/5 hover:text-text"}`}
+        style={{ paddingLeft: `${depth * 10}px` }}
         draggable
         onDragStart={(event) => {
           event.dataTransfer.effectAllowed = "move";
@@ -77,23 +76,26 @@ function FolderNode({
           <button
             type="button"
             onClick={() => onToggleCollapsed(node.id)}
-            className="w-4 shrink-0 rounded text-[10px] text-text0 hover:text-text"
+            className={`${depth === 0 ? "-ml-4 w-4" : "w-3"} shrink-0 rounded text-[10px] text-text0 hover:text-text`}
             aria-label={collapsed ? "展开子文件夹" : "折叠子文件夹"}
+            aria-expanded={!collapsed}
           >
             {collapsed ? "▸" : "▾"}
           </button>
-        ) : <span className="w-4 shrink-0" />}
+        ) : <span className={`${depth === 0 ? "-ml-4 w-4" : "w-3"} shrink-0`} />}
         <button
           type="button"
           onClick={() => onSelectFolder(node.id)}
-          className="min-w-0 flex-1 truncate px-2 py-1.5 text-left text-xs"
+          className="min-w-0 flex-1 truncate px-1 py-1 text-left text-sm group-hover:pr-14 group-focus-within:pr-14"
           aria-current={selected ? "page" : undefined}
         >
           {node.name}
         </button>
-        <button type="button" onClick={askCreate} className="rounded px-1 text-xs opacity-0 transition group-hover:opacity-70 hover:!opacity-100" title="新建子文件夹">＋</button>
-        <button type="button" onClick={askRename} className="rounded px-1 text-xs opacity-0 transition group-hover:opacity-70 hover:!opacity-100" title="重命名">···</button>
-        <button type="button" onClick={askDelete} className="rounded px-1 text-xs text-danger opacity-0 transition group-hover:opacity-70 hover:!opacity-100" title="删除">×</button>
+        <div className="pointer-events-none absolute right-1 top-1/2 flex -translate-y-1/2 items-center opacity-0 transition group-hover:pointer-events-auto group-hover:opacity-70 group-focus-within:pointer-events-auto group-focus-within:opacity-70">
+          <button type="button" onClick={askCreate} className="rounded px-1 text-xs hover:!opacity-100" title="新建子文件夹">＋</button>
+          <button type="button" onClick={askRename} className="rounded px-1 text-xs hover:!opacity-100" title="重命名">···</button>
+          <button type="button" onClick={askDelete} className="rounded px-1 text-xs text-danger hover:!opacity-100" title="删除">×</button>
+        </div>
       </div>
       {node.children.length > 0 && !collapsed && (
         <ul className="space-y-0.5">
@@ -123,8 +125,7 @@ export function NoteFolderTree({
   folders,
   selectedFolderId,
   view,
-  onSelectAll,
-  onSelectUnfiled,
+  onToggleAll,
   onSelectFolder,
   onCreateFolder,
   onRenameFolder,
@@ -134,6 +135,7 @@ export function NoteFolderTree({
 }: NoteFolderTreeProps) {
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(() => new Set());
   const [pendingDelete, setPendingDelete] = useState<NoteFolderNode | null>(null);
+  const [isDraggingFolder, setIsDraggingFolder] = useState(false);
   const tree = useMemo(() => buildNoteFolderTree(folders), [folders]);
   const askCreateRoot = () => {
     const name = window.prompt("新建文件夹", "");
@@ -141,41 +143,43 @@ export function NoteFolderTree({
   };
 
   return (
-    <section aria-label="笔记文件夹" className="space-y-1">
+    <section
+      aria-label="笔记文件夹"
+      className="space-y-1"
+      onDragStart={() => setIsDraggingFolder(true)}
+      onDragEnd={() => setIsDraggingFolder(false)}
+    >
       <div className="flex items-center justify-between">
-        <p className="text-[10px] font-medium uppercase tracking-[0.2em] text-text0">文件夹</p>
-        <button type="button" onClick={askCreateRoot} className="rounded px-1.5 py-0.5 text-xs text-text-muted transition hover:bg-white/5 hover:text-text" title="新建文件夹">＋</button>
+        <p className="text-[11px] font-medium text-text-muted">文件夹</p>
+        <button type="button" onClick={askCreateRoot} className="rounded px-1.5 py-0.5 text-[11px] text-text-muted transition hover:bg-white/5 hover:text-text" title="新建文件夹">＋</button>
       </div>
       {error && <p className="rounded-lg bg-danger/10 px-2 py-1 text-[10px] text-danger" role="alert">{error}</p>}
-      <div
-        className="rounded-lg border border-dashed border-border/60 px-2 py-1 text-[10px] text-text0 transition hover:border-secondary/40 hover:text-secondary"
-        onDragOver={(event) => event.preventDefault()}
-        onDrop={(event) => {
-          event.preventDefault();
-          const activeId = event.dataTransfer.getData("text/note-folder-id");
-          if (activeId) onMoveFolder(activeId, null);
-        }}
-      >
-        拖到这里移至根目录
+      {isDraggingFolder && (
+        <div
+          className="rounded border border-dashed border-secondary/35 px-2 py-1 text-[10px] text-secondary"
+          onDragOver={(event) => event.preventDefault()}
+          onDrop={(event) => {
+            event.preventDefault();
+            const activeId = event.dataTransfer.getData("text/note-folder-id");
+            if (activeId) onMoveFolder(activeId, null);
+            setIsDraggingFolder(false);
+          }}
+        >
+          拖到这里移至根目录
+        </div>
+      )}
+      <div className="border-b border-border/70">
+        <button
+          type="button"
+          onClick={onToggleAll}
+          aria-pressed={view === "all"}
+          className={`w-full border-b-2 px-1 py-1.5 text-center text-[11px] transition-colors ${view === "all" ? "border-secondary/65 text-secondary" : "border-transparent text-text-muted hover:text-text"}`}
+        >
+          全部笔记
+        </button>
       </div>
-      <button
-        type="button"
-        onClick={onSelectAll}
-        className={`flex w-full items-center rounded-lg px-2 py-1.5 text-left text-xs transition ${view === "all" ? "bg-secondary/15 text-secondary" : "text-text-muted hover:bg-white/5 hover:text-text"}`}
-      >
-        <span className="mr-1.5 text-[10px]" aria-hidden="true">◎</span>
-        全部笔记
-      </button>
-      <button
-        type="button"
-        onClick={onSelectUnfiled}
-        className={`flex w-full items-center rounded-lg px-2 py-1.5 text-left text-xs transition ${view === "unfiled" ? "bg-secondary/15 text-secondary" : "text-text-muted hover:bg-white/5 hover:text-text"}`}
-      >
-        <span className="mr-1.5 text-[10px]" aria-hidden="true">○</span>
-        未归类
-      </button>
       {tree.length > 0 && (
-        <ul className="space-y-0.5">
+        <ul className="space-y-0.5" aria-label="文件夹路径">
           {tree.map((node) => (
             <FolderNode
               key={node.id}

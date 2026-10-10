@@ -13,13 +13,6 @@ import {
 } from "../lib/tauri";
 import type { FolderItem } from "../types";
 
-const INCLUDE_DESCENDANTS_KEY = "drp-note-folder-include-descendants";
-
-function readIncludeDescendants(): boolean {
-  if (typeof window === "undefined") return false;
-  return window.localStorage.getItem(INCLUDE_DESCENDANTS_KEY) === "true";
-}
-
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -28,9 +21,8 @@ interface NoteFolderState {
   folders: FolderItem[];
   loading: boolean;
   error: string | null;
-  includeDescendants: boolean;
   selectedFolderId: string | null;
-  noteFolderView: "all" | "unfiled" | "folder";
+  noteFolderView: "root" | "all" | "folder";
   fetchFolders: () => Promise<void>;
   createFolder: (name: string, parentId?: string | null) => Promise<FolderItem | null>;
   renameFolder: (id: string, name: string) => Promise<FolderItem | null>;
@@ -38,10 +30,9 @@ interface NoteFolderState {
   deleteFolder: (id: string) => Promise<void>;
   moveNote: (recordId: string, folderId: string | null) => Promise<void>;
   reorderFolders: (activeId: string, overId: string) => void;
-  setIncludeDescendants: (value: boolean) => void;
-  selectAll: () => void;
-  selectUnfiled: () => void;
+  toggleAll: () => void;
   selectFolder: (id: string) => void;
+  navigateUp: () => void;
   clearError: () => void;
 }
 
@@ -49,7 +40,6 @@ export const useNoteFolderStore = create<NoteFolderState>((set, get) => ({
   folders: [],
   loading: false,
   error: null,
-  includeDescendants: readIncludeDescendants(),
   selectedFolderId: null,
   noteFolderView: "all",
 
@@ -163,23 +153,29 @@ export const useNoteFolderStore = create<NoteFolderState>((set, get) => ({
     ).catch((error) => set({ folders: oldFolders, error: errorMessage(error) }));
   },
 
-  setIncludeDescendants(value) {
-    if (typeof window !== "undefined") {
-      window.localStorage.setItem(INCLUDE_DESCENDANTS_KEY, String(value));
-    }
-    set({ includeDescendants: value });
-  },
-
-  selectAll() {
-    set({ selectedFolderId: null, noteFolderView: "all" });
-  },
-
-  selectUnfiled() {
-    set({ selectedFolderId: null, noteFolderView: "unfiled" });
+  toggleAll() {
+    set((state) => ({
+      selectedFolderId: null,
+      noteFolderView: state.noteFolderView === "all" ? "root" : "all",
+    }));
   },
 
   selectFolder(id) {
     set({ selectedFolderId: id, noteFolderView: "folder" });
+  },
+
+  navigateUp() {
+    const state = get();
+    if (state.noteFolderView !== "folder" || !state.selectedFolderId) return;
+
+    const currentFolder = state.folders.find((folder) => folder.id === state.selectedFolderId);
+    const parentFolder = currentFolder?.parentId
+      ? state.folders.find((folder) => folder.id === currentFolder.parentId)
+      : undefined;
+
+    set(parentFolder
+      ? { selectedFolderId: parentFolder.id, noteFolderView: "folder" }
+      : { selectedFolderId: null, noteFolderView: "root" });
   },
 
   clearError() {

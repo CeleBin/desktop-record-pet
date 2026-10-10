@@ -120,7 +120,7 @@ export function getRecordDetailInstanceKey(recordId: string | null): string {
 
 export function getTocHeadingSelector(richHeadingCount: number): string {
   return richHeadingCount > 0
-    ? '[data-content-type="heading"][data-level="1"], [data-content-type="heading"][data-level="2"], [data-content-type="heading"][data-level="3"]'
+    ? '[data-content-type="heading"] h1, [data-content-type="heading"] h2, [data-content-type="heading"] h3'
     : "h1, h2, h3";
 }
 
@@ -547,17 +547,6 @@ export function RecordDetail({
   // edit preview). Used by the TOC to locate heading elements for scroll jumps.
   const markdownContainerRef = useRef<HTMLDivElement>(null);
 
-  const scrollToHeading = useCallback((index: number) => {
-    const container = markdownContainerRef.current;
-    if (!container) return;
-    const richHeadings = container.querySelectorAll('[data-content-type="heading"]');
-    const headings = container.querySelectorAll(getTocHeadingSelector(richHeadings.length));
-    const target = headings[index];
-    if (target) {
-      target.scrollIntoView({ behavior: "smooth", block: "start" });
-    }
-  }, []);
-
   const mdComponents = useMemo(
     () => ({
       h1: ({ children }: { children?: ReactNode }) => (
@@ -658,6 +647,31 @@ export function RecordDetail({
   const tocSource = editingContent ? contentDraft : (record?.content ?? "");
   const toc = useMemo(() => extractMarkdownToc(tocSource), [tocSource]);
   const tocMinimumLevel = toc.length > 0 ? Math.min(...toc.map((entry) => entry.level)) : 1;
+
+  const scrollToHeading = useCallback((entryIndex: number) => {
+    const container = markdownContainerRef.current;
+    const entry = toc[entryIndex];
+    if (!container || !entry) return;
+
+    const richHeadings = container.querySelectorAll('[data-content-type="heading"]');
+    const headings = Array.from(
+      container.querySelectorAll<HTMLElement>(getTocHeadingSelector(richHeadings.length)),
+    );
+    const normalize = (text: string | null) =>
+      (text ?? "").replace(/\u200b/g, "").replace(/\s+/g, " ").trim();
+    const entryText = normalize(entry.text);
+    const duplicateIndex = toc
+      .slice(0, entryIndex)
+      .filter((previous) => previous.level === entry.level && normalize(previous.text) === entryText)
+      .length;
+    const matchingHeadings = headings.filter((heading) =>
+      Number(heading.tagName.slice(1)) === entry.level && normalize(heading.textContent) === entryText,
+    );
+    const visibleHeadings = headings.filter((heading) => normalize(heading.textContent) !== "");
+    const target = matchingHeadings[duplicateIndex] ?? visibleHeadings[entryIndex];
+
+    target?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [toc]);
 
   // Keep lastSaved* refs in sync with the record from the server.
   useEffect(() => {
@@ -1185,7 +1199,7 @@ export function RecordDetail({
           <button
             type="button"
             onClick={onBackToGraph}
-            className="shrink-0 rounded-full bg-primary/15 px-3 py-1 text-[11px] font-medium text-primary transition hover:bg-primary/25"
+            className="shrink-0 rounded-full bg-primary/15 px-3 py-1 text-xs font-medium text-primary transition hover:bg-primary/25"
           >
             ← {graphReturnLabel}
           </button>
@@ -1211,7 +1225,7 @@ export function RecordDetail({
               aria-label="文档标题"
               className="min-w-40 flex-1 bg-transparent px-1 py-1 text-base font-medium text-text outline-none placeholder:text-text-muted"
             />
-            <span className="whitespace-nowrap text-[10px] text-text-muted">Ctrl+S 立即保存</span>
+            <span className="whitespace-nowrap text-[11px] text-text-muted">Ctrl+S 立即保存</span>
             {saveError ? (
               <span
                 className="ml-auto inline-flex items-center gap-1.5 rounded-full bg-danger/15 px-2.5 py-0.5 text-[11px] font-medium text-danger"
@@ -1264,7 +1278,7 @@ export function RecordDetail({
               type="button"
               onClick={startEditContent}
               className="inline-flex items-center gap-1 rounded-full bg-secondary/15 px-2.5 py-1
-                text-[11px] font-medium text-secondary transition hover:bg-secondary/25"
+                text-xs font-medium text-secondary transition hover:bg-secondary/25"
             >
               <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931zm0 0L19.5 7.125" />
@@ -2111,7 +2125,7 @@ export function RecordDetail({
                   onClick={() => scrollToHeading(entry.index)}
                   title={entry.text}
                   style={{ paddingLeft: `${getTocEntryIndent(entry.level, tocMinimumLevel)}px` }}
-                  className="block w-full truncate text-left text-[11px] leading-5 text-text-muted transition hover:text-secondary"
+                  className="block w-full truncate text-left text-xs leading-5 text-text-muted transition hover:text-secondary"
                 >
                   {entry.text}
                 </button>

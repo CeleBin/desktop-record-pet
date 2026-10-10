@@ -56,19 +56,18 @@ export function MainPanel() {
   const noteFolderError = useNoteFolderStore((state) => state.error);
   const noteFolderView = useNoteFolderStore((state) => state.noteFolderView);
   const selectedNoteFolderId = useNoteFolderStore((state) => state.selectedFolderId);
-  const includeNoteDescendants = useNoteFolderStore((state) => state.includeDescendants);
   const fetchNoteFolders = useNoteFolderStore((state) => state.fetchFolders);
   const createNoteFolder = useNoteFolderStore((state) => state.createFolder);
   const renameNoteFolder = useNoteFolderStore((state) => state.renameFolder);
   const deleteNoteFolder = useNoteFolderStore((state) => state.deleteFolder);
   const moveNoteFolder = useNoteFolderStore((state) => state.moveFolder);
   const moveNote = useNoteFolderStore((state) => state.moveNote);
-  const selectAllNotes = useNoteFolderStore((state) => state.selectAll);
-  const selectUnfiledNotes = useNoteFolderStore((state) => state.selectUnfiled);
+  const toggleAllNotes = useNoteFolderStore((state) => state.toggleAll);
   const selectNoteFolder = useNoteFolderStore((state) => state.selectFolder);
-  const setIncludeNoteDescendants = useNoteFolderStore((state) => state.setIncludeDescendants);
+  const navigateUpNoteFolder = useNoteFolderStore((state) => state.navigateUp);
   // ── Resizable column widths (persisted to localStorage) ──
   const { widths, startResize, resetColumn } = useColumnResize();
+  const [listCollapsed, setListCollapsed] = useState(false);
 
   // ── Type filter (single-select: 笔记 OR 待办, never both) ──
   const [selectedType, setSelectedType] = useState<RecordType>("note");
@@ -102,7 +101,7 @@ export function MainPanel() {
     if (noteFolderView === "folder" && selectedNoteFolderId) {
       return getNoteFolderPath(noteFolders, selectedNoteFolderId);
     }
-    return [noteFolderView === "unfiled" ? "未归类" : "全部笔记"];
+    return [noteFolderView === "root" ? "根目录" : "全部笔记"];
   }, [noteFolderView, noteFolders, selectedNoteFolderId]);
   const recordFilter = useMemo<RecordFilter>(() => ({
     typeFilter,
@@ -110,10 +109,11 @@ export function MainPanel() {
     searchQuery: debouncedQuery.length > 0 ? debouncedQuery : undefined,
     tagIds: activeTagIds.length > 0 ? activeTagIds : undefined,
     viewKey: viewMode,
-    noteFolderMode: selectedType === "note" ? noteFolderView : undefined,
+    noteFolderMode: selectedType === "note"
+      ? noteFolderView === "root" ? "unfiled" : noteFolderView
+      : undefined,
     folderId: selectedType === "note" && noteFolderView === "folder" ? selectedNoteFolderId ?? undefined : undefined,
-    includeDescendants: selectedType === "note" && noteFolderView === "folder" ? includeNoteDescendants : undefined,
-  }), [activeTagIds, debouncedQuery, includeNoteDescendants, noteFolderView, selectedNoteFolderId, selectedType, typeFilter, viewMode]);
+  }), [activeTagIds, debouncedQuery, noteFolderView, selectedNoteFolderId, selectedType, typeFilter, viewMode]);
 
   // ── Settings panel ──
   const [contentMode, setContentMode] = useState<ContentMode>(() => {
@@ -199,6 +199,16 @@ export function MainPanel() {
     return records;
   }, [records, viewMode, taskFilter]);
 
+  const visibleNoteFolders = useMemo(() => {
+    if (viewMode !== "notes") return [];
+    if (noteFolderView === "all") return [];
+    if (noteFolderView === "folder" && !selectedNoteFolderId) return [];
+    const parentId = noteFolderView === "root" ? null : selectedNoteFolderId;
+    return noteFolders
+      .filter((folder) => folder.scope === "note" && folder.parentId === parentId)
+      .sort((left, right) => left.sort_order - right.sort_order || left.name.localeCompare(right.name));
+  }, [noteFolderView, noteFolders, selectedNoteFolderId, viewMode]);
+
   const handleSelect = useCallback(
     (id: string) => {
       setGraphReturnNodeId(null);
@@ -218,7 +228,7 @@ export function MainPanel() {
       });
       return;
     }
-    if (noteFolderView === "unfiled") {
+    if (noteFolderView === "root") {
       void createRecord({
         type: "note",
         title: null,
@@ -257,6 +267,11 @@ export function MainPanel() {
     await moveNote(recordId, movingNoteFolderId);
     await fetchRecords(recordFilter);
   }, [fetchRecords, moveNote, movingNoteFolderId, movingNoteRecordId, recordFilter]);
+
+  const handleDropNoteIntoFolder = useCallback(async (recordId: string, folderId: string) => {
+    await moveNote(recordId, folderId);
+    await fetchRecords(recordFilter);
+  }, [fetchRecords, moveNote, recordFilter]);
 
   // ── Delete confirmation dialog ──
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
@@ -372,8 +387,7 @@ export function MainPanel() {
           noteFolders={noteFolders}
           noteFolderView={noteFolderView}
           selectedNoteFolderId={selectedNoteFolderId}
-          onSelectAllNotes={selectAllNotes}
-          onSelectUnfiledNotes={selectUnfiledNotes}
+          onToggleAllNotes={toggleAllNotes}
           onSelectNoteFolder={selectNoteFolder}
           onCreateNoteFolder={(name, parentId) => { void createNoteFolder(name, parentId); }}
           onRenameNoteFolder={(id, name) => { void renameNoteFolder(id, name); }}
@@ -396,9 +410,23 @@ export function MainPanel() {
       {/* ── Middle: Record list or Settings ── */}
       <section
         className={`${contentMode === "graph" ? "hidden" : "flex"} shrink-0 flex-col border-r border-border bg-bg/30`}
-        style={{ width: widths.list }}
+        style={{ width: listCollapsed ? 36 : widths.list }}
       >
-        {contentMode === "chat" ? (
+        {listCollapsed ? (
+          <div className="flex justify-center pt-2">
+            <button
+              type="button"
+              aria-label="展开列表"
+              title="展开列表"
+              onClick={() => setListCollapsed(false)}
+              className="inline-flex h-7 w-7 items-center justify-center rounded-md text-text-muted transition hover:bg-secondary/10 hover:text-secondary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-secondary"
+            >
+              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8} aria-hidden="true">
+                <path strokeLinecap="round" strokeLinejoin="round" d="m9 18 6-6-6-6" />
+              </svg>
+            </button>
+          </div>
+        ) : contentMode === "chat" ? (
           <PetChatHistoryPanel />
         ) : contentMode === "settings" ? (
           <SettingsPanel onClose={() => setContentMode("records")} />
@@ -415,16 +443,21 @@ export function MainPanel() {
             onReorder={handleReorder}
             onCreateNote={handleCreateNote}
             onMoveNote={handleOpenMoveNote}
+            onMoveNoteToFolder={handleDropNoteIntoFolder}
             notePath={notePath}
-            includeDescendants={includeNoteDescendants}
-            onSetIncludeDescendants={setIncludeNoteDescendants}
+            onCollapseList={() => setListCollapsed(true)}
+            onNavigateUp={viewMode === "notes" && noteFolderView === "folder" && selectedNoteFolderId
+              ? navigateUpNoteFolder
+              : undefined}
+            folders={visibleNoteFolders}
+            onSelectFolder={selectNoteFolder}
           />
         )}
       </section>
 
       {/* ── Resize handle: list ↔ detail ── */}
       <div
-        className={`${contentMode === "graph" ? "hidden" : "col-resize-handle"} shrink-0`}
+        className={`${contentMode === "graph" || listCollapsed ? "hidden" : "col-resize-handle"} shrink-0`}
         onPointerDown={startResize("list")}
         onDoubleClick={() => resetColumn("list")}
         role="separator"
