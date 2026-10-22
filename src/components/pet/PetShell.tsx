@@ -66,13 +66,12 @@ export function PetShell() {
     };
   }, []);
 
-  const startProactiveChat = useCallback(async (manual: boolean) => {
-    if (!manual && (settings.pet_proactive_ai_enabled !== "true" || bubble)) return;
-    if (manual) setBubble("汪，我想想怎么和你开场…");
+  const startProactiveChat = useCallback(async () => {
+    if (settings.pet_proactive_ai_enabled !== "true" || bubble) return;
     const now = Date.now();
     const minInterval = Number(settings.pet_proactive_min_interval_minutes ?? "120") * 60_000;
     const last = Number(localStorage.getItem("pet-proactive-ai-at") ?? "0");
-    if (!manual && now - last < minInterval) return;
+    if (now - last < minInterval) return;
     try {
       const records = await listRecords({ limit: 1 });
       const run = await runAiTask(createProactivePetChatRequest(
@@ -84,11 +83,8 @@ export function PetShell() {
       if (result?.reply) {
         localStorage.setItem("pet-proactive-ai-at", String(now));
         setBubble(result.reply);
-      } else if (manual) {
-        setBubble("这次没能想好开场白，稍后再试一次吧。");
       }
     } catch {
-      if (manual) setBubble("这次没能想好开场白，稍后再试一次吧。");
       // A scheduled invitation is optional; model failures must stay silent.
     }
   }, [bubble, settings.pet_custom_prompt, settings.pet_persona, settings.pet_proactive_ai_enabled, settings.pet_proactive_min_interval_minutes]);
@@ -100,7 +96,7 @@ export function PetShell() {
 
   useEffect(() => {
     const maybeStartProactiveChat = () => {
-      void startProactiveChat(false);
+      void startProactiveChat();
     };
     const timer = window.setInterval(maybeStartProactiveChat, 60_000);
     maybeStartProactiveChat();
@@ -244,10 +240,6 @@ export function PetShell() {
           onOpenPanel={() => {
             handleCloseMenu();
             void showMainPanel();
-          }}
-          onManualCompanionInvite={() => {
-            handleCloseMenu();
-            void startProactiveChat(true);
           }}
           onOpenChat={() => {
             handleCloseMenu();

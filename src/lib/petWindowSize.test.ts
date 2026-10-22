@@ -4,7 +4,7 @@ import { getPetWindowSize } from "./petWindowSize";
 
 describe("pet window size", () => {
   it("expands while a menu is open so every action remains reachable", () => {
-    expect(getPetWindowSize({ bubbleVisible: false, menuOpen: true })).toEqual({ width: 240, height: 260 });
+    expect(getPetWindowSize({ bubbleVisible: false, menuOpen: true })).toEqual({ width: 220, height: 236 });
   });
 
   it("stays compact while the pet is idle", () => {

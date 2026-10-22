@@ -5,7 +5,7 @@ export function getPetWindowSize({
   bubbleVisible: boolean;
   menuOpen: boolean;
 }): { width: number; height: number } {
-  return bubbleVisible || menuOpen
-    ? { width: 240, height: 260 }
-    : { width: 128, height: 148 };
+  if (menuOpen) return { width: 220, height: 236 };
+  if (bubbleVisible) return { width: 240, height: 260 };
+  return { width: 128, height: 148 };
 }

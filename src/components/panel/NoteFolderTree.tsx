@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { buildNoteFolderTree, type NoteFolderNode } from "../../lib/noteFolders";
 import type { FolderItem } from "../../types";
@@ -17,13 +17,118 @@ interface NoteFolderTreeProps {
   error?: string | null;
 }
 
+type FolderNameDialogState =
+  | { mode: "create"; parentId: string | null }
+  | { mode: "rename"; folderId: string; currentName: string };
+
+function FolderNameDialog({
+  dialog,
+  onCancel,
+  onSubmit,
+}: {
+  dialog: FolderNameDialogState | null;
+  onCancel: () => void;
+  onSubmit: (name: string) => void;
+}) {
+  const [name, setName] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!dialog) return;
+    const initialName = dialog.mode === "rename" ? dialog.currentName : "";
+    setName(initialName);
+    inputRef.current?.focus();
+    if (initialName) inputRef.current?.select();
+  }, [dialog]);
+
+  useEffect(() => {
+    if (!dialog) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onCancel();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [dialog, onCancel]);
+
+  if (!dialog) return null;
+
+  const title = dialog.mode === "rename"
+    ? "重命名文件夹"
+    : dialog.parentId
+      ? "新建子文件夹"
+      : "新建文件夹";
+
+  return (
+    <div
+      className="fixed inset-0 z-[70] flex items-center justify-center bg-black/20 p-4 backdrop-blur-[2px]"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onCancel();
+      }}
+    >
+      <form
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="folder-name-dialog-title"
+        onSubmit={(event) => {
+          event.preventDefault();
+          const trimmedName = name.trim();
+          if (trimmedName) onSubmit(trimmedName);
+        }}
+        className="w-full max-w-sm rounded-2xl border border-border bg-surface/95 p-4 shadow-2xl backdrop-blur-xl"
+      >
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 id="folder-name-dialog-title" className="text-sm font-semibold text-text">{title}</h2>
+            <p className="mt-1 text-xs text-text-muted">输入文件夹名称。</p>
+          </div>
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded-lg px-2 py-1 text-text-muted transition hover:bg-white/5 hover:text-text"
+            aria-label="关闭"
+          >
+            ×
+          </button>
+        </div>
+        <input
+          ref={inputRef}
+          aria-label="文件夹名称"
+          value={name}
+          onChange={(event) => setName(event.target.value)}
+          placeholder="文件夹名称"
+          className="mt-3 w-full rounded-xl border border-border bg-surface-2 px-3 py-2 text-xs text-text outline-none transition focus:border-secondary/50"
+        />
+        <div className="mt-4 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded-lg px-3 py-2 text-xs text-text-muted transition hover:bg-white/5 hover:text-text"
+          >
+            取消
+          </button>
+          <button
+            type="submit"
+            disabled={!name.trim()}
+            className="rounded-lg bg-secondary/15 px-3 py-2 text-xs font-medium text-secondary transition hover:bg-secondary/25 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {dialog.mode === "rename" ? "保存" : "创建"}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
 function FolderNode({
   node,
   depth,
   selectedFolderId,
   onSelectFolder,
-  onCreateFolder,
-  onRenameFolder,
+  onRequestCreateFolder,
+  onRequestRenameFolder,
   onRequestDelete,
   onMoveFolder,
   collapsed,
@@ -34,8 +139,8 @@ function FolderNode({
   depth: number;
   selectedFolderId: string | null;
   onSelectFolder: (id: string) => void;
-  onCreateFolder: (name: string, parentId: string | null) => void;
-  onRenameFolder: (id: string, name: string) => void;
+  onRequestCreateFolder: (parentId: string | null) => void;
+  onRequestRenameFolder: (node: NoteFolderNode) => void;
   onRequestDelete: (node: NoteFolderNode) => void;
   onMoveFolder: (id: string, parentId: string | null) => void;
   collapsed: boolean;
@@ -43,14 +148,8 @@ function FolderNode({
   isCollapsed: (id: string) => boolean;
 }) {
   const selected = selectedFolderId === node.id;
-  const askCreate = () => {
-    const name = window.prompt("新建子文件夹", "");
-    if (name?.trim()) onCreateFolder(name.trim(), node.id);
-  };
-  const askRename = () => {
-    const name = window.prompt("重命名文件夹", node.name);
-    if (name?.trim() && name.trim() !== node.name) onRenameFolder(node.id, name.trim());
-  };
+  const askCreate = () => onRequestCreateFolder(node.id);
+  const askRename = () => onRequestRenameFolder(node);
   const askDelete = () => {
     onRequestDelete(node);
   };
@@ -106,8 +205,8 @@ function FolderNode({
               depth={depth + 1}
               selectedFolderId={selectedFolderId}
               onSelectFolder={onSelectFolder}
-              onCreateFolder={onCreateFolder}
-              onRenameFolder={onRenameFolder}
+              onRequestCreateFolder={onRequestCreateFolder}
+              onRequestRenameFolder={onRequestRenameFolder}
               onRequestDelete={onRequestDelete}
               onMoveFolder={onMoveFolder}
               collapsed={isCollapsed(child.id)}
@@ -135,11 +234,11 @@ export function NoteFolderTree({
 }: NoteFolderTreeProps) {
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(() => new Set());
   const [pendingDelete, setPendingDelete] = useState<NoteFolderNode | null>(null);
+  const [folderDialog, setFolderDialog] = useState<FolderNameDialogState | null>(null);
   const [isDraggingFolder, setIsDraggingFolder] = useState(false);
   const tree = useMemo(() => buildNoteFolderTree(folders), [folders]);
   const askCreateRoot = () => {
-    const name = window.prompt("新建文件夹", "");
-    if (name?.trim()) onCreateFolder(name.trim(), null);
+    setFolderDialog({ mode: "create", parentId: null });
   };
 
   return (
@@ -187,8 +286,8 @@ export function NoteFolderTree({
               depth={0}
               selectedFolderId={selectedFolderId}
               onSelectFolder={onSelectFolder}
-              onCreateFolder={onCreateFolder}
-              onRenameFolder={onRenameFolder}
+              onRequestCreateFolder={(parentId) => setFolderDialog({ mode: "create", parentId })}
+              onRequestRenameFolder={(node) => setFolderDialog({ mode: "rename", folderId: node.id, currentName: node.name })}
               onRequestDelete={setPendingDelete}
               onMoveFolder={onMoveFolder}
               collapsed={collapsedIds.has(node.id)}
@@ -213,6 +312,19 @@ export function NoteFolderTree({
           setPendingDelete(null);
         }}
         onCancel={() => setPendingDelete(null)}
+      />
+      <FolderNameDialog
+        dialog={folderDialog}
+        onCancel={() => setFolderDialog(null)}
+        onSubmit={(name) => {
+          if (!folderDialog) return;
+          if (folderDialog.mode === "create") {
+            onCreateFolder(name, folderDialog.parentId);
+          } else if (name !== folderDialog.currentName) {
+            onRenameFolder(folderDialog.folderId, name);
+          }
+          setFolderDialog(null);
+        }}
       />
     </section>
   );

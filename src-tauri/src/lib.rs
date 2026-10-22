@@ -192,23 +192,23 @@ pub fn run() {
             let show_hide = MenuItem::with_id(
                 handle,
                 "show_hide",
-                "Show/Hide Main Panel",
+                "显示/隐藏主面板",
                 true,
                 None::<&str>,
             )
             .map_err(|error| error.to_string())?;
             let toggle_pet_item =
-                MenuItem::with_id(handle, "toggle_pet", "Show/Hide Pet", true, None::<&str>)
+                MenuItem::with_id(handle, "toggle_pet", "显示/隐藏桌宠", true, None::<&str>)
                     .map_err(|error| error.to_string())?;
             let toggle_todo_overlay_item = MenuItem::with_id(
                 handle,
                 "toggle_todo_overlay",
-                "Show/Hide Todo Overlay",
+                "显示/隐藏待办面板",
                 true,
                 None::<&str>,
             )
             .map_err(|error| error.to_string())?;
-            let quit = MenuItem::with_id(handle, "quit", "Quit", true, None::<&str>)
+            let quit = MenuItem::with_id(handle, "quit", "退出", true, None::<&str>)
                 .map_err(|error| error.to_string())?;
 
             let menu = Menu::with_items(

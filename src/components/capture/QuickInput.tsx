@@ -114,8 +114,8 @@ export function QuickInput() {
   }
 
   return (
-    <main className="h-screen overflow-hidden rounded-3xl bg-transparent p-0 text-text">
-      <section className="flex h-full min-h-[148px] flex-col rounded-3xl bg-bg p-4 backdrop-blur-xl">
+    <main className="h-screen overflow-hidden rounded-xl bg-transparent p-0 text-text">
+      <section className="flex h-full min-h-[148px] flex-col rounded-xl bg-bg p-4 backdrop-blur-xl">
         <div
           onMouseDown={handleDragMouseDown}
           className="mb-3 flex cursor-grab items-center justify-between gap-3 select-none active:cursor-grabbing"

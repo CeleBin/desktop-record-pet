@@ -400,6 +400,14 @@ function SettingRow({
     }
   }, [isDirty, localText, onChange]);
 
+  // Switching to another Tauri window may leave the WebView input focused, so
+  // its DOM blur event is not guaranteed to save the current text draft.
+  useEffect(() => {
+    const commitFocusedInput = () => inputRef.current?.blur();
+    window.addEventListener("blur", commitFocusedInput);
+    return () => window.removeEventListener("blur", commitFocusedInput);
+  }, []);
+
   const isThemeSelect = def === SETTING_DEFS.theme;
   const isThemeModeSelect = def === SETTING_DEFS.theme_mode;
   const isStacked = def.stacked === true;
