@@ -1,8 +1,12 @@
 import {
+  forwardRef,
   useCallback,
   useEffect,
+  useLayoutEffect,
+  useMemo,
   useRef,
   useState,
+  type ComponentProps,
   type CSSProperties,
 } from "react";
 import {
@@ -12,12 +16,25 @@ import {
   createCodeBlockSpec,
   defaultBlockSpecs,
   getBlockInfoFromTransaction,
+  getColspan,
+  getRowspan,
   type BlockNoteEditor,
   type PartialBlock,
   updateBlockTr,
 } from "@blocknote/core";
-import { BlockNoteView } from "@blocknote/shadcn";
-import { useCreateBlockNote } from "@blocknote/react";
+import { TableHandlesExtension } from "@blocknote/core/extensions";
+import { en, zh } from "@blocknote/core/locales";
+import { BlockNoteView, ShadCNDefaultComponents } from "@blocknote/shadcn";
+import {
+  TableHandleMenu,
+  TableHandlesController,
+  useBlockNoteEditor,
+  useComponentsContext,
+  useCreateBlockNote,
+  useExtension,
+  useExtensionState,
+  type TableHandleProps,
+} from "@blocknote/react";
 import { createHighlighter } from "shiki";
 import { listenForFileDrops } from "../../lib/dragDrop";
 import {
@@ -35,6 +52,192 @@ import {
 // classes visible to Tailwind v4's scanner.
 import "@blocknote/core/fonts/inter.css";
 import "@blocknote/shadcn/style.css";
+
+const BaseDropdownMenuContent =
+  ShadCNDefaultComponents.DropdownMenu.DropdownMenuContent;
+
+const TableHandleDropdownMenuContent = forwardRef<
+  HTMLDivElement,
+  ComponentProps<typeof BaseDropdownMenuContent>
+>((props, ref) => {
+  const isTableHandleMenu = props.className
+    ?.split(/\s+/)
+    .includes("bn-table-handle-menu");
+  const editor = useBlockNoteEditor();
+  const [tableMenuPosition, setTableMenuPosition] = useState<{
+    boundary: Element;
+    alignOffset: number;
+  } | null>(null);
+
+  useLayoutEffect(() => {
+    if (!isTableHandleMenu || typeof document === "undefined") return;
+
+    const boundary = editor.domElement?.closest(".bn-wrapper");
+    if (!boundary) return;
+
+    const handle = document.querySelector<HTMLElement>(
+      ".bn-table-handle[aria-expanded='true']",
+    );
+    const boundaryLeft = boundary.getBoundingClientRect().left;
+    const handleLeft = handle?.getBoundingClientRect().left ?? boundaryLeft;
+
+    setTableMenuPosition({
+      boundary,
+      alignOffset: Math.max(0, boundaryLeft + 8 - handleLeft),
+    });
+  }, [editor, isTableHandleMenu]);
+
+  return (
+    <BaseDropdownMenuContent
+      {...props}
+      ref={ref}
+      side={isTableHandleMenu ? "bottom" : props.side}
+      align={isTableHandleMenu ? "start" : props.align}
+      alignOffset={tableMenuPosition?.alignOffset ?? props.alignOffset}
+      collisionBoundary={tableMenuPosition?.boundary ?? props.collisionBoundary}
+      collisionPadding={isTableHandleMenu ? 8 : props.collisionPadding}
+    />
+  );
+}) as typeof BaseDropdownMenuContent;
+
+const TABLE_HANDLE_SHADCN_COMPONENTS = {
+  DropdownMenu: {
+    ...ShadCNDefaultComponents.DropdownMenu,
+    DropdownMenuContent: TableHandleDropdownMenuContent,
+  },
+};
+
+const TABLE_HANDLE_PORTAL_ELEMENTS = { tableHandles: null } as const;
+
+const DOCUMENT_EDITOR_DICTIONARY = {
+  ...en,
+  drag_handle: zh.drag_handle,
+  table_handle: zh.table_handle,
+  color_picker: zh.color_picker,
+};
+
+function BoundaryAwareTableHandle(props: TableHandleProps) {
+  const editor = useBlockNoteEditor<any, any, any>();
+  const Components = useComponentsContext()!;
+  const [isDragging, setIsDragging] = useState(false);
+  const [leftOffset, setLeftOffset] = useState(0);
+  const handleContainerRef = useRef<HTMLDivElement>(null);
+  const tableHandles = useExtension(TableHandlesExtension);
+  const state = useExtensionState(TableHandlesExtension);
+
+  const isDraggable = useMemo(() => {
+    if (
+      !tableHandles ||
+      !state?.block ||
+      state.block.type !== "table"
+    ) {
+      return false;
+    }
+
+    if (props.orientation === "column") {
+      return tableHandles
+        .getCellsAtColumnHandle(state.block, state.colIndex!)
+        .every(({ cell }) => getColspan(cell) === 1);
+    }
+
+    return tableHandles
+      .getCellsAtRowHandle(state.block, state.rowIndex!)
+      .every(({ cell }) => getRowspan(cell) === 1);
+  }, [props.orientation, state, tableHandles]);
+
+  useLayoutEffect(() => {
+    if (props.orientation !== "row" || !state) return;
+
+    const boundary = editor.domElement?.closest(".bn-wrapper");
+    const handle = handleContainerRef.current?.querySelector<HTMLElement>(
+      ".bn-table-handle",
+    );
+    if (!boundary || !handle) return;
+
+    // The row handle is placed to the left of the table. Shift just the
+    // trigger when that default position would cross into the note sidebar.
+    const minimumLeft = boundary.getBoundingClientRect().left + 8;
+    const defaultLeft =
+      state.referencePosTable.left - handle.getBoundingClientRect().width + 10;
+    const nextOffset = Math.max(0, minimumLeft - defaultLeft);
+    setLeftOffset((current) =>
+      Math.abs(current - nextOffset) < 0.5 ? current : nextOffset,
+    );
+  }, [editor, props.orientation, state?.referencePosTable, state?.rowIndex]);
+
+  if (!state) return null;
+
+  const MenuComponent = props.tableHandleMenu || TableHandleMenu;
+
+  return (
+    <div ref={handleContainerRef} style={{ display: "contents" }}>
+      <Components.Generic.Menu.Root
+        onOpenChange={(open: boolean) => {
+          if (open) {
+            tableHandles?.freezeHandles();
+            props.hideOtherElements(true);
+          } else {
+            tableHandles?.unfreezeHandles();
+            props.hideOtherElements(false);
+            editor.focus();
+          }
+        }}
+        position="right"
+      >
+        <Components.Generic.Menu.Trigger>
+          <Components.TableHandle.Root
+            className={[
+              "bn-table-handle",
+              isDragging ? "bn-table-handle-dragging" : "",
+              !isDraggable ? "bn-table-handle-not-draggable" : "",
+            ]
+              .filter(Boolean)
+              .join(" ")}
+            draggable={isDraggable}
+            onDragStart={(event) => {
+              setIsDragging(true);
+              props.hideOtherElements(true);
+              if (props.orientation === "column") {
+                tableHandles?.colDragStart(event);
+              } else {
+                tableHandles?.rowDragStart(event);
+              }
+            }}
+            onDragEnd={() => {
+              tableHandles?.dragEnd();
+              props.hideOtherElements(false);
+              setIsDragging(false);
+            }}
+            style={
+              props.orientation === "column"
+                ? { transform: "rotate(0.25turn)" }
+                : leftOffset > 0
+                  ? { transform: `translateX(${leftOffset}px)` }
+                  : undefined
+            }
+          >
+            <svg
+              aria-hidden="true"
+              data-test="tableHandle"
+              width="24"
+              height="24"
+              viewBox="0 0 24 24"
+              fill="currentColor"
+            >
+              <circle cx="8" cy="5" r="1.5" />
+              <circle cx="8" cy="12" r="1.5" />
+              <circle cx="8" cy="19" r="1.5" />
+              <circle cx="16" cy="5" r="1.5" />
+              <circle cx="16" cy="12" r="1.5" />
+              <circle cx="16" cy="19" r="1.5" />
+            </svg>
+          </Components.TableHandle.Root>
+        </Components.Generic.Menu.Trigger>
+        <MenuComponent orientation={props.orientation} />
+      </Components.Generic.Menu.Root>
+    </div>
+  );
+}
 
 interface MarkdownEditorProps {
   /** Current markdown content (controlled via initial mount + onChange). */
@@ -596,6 +799,7 @@ export function MarkdownEditor({
   // using the returned URL).
   const editor = useCreateBlockNote({
     schema: EDITOR_SCHEMA,
+    dictionary: DOCUMENT_EDITOR_DICTIONARY,
     uploadFile: async (file: File) => {
       try {
         return await onAddImageFileRef.current?.(file) ?? "";
@@ -847,9 +1051,17 @@ export function MarkdownEditor({
           editable
           onChange={handleBlocksChange}
           theme={colorScheme}
+          portalElements={TABLE_HANDLE_PORTAL_ELEMENTS}
+          shadCNComponents={TABLE_HANDLE_SHADCN_COMPONENTS}
+          tableHandles={false}
           formattingToolbar
           linkToolbar
-        />
+        >
+          <TableHandlesController
+            portalElement={null}
+            tableHandle={BoundaryAwareTableHandle}
+          />
+        </BlockNoteView>
       </div>
     </div>
   );
