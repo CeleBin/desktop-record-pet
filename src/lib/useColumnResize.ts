@@ -13,7 +13,8 @@ export interface PanelWidths {
 
 const STORAGE_KEY = "drp-panel-widths";
 
-const DEFAULT_WIDTHS: PanelWidths = { nav: 200, list: 360 };
+const DEFAULT_WIDTHS: PanelWidths = { nav: 200, list: 300 };
+const PREVIOUS_DEFAULT_LIST_WIDTH = 360;
 
 const MIN_WIDTHS: PanelWidths = { nav: 150, list: 150 };
 const MAX_WIDTHS: PanelWidths = { nav: 320, list: 560 };
@@ -31,9 +32,13 @@ function loadWidths(): PanelWidths {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw) as Partial<PanelWidths>;
+      const listWidth =
+        parsed.list === PREVIOUS_DEFAULT_LIST_WIDTH
+          ? DEFAULT_WIDTHS.list
+          : clampWidth("list", parsed.list ?? DEFAULT_WIDTHS.list);
       return {
         nav: clampWidth("nav", parsed.nav ?? DEFAULT_WIDTHS.nav),
-        list: clampWidth("list", parsed.list ?? DEFAULT_WIDTHS.list),
+        list: listWidth,
       };
     }
   } catch {
