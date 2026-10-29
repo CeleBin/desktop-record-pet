@@ -481,6 +481,7 @@ function copyCodeToClipboard(text: string): Promise<void> {
  * which keeps selection, updates, and teardown under BlockNote's control.
  */
 function createDocumentCodeBlockSpec() {
+  const CODE_BLOCK_MAX_HEIGHT = 500;
   // BlockNote recreates vanilla node views on edits. Keep presentation state
   // for the lifetime of the editor without adding it to saved Markdown.
   const wrapPreferences = new WeakMap<object, Map<string, boolean>>();
@@ -610,6 +611,12 @@ function createDocumentCodeBlockSpec() {
         copyButton.className = "document-code-action";
         copyButton.textContent = "□ 复制";
 
+        const expandButton = document.createElement("button");
+        expandButton.type = "button";
+        expandButton.className = "document-code-action";
+        expandButton.hidden = true;
+        expandButton.setAttribute("aria-expanded", "false");
+
         const gutter = document.createElement("div");
         gutter.className = "document-code-gutter";
         gutter.contentEditable = "false";
@@ -619,6 +626,7 @@ function createDocumentCodeBlockSpec() {
         pre.appendChild(code);
 
         let wraps = preferences.get(block.id) ?? true;
+        let expanded = false;
         let destroyed = false;
         let refreshFrame = 0;
         let copyTimer = 0;
@@ -631,14 +639,32 @@ function createDocumentCodeBlockSpec() {
           if (destroyed || !code.isConnected) return;
           const positions = measureCodeLines(code);
           const signature = positions.join(",");
-          if (gutter.dataset.positions === signature) return;
-          gutter.dataset.positions = signature;
-          gutter.replaceChildren(...positions.map((top, index) => {
-            const line = document.createElement("span");
-            line.textContent = String(index + 1);
-            line.style.top = `${top}px`;
-            return line;
-          }));
+          if (gutter.dataset.positions !== signature) {
+            gutter.dataset.positions = signature;
+            const prePaddingTop = parseFloat(getComputedStyle(pre).paddingTop) || 0;
+            gutter.replaceChildren(...positions.map((top, index) => {
+              const line = document.createElement("span");
+              line.textContent = String(index + 1);
+              line.style.top = `${prePaddingTop + top}px`;
+              return line;
+            }));
+          }
+          const scrollOffset = `translateY(${-pre.scrollTop}px)`;
+          for (const line of gutter.children) {
+            (line as HTMLElement).style.transform = scrollOffset;
+          }
+        };
+        const updateOverflowState = () => {
+          if (destroyed || !code.isConnected) return;
+          const exceedsLimit = pre.scrollHeight > CODE_BLOCK_MAX_HEIGHT;
+          if (!exceedsLimit && expanded) {
+            expanded = false;
+            pre.scrollTop = 0;
+          }
+          pre.classList.toggle("is-expanded", expanded && exceedsLimit);
+          expandButton.hidden = !exceedsLimit;
+          expandButton.setAttribute("aria-expanded", String(expanded && exceedsLimit));
+          expandButton.textContent = expanded ? "收起" : "展开";
         };
         updateWrapState();
         // Hydration and syntax highlighting can replace the code DOM after
@@ -648,6 +674,7 @@ function createDocumentCodeBlockSpec() {
           if (destroyed || refreshFrame) return;
           refreshFrame = window.requestAnimationFrame(() => {
             refreshFrame = 0;
+            updateOverflowState();
             updateGutter();
           });
         };
@@ -669,6 +696,14 @@ function createDocumentCodeBlockSpec() {
           updateWrapState();
           scheduleGutter();
         });
+        expandButton.addEventListener("mousedown", (event) => event.preventDefault());
+        expandButton.addEventListener("click", () => {
+          pre.scrollTop = 0;
+          expanded = !expanded;
+          updateOverflowState();
+          scheduleGutter();
+        });
+        pre.addEventListener("scroll", scheduleGutter, { passive: true });
         copyButton.addEventListener("mousedown", (event) => event.preventDefault());
         copyButton.addEventListener("click", () => {
           void copyCodeToClipboard(getCodeBlockSourceText(code))
@@ -681,7 +716,7 @@ function createDocumentCodeBlockSpec() {
             .catch(() => { copyButton.textContent = "复制失败"; });
         });
 
-        actions.append(wrapButton, copyButton);
+        actions.append(wrapButton, expandButton, copyButton);
         toolbar.append(languageButton, languageMenu, actions);
         // Keep <pre> as a direct node-view child, matching BlockNote's
         // built-in code block. ProseMirror can then map pointer positions to

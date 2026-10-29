@@ -874,11 +874,12 @@ select {
 .document-editor .document-code-gutter {
   position: absolute;
   z-index: 1;
-  top: 49px;
+  overflow: hidden;
+  top: 36px;
   left: 0;
   width: 42px;
   box-sizing: border-box;
-  bottom: 14px;
+  bottom: 0;
   color: #9aa5b1;
   font-family: "JetBrains Mono", Consolas, ui-monospace, monospace;
   font-size: 12.5px;
@@ -894,12 +895,15 @@ select {
 }
 
 .document-editor .bn-block-content[data-content-type="codeBlock"] > pre {
+  box-sizing: border-box;
   width: 100%;
   min-width: 0;
   min-height: 0;
   margin: 0;
   padding: 13px 16px 14px 54px;
   overflow-x: auto;
+  max-height: 500px;
+  overflow-y: auto;
   background: #f7f8fa;
   border-radius: 0 0 8px 8px;
   color: inherit;
@@ -909,6 +913,12 @@ select {
   tab-size: 2;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.document-editor .bn-block-content[data-content-type="codeBlock"] > pre.is-expanded {
+  box-sizing: border-box;
+  max-height: none;
+  overflow-y: visible;
 }
 
 /* Make the editable content node cover the whole text area, so clicks to the
