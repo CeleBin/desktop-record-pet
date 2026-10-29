@@ -485,6 +485,7 @@ function createDocumentCodeBlockSpec() {
   // BlockNote recreates vanilla node views on edits. Keep presentation state
   // for the lifetime of the editor without adding it to saved Markdown.
   const wrapPreferences = new WeakMap<object, Map<string, boolean>>();
+  const expandPreferences = new WeakMap<object, Map<string, boolean>>();
   const baseSpec = createCodeBlockSpec({
     defaultLanguage: "text",
     supportedLanguages: CODE_LANGUAGES,
@@ -509,6 +510,11 @@ function createDocumentCodeBlockSpec() {
         if (!preferences) {
           preferences = new Map();
           wrapPreferences.set(editor, preferences);
+        }
+        let expandedPreferences = expandPreferences.get(editor);
+        if (!expandedPreferences) {
+          expandedPreferences = new Map();
+          expandPreferences.set(editor, expandedPreferences);
         }
         const wrapper = document.createDocumentFragment();
 
@@ -621,12 +627,15 @@ function createDocumentCodeBlockSpec() {
         gutter.className = "document-code-gutter";
         gutter.contentEditable = "false";
         gutter.setAttribute("aria-hidden", "true");
+        const lineNumberContainer = document.createElement("div");
+        lineNumberContainer.className = "document-code-gutter-lines";
+        gutter.appendChild(lineNumberContainer);
         const pre = document.createElement("pre");
         const code = document.createElement("code");
         pre.appendChild(code);
 
         let wraps = preferences.get(block.id) ?? true;
-        let expanded = false;
+        let expanded = expandedPreferences.get(block.id) ?? false;
         let destroyed = false;
         let refreshFrame = 0;
         let copyTimer = 0;
@@ -639,28 +648,32 @@ function createDocumentCodeBlockSpec() {
           if (destroyed || !code.isConnected) return;
           const positions = measureCodeLines(code);
           const signature = positions.join(",");
-          if (gutter.dataset.positions !== signature) {
-            gutter.dataset.positions = signature;
+          const gutterSignature = `${signature}|${pre.offsetTop}|${pre.clientHeight}`;
+          gutter.style.top = `${pre.offsetTop}px`;
+          gutter.style.height = `${pre.clientHeight}px`;
+          gutter.style.bottom = "auto";
+          if (lineNumberContainer.dataset.positions !== gutterSignature) {
+            lineNumberContainer.dataset.positions = gutterSignature;
             const prePaddingTop = parseFloat(getComputedStyle(pre).paddingTop) || 0;
-            gutter.replaceChildren(...positions.map((top, index) => {
+            lineNumberContainer.replaceChildren(...positions.map((top, index) => {
               const line = document.createElement("span");
               line.textContent = String(index + 1);
               line.style.top = `${prePaddingTop + top}px`;
               return line;
             }));
           }
-          const scrollOffset = `translateY(${-pre.scrollTop}px)`;
-          for (const line of gutter.children) {
-            (line as HTMLElement).style.transform = scrollOffset;
-          }
+          lineNumberContainer.style.transform = `translateY(${-pre.scrollTop}px)`;
         };
         const updateOverflowState = () => {
           if (destroyed || !code.isConnected) return;
           const exceedsLimit = pre.scrollHeight > CODE_BLOCK_MAX_HEIGHT;
-          if (!exceedsLimit && expanded) {
+          if (!exceedsLimit) {
+            const wasExpanded = expanded;
             expanded = false;
-            pre.scrollTop = 0;
+            expandedPreferences.delete(block.id);
+            if (wasExpanded) pre.scrollTop = 0;
           }
+          if (exceedsLimit) expandedPreferences.set(block.id, expanded);
           pre.classList.toggle("is-expanded", expanded && exceedsLimit);
           expandButton.hidden = !exceedsLimit;
           expandButton.setAttribute("aria-expanded", String(expanded && exceedsLimit));
@@ -686,6 +699,7 @@ function createDocumentCodeBlockSpec() {
         });
         const resizeObserver = new ResizeObserver(scheduleGutter);
         resizeObserver.observe(code);
+        resizeObserver.observe(pre);
         scheduleGutter();
         void document.fonts.ready.then(scheduleGutter);
 
@@ -700,10 +714,13 @@ function createDocumentCodeBlockSpec() {
         expandButton.addEventListener("click", () => {
           pre.scrollTop = 0;
           expanded = !expanded;
+          expandedPreferences.set(block.id, expanded);
           updateOverflowState();
           scheduleGutter();
         });
-        pre.addEventListener("scroll", scheduleGutter, { passive: true });
+        pre.addEventListener("scroll", () => {
+          lineNumberContainer.style.transform = `translateY(${-pre.scrollTop}px)`;
+        }, { passive: true });
         copyButton.addEventListener("mousedown", (event) => event.preventDefault());
         copyButton.addEventListener("click", () => {
           void copyCodeToClipboard(getCodeBlockSourceText(code))
