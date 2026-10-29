@@ -8,10 +8,11 @@ Keep long code blocks from taking over the note view while preserving access to 
 
 ## User-facing behavior
 
-- The code content area has a default maximum height of 500 CSS pixels. The language toolbar is outside this limit and stays visible.
+- The rendered code content area, including wrapped lines, has a default maximum height of 500 CSS pixels. The language toolbar is outside this limit and stays visible.
 - When the code content exceeds the limit, the content area scrolls vertically within the code block and the toolbar shows an expand control.
 - Expanding removes the height cap and the inner vertical scrollbar. The control changes to collapse; collapsing restores the 500px cap.
 - Short code blocks do not show an expand/collapse control.
+- If an expanded block becomes short enough to fit within the cap, it returns to the collapsed state and hides the control. If it grows beyond the cap later, it is collapsed and scrollable again.
 - The line-number gutter follows the code content's vertical scroll position.
 - Expanded/collapsed state is presentation-only, held for the current editor view, and does not change Markdown serialization or note data.
 
@@ -25,7 +26,8 @@ Use the existing custom BlockNote code-block node view in `src/components/panel/
 2. A code block taller than 500px shows an internal vertical scrollbar and an expand control while its language toolbar stays visible.
 3. Expanding and collapsing toggles the cap without altering code or serialized Markdown.
 4. Line numbers remain aligned with visible code lines while scrolling.
-5. Existing code-block actions remain usable in both states.
+5. Shrinking an expanded block below the cap hides the control and resets it to collapsed; growing it beyond the cap later displays the collapsed, scrollable state.
+6. Existing code-block actions remain usable in both states.
 
 ## Validation
 
