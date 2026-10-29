@@ -311,6 +311,74 @@ function blobToRgba(blob: Blob): Promise<{ rgba: Uint8Array; width: number; heig
 
 // ── Markdown helpers ────────────────────────────────────────────────
 
+const MAX_MARKDOWN_CODE_HEIGHT = 500;
+
+function ReadOnlyMarkdownCodeBlock({ children }: { children?: ReactNode }) {
+  const preRef = useRef<HTMLPreElement>(null);
+  const [isOverflowing, setIsOverflowing] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+
+  useEffect(() => {
+    const pre = preRef.current;
+    if (!pre) return;
+
+    let frame = 0;
+    let active = true;
+    const measureOverflow = () => {
+      frame = 0;
+      if (!active) return;
+      const overflowing = pre.scrollHeight > MAX_MARKDOWN_CODE_HEIGHT;
+      setIsOverflowing(overflowing);
+      if (!overflowing) setExpanded(false);
+    };
+    const scheduleMeasure = () => {
+      if (!active || frame) return;
+      frame = window.requestAnimationFrame(measureOverflow);
+    };
+
+    const resizeObserver = new ResizeObserver(scheduleMeasure);
+    resizeObserver.observe(pre);
+    const code = pre.querySelector("code");
+    if (code) resizeObserver.observe(code);
+    const contentObserver = new MutationObserver(scheduleMeasure);
+    contentObserver.observe(pre, {
+      childList: true,
+      characterData: true,
+      subtree: true,
+    });
+    scheduleMeasure();
+    void document.fonts.ready.then(scheduleMeasure);
+
+    return () => {
+      active = false;
+      window.cancelAnimationFrame(frame);
+      resizeObserver.disconnect();
+      contentObserver.disconnect();
+    };
+  }, [children]);
+
+  return (
+    <div className="markdown-code-block">
+      <div className="markdown-code-toolbar" hidden={!isOverflowing}>
+        <button
+          type="button"
+          className="markdown-code-expand"
+          aria-expanded={expanded}
+          onClick={() => {
+            if (preRef.current) preRef.current.scrollTop = 0;
+            setExpanded((value) => !value);
+          }}
+        >
+          {expanded ? "收起" : "展开"}
+        </button>
+      </div>
+      <pre ref={preRef} className={expanded ? "is-expanded" : undefined}>
+        {children}
+      </pre>
+    </div>
+  );
+}
+
 // ── Component ───────────────────────────────────────────────────────
 
 export function RecordDetail({
@@ -595,7 +663,9 @@ export function RecordDetail({
         }
         return <code>{children}</code>;
       },
-      pre: ({ children }: { children?: ReactNode }) => <pre>{children}</pre>,
+      pre: ({ children }: { children?: ReactNode }) => (
+        <ReadOnlyMarkdownCodeBlock>{children}</ReadOnlyMarkdownCodeBlock>
+      ),
       table: ({ children }: { children?: ReactNode }) => (
         <div className="overflow-x-auto">
           <table>{children}</table>
